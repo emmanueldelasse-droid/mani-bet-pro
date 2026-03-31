@@ -40,13 +40,13 @@ export const SPORTS_CONFIG = {
      * Note : absences_impact pondéré à 0 tant que données non confirmées.
      */
     default_weights: {
-      efg_diff:        0.30,   // eFG% = meilleur proxy efficacité offensive ESPN
-      win_pct_diff:    0.25,   // Win% saison = indicateur de niveau général
-      recent_form_ema: 0.20,   // Forme récente (BallDontLie W/L)
-      home_away_split: 0.15,   // Split dom/ext ESPN
+      efg_diff:        0.35,   // eFG% = meilleur proxy efficacité offensive ESPN
+      win_pct_diff:    0.30,   // Win% saison = indicateur de niveau général
+      recent_form_ema: 0.15,   // Forme récente (BallDontLie W/L)
+      home_away_split: 0.12,   // Split dom/ext ESPN
       ts_diff:         0.05,   // TS% = complémentaire eFG%
-      avg_pts_diff:    0.03,   // Points/match = indicateur scoring
-      absences_impact: 0.02,   // Impact absences (PDF NBA) — faible tant que non calibré
+      avg_pts_diff:    0.02,   // Points/match = indicateur scoring
+      absences_impact: 0.01,   // Impact absences (PDF NBA) — faible tant que non calibré
     },
 
     ema_lambda: 0.85,   // Décroissance exponentielle forme récente
