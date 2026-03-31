@@ -242,6 +242,22 @@ async function analyzeMatchesBatch(list, matches, storeInstance, container, date
         match_id: match.id,
       });
 
+      // Sauvegarder dans l'historique (max 100 entrées)
+      if (analysis.confidence_level !== 'INCONCLUSIVE') {
+        storeInstance.push('history', {
+          analysis_id:       analysis.analysis_id,
+          match_id:          match.id,
+          date:              date,
+          home:              match.home_team?.name ?? '—',
+          away:              match.away_team?.name ?? '—',
+          sport:             'NBA',
+          confidence_level:  analysis.confidence_level,
+          predictive_score:  analysis.predictive_score,
+          robustness_score:  analysis.robustness_score,
+          saved_at:          new Date().toISOString(),
+        }, 100);
+      }
+
       updateMatchCard(list, match.id, analysis);
 
       if (analysis.confidence_level === 'INCONCLUSIVE') rejected++;
