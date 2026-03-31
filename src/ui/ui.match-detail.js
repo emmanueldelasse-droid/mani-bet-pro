@@ -633,25 +633,11 @@ async function triggerAIExplanation(container, analysis, match, task) {
   responseEl.innerHTML = '<span class="text-muted">Analyse en cours…</span>';
 
   const TASK_PROMPTS = {
-    EXPLAIN: `Tu es un auditeur analytique sportif.
-Tu reçois la sortie structurée d'un moteur de calcul déterministe NBA.
-Tu n'inventes aucune donnée. Tu ne produis aucune probabilité ni prédiction.
-Tu expliques ce que le moteur a calculé, en langage naturel clair et structuré.
-Réponds en français. Maximum 250 mots. Sois factuel et précis.
-Toute affirmation doit être tracée vers une variable fournie.`,
+    EXPLAIN: `Tu es un analyste sportif NBA qui parle à un parieur. Réponds en 3-4 phrases courtes en prose, sans titres, sans gras, sans listes. Phrase 1 : qui est favorisé et pourquoi. Phrase 2 : la raison principale en termes simples. Phrase 3 : si un pari est suggéré, dis si tu le confirmes. Phrase 4 : une limite courte. Uniquement les données fournies. Max 80 mots.`,
 
-    AUDIT: `Tu es un auditeur analytique sportif.
-Tu reçois la sortie structurée d'un moteur de calcul déterministe NBA.
-Audite la cohérence entre les signaux : détecte les contradictions entre variables,
-les signaux qui se contredisent, les valeurs anormalement élevées ou basses.
-Tu n'inventes aucune donnée. Réponds en français. Maximum 200 mots.`,
+    AUDIT: `Tu es un analyste sportif NBA. En 2-3 phrases simples sans titres ni listes : dis si les signaux sont cohérents entre eux. Si contradiction, explique laquelle. Uniquement les données fournies. Max 60 mots.`,
 
-    DETECT_INCONSISTENCY: `Tu es un auditeur analytique sportif.
-Tu reçois la sortie structurée d'un moteur de calcul déterministe NBA.
-Détecte les incohérences potentielles : une forme récente qui contredit le bilan saison,
-une robustesse faible malgré un signal fort, des données de qualité insuffisante sur les variables clés.
-Réponds uniquement si tu détectes des incohérences réelles basées sur les données fournies.
-Réponds en français. Maximum 200 mots.`,
+    DETECT_INCONSISTENCY: `Tu es un analyste sportif NBA. En 2 phrases simples sans titres ni listes : dis s'il y a une anomalie dans les données. Si aucune anomalie, dis-le clairement. Uniquement les données fournies. Max 50 mots.`,
   };
 
   const systemPrompt = TASK_PROMPTS[task] ?? TASK_PROMPTS.EXPLAIN;
@@ -685,7 +671,7 @@ Seuil de renversement : ${analysis.robustness_breakdown?.reversal_threshold
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        model:      'claude-haiku-4-5-20251001',
+        model:      'claude-sonnet-4-20250514',
         max_tokens: 600,
         system:     systemPrompt,
         messages:   [{ role: 'user', content: userMessage }],
@@ -704,10 +690,18 @@ Seuil de renversement : ${analysis.robustness_breakdown?.reversal_threshold
 
     if (!text) throw new Error('Réponse IA vide');
 
+    const cleanText = text
+      .replace(/^#{1,4}\s.+$/gm, '')
+      .replace(/\*\*(.+?)\*\*/gs, '$1')
+      .replace(/\*(.+?)\*/gs, '$1')
+      .replace(/^[-•]\s/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
     responseEl.innerHTML = `
-      <div style="line-height:1.7; white-space:pre-wrap">${escapeHtml(text)}</div>
+      <div style="line-height:1.8; font-size:13px">${escapeHtml(cleanText)}</div>
       <div class="text-muted" style="font-size:10px; margin-top:var(--space-2)">
-        Source : Claude Haiku · Basé uniquement sur les données du moteur
+        Source : Claude Sonnet · Basé uniquement sur les données du moteur
       </div>
     `;
 
