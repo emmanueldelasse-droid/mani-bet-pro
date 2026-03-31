@@ -80,8 +80,18 @@ export class AIClient {
 
       if (!rawText) throw new Error('Réponse IA vide');
 
+      // Supprimer le markdown de la réponse
+      const cleanText = rawText
+        .replace(/^#{1,3} .+$/gm, '')        // titres #, ##, ###
+        .replace(/\*\*(.+?)\*\*/g, '$1')      // gras **texte**
+        .replace(/\*(.+?)\*/g, '$1')          // italique *texte*
+        .replace(/^[-•] /gm, '')              // listes
+        .replace(/
+{3,}/g, '\n\n')         // espaces multiples
+        .trim();
+
       // Validation anti-hallucination
-      const validated = AIGuard.validate(rawText, context);
+      const validated = AIGuard.validate(cleanText, context);
 
       const explanation = {
         ai_explanation_id: crypto.randomUUID(),
