@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ManiBetPro" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <title>Mani Bet Pro</title>
+  <link rel="stylesheet" href="assets/css/main.css" />
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- NAVIGATION -->
+    <nav id="nav-bar" role="navigation" aria-label="Navigation principale">
+      <div class="nav__brand">
+        <span class="nav__logo">MBP</span>
+        <span class="nav__title">Mani Bet Pro</span>
+      </div>
+      <div class="nav__links" id="nav-links">
+        <button class="nav__item active" data-route="dashboard" aria-label="Dashboard">
+          <span class="nav__icon">◉</span>
+          <span class="nav__label">Dashboard</span>
+        </button>
+        <button class="nav__item" data-route="history" aria-label="Historique">
+          <span class="nav__icon">◎</span>
+          <span class="nav__label">Historique</span>
+        </button>
+        <button class="nav__item" data-route="lab" aria-label="Laboratoire">
+          <span class="nav__icon">⬡</span>
+          <span class="nav__label">Labo</span>
+        </button>
+        <button class="nav__item" data-route="settings" aria-label="Paramètres">
+          <span class="nav__icon">⚙</span>
+          <span class="nav__label">Config</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- VUE PRINCIPALE -->
+    <main id="main-view" role="main" aria-live="polite">
+      <!-- Injecté dynamiquement par ui.router.js -->
+      <div id="view-container"></div>
+    </main>
+
+    <!-- NOTIFICATIONS TOAST -->
+    <div id="toast-container" aria-live="assertive" aria-atomic="true"></div>
+
+    <!-- MODAL OVERLAY -->
+    <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div id="modal-container" class="modal-container"></div>
+    </div>
+
+    <!-- INDICATEUR DE CHARGEMENT GLOBAL -->
+    <div id="global-loader" class="global-loader hidden" aria-busy="true" aria-label="Chargement">
+      <div class="loader__spinner"></div>
+      <span class="loader__text" id="loader-text">Chargement…</span>
+    </div>
+
+  </div>
+
+  <!-- POINT D'ENTRÉE MODULE ES -->
+  <script type="module" src="src/app.js"></script>
+
+</body>
+</html>
