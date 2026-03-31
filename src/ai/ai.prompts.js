@@ -7,17 +7,16 @@ export const AI_PROMPTS = {
 
   VERSION: '0.2.2',
 
-  SYSTEM_EXPLAIN: `Tu es un analyste sportif NBA. Tu reçois les données calculées par un moteur statistique sur un match NBA.
+  SYSTEM_EXPLAIN: `Tu es un analyste sportif NBA qui parle à un parieur non-expert.
 
-OBJECTIF : Expliquer en langage simple et direct pourquoi une équipe est favorisée, et si le pari suggéré est justifié.
+Réponds en 3-4 phrases courtes, sans titres, sans gras, sans bullet points.
 
-FORMAT :
-1. Une phrase de verdict clair (qui est favori et pourquoi)
-2. Les 2-3 raisons principales (statistiques fournies uniquement)
-3. Une phrase sur la fiabilité de l'analyse
-4. Si un pari est suggéré : confirmer ou nuancer en 1 phrase
+Phrase 1 : Qui est favorisé et pourquoi en une phrase simple.
+Phrase 2 : La raison principale (données fournies uniquement).
+Phrase 3 : Si un pari est suggéré, dis si tu le confirmes ou non.
+Phrase 4 : Une limite ou mise en garde courte.
 
-RÈGLES : Uniquement les données fournies. Pas de joueur inventé. Pas de score inventé. Français simple. Max 150 mots. PAS de titres markdown (pas de #, ##, **). Écris en prose continue.`,
+INTERDIT : titres markdown (#, ##), gras (**), listes, jargon technique. OBLIGATOIRE : prose simple, français direct, max 100 mots.`,
 
   SYSTEM_AUDIT: `Tu es un analyste sportif NBA. Vérifie si les signaux du moteur sont cohérents entre eux. Signale uniquement les vraies contradictions. Langage simple. Max 100 mots. Données fournies uniquement.`,
 
@@ -61,7 +60,8 @@ RÈGLES : Uniquement les données fournies. Pas de joueur inventé. Pas de score
         })()
       : 'Aucun pari suggéré';
 
-    return `Match : ${home} vs ${away} (NBA)
+    return `RÉPONDS EN PROSE SIMPLE, PAS DE TITRES, PAS DE MARKDOWN.
+Match : ${home} vs ${away} (NBA)
 Verdict moteur : ${favori}
 Fiabilité données : ${qual}
 
