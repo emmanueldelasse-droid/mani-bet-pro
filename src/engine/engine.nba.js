@@ -58,7 +58,6 @@ export class EngineNBA {
     }
 
     // Calcul des recommandations paris (value betting)
-    console.log('[BETTING_DEBUG] score:', score, 'odds:', JSON.stringify(matchData?.odds), 'homeAvg:', matchData?.home_season_stats?.avg_pts);
     const bettingRecs = (score !== null && matchData?.odds)
       ? this._computeBettingRecommendations(score, matchData.odds, matchData)
       : null;
