@@ -519,7 +519,7 @@ export class EngineNBA {
         const ouLine         = odds.over_under;
         const diff           = projectedTotal - ouLine;
 
-        if (Math.abs(diff) > 3) {
+        if (Math.abs(diff) > 1.5) {
           recs.push({
             type:        'OVER_UNDER',
             label:       'Total de points',
@@ -529,7 +529,7 @@ export class EngineNBA {
             implied_prob: Math.round(ouLine),
             edge:        Math.round(Math.abs(diff)),
             confidence:  this._edgeToConfidence(Math.abs(diff) / 20),
-            has_value:   Math.abs(diff) > 5,
+            has_value:   Math.abs(diff) > 3,
             note:        `Moteur projette ${Math.round(projectedTotal)} pts total vs ligne ${ouLine}`,
           });
         }
