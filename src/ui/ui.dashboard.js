@@ -187,20 +187,16 @@ async function analyzeMatchesBatch(list, matches, storeInstance, container, date
     if (awayId) teamIds.add(awayId);
   });
 
-  // Charger forme récente en lots de 5 pour éviter le throttling BDL
+  // Charger forme récente en séquence pour garantir l'ordre et éviter le throttling BDL
   const recentForms = {};
   const teamIdList = [...teamIds].slice(0, 20);
-  for (let i = 0; i < teamIdList.length; i += 5) {
-    const batch = teamIdList.slice(i, i + 5);
-    await Promise.allSettled(
-      batch.map(async (bdlId) => {
-        const form = await ProviderNBA.getRecentForm(bdlId, season, 10);
-        if (form && form.matches?.length > 0) recentForms[bdlId] = form;
-      })
-    );
-    // Pause entre les lots pour éviter le rate limiting
-    if (i + 5 < teamIdList.length) await new Promise(r => setTimeout(r, 300));
-  }
+  await Promise.allSettled(
+    teamIdList.map(async (bdlId) => {
+      await new Promise(r => setTimeout(r, Math.random() * 200)); // jitter aléatoire
+      const form = await ProviderNBA.getRecentForm(bdlId, season, 10);
+      if (form && form.matches?.length > 0) recentForms[bdlId] = form;
+    })
+  );
 
   // Analyser chaque match
   for (const match of matches) {
