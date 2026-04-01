@@ -85,9 +85,7 @@ export class ProviderNBA {
     const cached   = ProviderCache.get(cacheKey);
     if (cached) return cached;
 
-    // Timestamp pour éviter le cache navigateur sur les appels BDL
-    const ts   = Math.floor(Date.now() / 300000); // invalide toutes les 5 min
-    const url  = `${WORKER}${API_CONFIG.ROUTES.NBA.TEAM_RECENT.replace(':id', bdlTeamId)}?season=${season}&n=${n}&_t=${ts}`;
+    const url  = `${WORKER}${API_CONFIG.ROUTES.NBA.TEAM_RECENT.replace(':id', bdlTeamId)}?season=${season}&n=${n}`;
     const data = await this._fetch(url, 'BallDontLie', `/nba/team/${bdlTeamId}/recent`, API_CONFIG.TIMEOUTS.DEFAULT);
     if (!data) return null;
 
@@ -132,19 +130,12 @@ export class ProviderNBA {
     const cached   = ProviderCache.get(cacheKey);
     if (cached) return cached;
 
-    // Priorité 1 : ESPN injuries (temps réel)
-    const espnData = await this._fetch(`${WORKER}/nba/injuries/espn`, 'ESPN_INJURIES', '/nba/injuries/espn');
-    if (espnData?.available && (espnData.players?.length ?? 0) > 0) {
-      ProviderCache.set(cacheKey, espnData, 'INJURIES');
-      return espnData;
-    }
+    const url  = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?date=${date}`;
+    const data = await this._fetch(url, 'NBA_PDF', '/nba/injuries', API_CONFIG.TIMEOUTS.INJURIES);
+    if (!data || !data.available) return null;
 
-    // Fallback : PDF NBA officiel
-    const pdfData = await this._fetch(`${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?date=${date}`, 'NBA_PDF', '/nba/injuries', API_CONFIG.TIMEOUTS.INJURIES);
-    if (!pdfData || !pdfData.available) return null;
-
-    ProviderCache.set(cacheKey, pdfData, 'INJURIES');
-    return pdfData;
+    ProviderCache.set(cacheKey, data, 'INJURIES');
+    return data;
   }
 
   /**
