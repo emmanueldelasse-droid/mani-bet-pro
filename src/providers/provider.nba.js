@@ -105,7 +105,13 @@ export class ProviderNBA {
       })),
     };
 
-    if (result) ProviderCache.set(cacheKey, result, 'RECENT_FORM');
+    // Ne mettre en cache que si on a des matchs récents (évite de cacher des données vides)
+    if (result.matches.length > 0) {
+      ProviderCache.set(cacheKey, result, 'RECENT_FORM');
+    } else {
+      // Invalider le cache si vide pour forcer un rechargement au prochain appel
+      ProviderCache.invalidate(cacheKey);
+    }
     return result;
   }
 
@@ -124,21 +130,12 @@ export class ProviderNBA {
     const cached   = ProviderCache.get(cacheKey);
     if (cached) return cached;
 
-    // Priorité 1 : ESPN injuries (temps réel, toujours disponible)
-    const espnUrl  = `${WORKER}/nba/injuries/espn`;
-    const espnData = await this._fetch(espnUrl, 'ESPN_INJURIES', '/nba/injuries/espn', API_CONFIG.TIMEOUTS.DEFAULT);
-    if (espnData?.available && espnData.players?.length > 0) {
-      ProviderCache.set(cacheKey, espnData, 'INJURIES');
-      return espnData;
-    }
+    const url  = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?date=${date}`;
+    const data = await this._fetch(url, 'NBA_PDF', '/nba/injuries', API_CONFIG.TIMEOUTS.INJURIES);
+    if (!data || !data.available) return null;
 
-    // Fallback : PDF NBA officiel (~2h avant matchs)
-    const pdfUrl  = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?date=${date}`;
-    const pdfData = await this._fetch(pdfUrl, 'NBA_PDF', '/nba/injuries', API_CONFIG.TIMEOUTS.INJURIES);
-    if (!pdfData || !pdfData.available) return null;
-
-    ProviderCache.set(cacheKey, pdfData, 'INJURIES');
-    return pdfData;
+    ProviderCache.set(cacheKey, data, 'INJURIES');
+    return data;
   }
 
   /**
