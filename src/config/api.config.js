@@ -34,7 +34,7 @@ export const API_CONFIG = {
   CACHE_TTL: {
     MATCHES:        1800,   // 30 min
     SEASON_STATS:  21600,   // 6h
-    RECENT_FORM:    7200,   // 2h
+    RECENT_FORM:    1800,   // 30 min
     INJURIES:       1800,   // 30 min
     STANDINGS:     86400,   // 24h
     AI_EXPLANATION: 86400,  // 24h — réponse IA mise en cache
