@@ -399,5 +399,9 @@ function _metricCell(label, value, color, subtitle = null) {
 
 function _formatDate(iso) {
   if (!iso) return '—';
-  return new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+  // Normaliser YYYYMMDD → YYYY-MM-DD
+  const normalized = iso.length === 8
+    ? `${iso.slice(0,4)}-${iso.slice(4,6)}-${iso.slice(6,8)}`
+    : iso;
+  return new Date(normalized + 'T12:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
 }
