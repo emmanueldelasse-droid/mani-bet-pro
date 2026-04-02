@@ -874,50 +874,83 @@ function _openBetModal(btn, match, analysis, storeInstance) {
   modal.className = 'paper-modal-overlay';
   modal.innerHTML = `
     <div class="paper-modal">
+
+      <!-- En-tête -->
       <div class="paper-modal__header">
-        <span style="font-weight:600">📋 Enregistrer un pari</span>
-        <button class="paper-modal__close" id="modal-close">✕</button>
+        <span style="font-weight:700;font-size:15px">Enregistrer un pari</span>
+        <button class="paper-modal__close" id="modal-close" style="font-size:18px;line-height:1">✕</button>
       </div>
 
-      <div class="paper-modal__info">
-        <div class="paper-modal__match">${match.home_team?.name ?? '—'} vs ${match.away_team?.name ?? '—'}</div>
-        <div style="font-size:12px;color:var(--color-muted);margin-top:2px">
-          ${marketLabels[market] ?? market} · <strong>${sideLabel}</strong> · ${oddsStr}
+      <!-- Résumé du pari -->
+      <div style="background:var(--color-bg);border-radius:8px;padding:12px 14px;margin-bottom:16px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">
+          ${match.home_team?.name ?? '—'} vs ${match.away_team?.name ?? '—'}
         </div>
-        <div style="font-size:11px;color:var(--color-muted);margin-top:4px">
-          Edge : ${edge}% · Moteur : ${motorProb}% · Bookmaker : ${impliedProb}%
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--color-muted)">${marketLabels[market] ?? market}</span>
+          <span style="font-size:14px;font-weight:700;color:var(--color-text)">${sideLabel}</span>
+          <span style="font-size:13px;font-weight:600;color:var(--color-signal)">${oddsStr}</span>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--color-muted)">
+          <span>Edge <strong style="color:var(--color-text)">${edge}%</strong></span>
+          <span>Moteur <strong style="color:var(--color-text)">${motorProb}%</strong></span>
+          <span>Book <strong style="color:var(--color-text)">${impliedProb}%</strong></span>
         </div>
       </div>
 
-      <div class="paper-modal__field">
-        <label style="font-size:11px;color:var(--color-muted)">Bankroll actuelle</label>
-        <div style="font-size:16px;font-weight:600">${bankroll.toFixed(2)} €</div>
+      <!-- Bankroll -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <span style="font-size:12px;color:var(--color-muted)">Bankroll disponible</span>
+        <span style="font-size:15px;font-weight:700">${bankroll.toFixed(2)} €</span>
       </div>
 
-      <div class="paper-modal__field">
-        <label style="font-size:11px;color:var(--color-muted)">
+      <!-- Cote réelle -->
+      <div style="margin-bottom:12px">
+        <label style="display:block;font-size:11px;color:var(--color-muted);margin-bottom:6px">
+          Cote réelle prise
+          <span style="color:var(--color-muted);font-style:italic"> — modifiez si vous misez sur Winamax, Unibet…</span>
+        </label>
+        <input type="number" id="odds-input" class="paper-modal__input"
+          value="${odds}"
+          placeholder="Cote américaine (ex: +170)"
+          step="5"
+          style="font-size:16px;font-weight:600;text-align:center"
+        />
+      </div>
+
+      <!-- Mise -->
+      <div style="margin-bottom:12px">
+        <label style="display:block;font-size:11px;color:var(--color-muted);margin-bottom:6px">
           Mise (€)
-          ${kellySuggested ? `<span style="color:var(--color-signal)"> · Kelly suggère ${kellySuggested.toFixed(2)} €</span>` : ''}
+          ${kellySuggested ? `<span style="color:var(--color-signal);font-weight:600"> · Kelly : ${kellySuggested.toFixed(2)} €</span>` : ''}
         </label>
         <input type="number" id="stake-input" class="paper-modal__input"
           value="${kellySuggested ?? ''}"
           placeholder="Montant en €"
           min="0.5" max="${bankroll.toFixed(2)}" step="0.5"
+          style="font-size:16px;font-weight:600;text-align:center"
         />
       </div>
 
-      <div class="paper-modal__field">
-        <label style="font-size:11px;color:var(--color-muted)">Note (optionnel)</label>
+      <!-- Note -->
+      <div style="margin-bottom:18px">
+        <label style="display:block;font-size:11px;color:var(--color-muted);margin-bottom:6px">
+          Note (optionnel)
+        </label>
         <input type="text" id="note-input" class="paper-modal__input"
-          placeholder="Pourquoi ce pari ?"
+          placeholder="Ex: blessure clé non prise en compte…"
           maxlength="200"
         />
       </div>
 
-      <div style="display:flex;gap:8px;margin-top:var(--space-4)">
-        <button class="btn btn--ghost" id="modal-cancel" style="flex:1">Annuler</button>
-        <button class="btn btn--primary" id="modal-confirm" style="flex:2">✓ Confirmer le pari</button>
+      <!-- Actions -->
+      <div style="display:flex;gap:8px">
+        <button class="btn btn--ghost" id="modal-cancel" style="flex:1;padding:12px">Annuler</button>
+        <button class="btn btn--primary" id="modal-confirm" style="flex:2;padding:12px;font-size:14px;font-weight:600">
+          ✓ Confirmer
+        </button>
       </div>
+
     </div>
   `;
 
@@ -928,8 +961,9 @@ function _openBetModal(btn, match, analysis, storeInstance) {
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
   modal.querySelector('#modal-confirm')?.addEventListener('click', () => {
-    const stake = parseFloat(modal.querySelector('#stake-input')?.value);
-    const note  = modal.querySelector('#note-input')?.value?.trim() ?? null;
+    const stake    = parseFloat(modal.querySelector('#stake-input')?.value);
+    const oddsReal = parseFloat(modal.querySelector('#odds-input')?.value) || odds;
+    const note     = modal.querySelector('#note-input')?.value?.trim() ?? null;
 
     if (!stake || stake <= 0 || stake > bankroll) {
       modal.querySelector('#stake-input')?.classList.add('input--error');
@@ -945,7 +979,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       market,
       side,
       side_label:       sideLabel,
-      odds_taken:       odds,
+      odds_taken:       oddsReal,
       stake,
       kelly_stake:      kelly,
       edge,
