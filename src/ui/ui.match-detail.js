@@ -738,9 +738,11 @@ function renderBloc7(analysis, match) {
         whyText = `${sideLabel} est favori et sa cote le reflète bien. Le moteur détecte que le marché sous-estime légèrement ses chances réelles (${motorFavProb}% vs ${r.implied_prob}% selon le bookmaker).`;
       }
     } else if (r.type === 'SPREAD') {
-      whyText = `Le moteur estime un écart de ${r.motor_prob} pts. Le spread de ${Math.abs(r.odds_line)} pts offert par le bookmaker est plus généreux — c'est là que se trouve la valeur.`;
+      const sline = r.spread_line ?? r.implied_prob;
+      whyText = `Le moteur estime un écart de ${r.motor_prob} pts. Le spread de ${Math.abs(sline)} pts offert par le bookmaker est plus généreux — c'est là que se trouve la valeur.`;
     } else if (r.type === 'OVER_UNDER') {
-      whyText = `Le moteur projette ${r.motor_prob} pts au total. La ligne à ${r.implied_prob} pts du bookmaker est ${r.side === 'OVER' ? 'trop basse' : 'trop haute'} par rapport à cette projection.`;
+      const oline = r.ou_line ?? r.implied_prob;
+      whyText = `Le moteur projette ${r.motor_prob} pts au total. La ligne à ${oline} pts du bookmaker est ${r.side === 'OVER' ? 'trop basse' : 'trop haute'} par rapport à cette projection.`;
     }
 
     return `
@@ -762,7 +764,13 @@ function renderBloc7(analysis, match) {
           <span style="font-size:12px">${marketLabel[r.type] ?? r.type}</span>
 
           <span style="font-size:10px;color:var(--color-muted);align-self:center">COTE</span>
-          <span style="font-size:15px;font-weight:700;color:var(--color-signal)">${oddsDecimal ?? r.odds_line}</span>
+          <span style="font-size:15px;font-weight:700;color:var(--color-signal)">
+            ${r.type === 'SPREAD'
+              ? `${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts · 1.91`
+              : r.type === 'OVER_UNDER'
+              ? `${r.side === 'OVER' ? 'Over' : 'Under'} ${r.ou_line} · 1.91`
+              : (oddsDecimal ?? r.odds_line)}
+          </span>
 
           ${kellyEuros ? `
           <span style="font-size:10px;color:var(--color-muted);align-self:center">MISE KELLY</span>
