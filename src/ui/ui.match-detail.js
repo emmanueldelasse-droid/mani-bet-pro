@@ -74,13 +74,13 @@ function renderShell(match, analysis) {
         ${match.odds ? renderOddsBar(match.odds) : ''}
       </div>
 
+      ${renderBloc7(analysis, match)}
       ${renderBloc1(analysis)}
       ${renderBloc2(analysis)}
       ${renderBloc3(analysis, match)}
       ${renderBloc4(analysis)}
       ${renderBloc5(analysis, match)}
       ${renderBloc6(analysis)}
-      ${renderBloc7(analysis, match)}
 
     </div>
   `;
@@ -534,16 +534,41 @@ function renderBloc7(analysis, match) {
 
   const best = betting.best;
 
+  // Équipe favorite selon le moteur
+  const motorFavorite = analysis?.predictive_score != null
+    ? (analysis.predictive_score > 0.5
+        ? (match?.home_team?.name ?? 'Domicile')
+        : (match?.away_team?.name ?? 'Extérieur'))
+    : null;
+
   const rows = betting.recommendations.map(r => {
     const sideLabel = SIDE_LABELS[r.side] ?? r.side;
     const oddsStr   = r.odds_line > 0 ? `+${r.odds_line}` : String(r.odds_line);
     const confColor = CONF_COLORS[r.confidence] ?? 'var(--color-muted)';
     const isBest    = best && r.type === best.type && r.side === best.side;
 
-    // Kelly stake formaté
-    const kellyPct = r.kelly_stake != null
+    // Kelly stake formaté — masquer si 0
+    const kellyPct = (r.kelly_stake != null && r.kelly_stake > 0)
       ? `${(r.kelly_stake * 100).toFixed(1)}% bankroll`
       : null;
+
+    // Explication claire si le pari suggéré n'est pas sur le favori moteur
+    const motorFavProb = analysis?.predictive_score != null
+      ? Math.round((r.side === 'HOME' ? analysis.predictive_score : 1 - analysis.predictive_score) * 100)
+      : null;
+    const bookProb = r.implied_prob;
+    const isFavoriteMotor = r.type === 'MONEYLINE' && motorFavorite && sideLabel === motorFavorite;
+    const isValueOnUnderdog = r.type === 'MONEYLINE' && !isFavoriteMotor && motorFavorite;
+
+    // Phrase d'explication contextuelle
+    let contextNote = null;
+    if (r.type === 'MONEYLINE' && motorFavProb !== null) {
+      if (isValueOnUnderdog) {
+        contextNote = `${motorFavorite} reste favori selon le moteur, mais sa cote est trop chère. La valeur est sur ${sideLabel} dont la cote sous-estime ses chances réelles.`;
+      } else {
+        contextNote = `${sideLabel} est favori selon le moteur (${motorFavProb}%) et sa cote confirme cette opportunité.`;
+      }
+    }
 
     return `
       <div class="betting-row${isBest ? ' betting-row--best' : ''}">
@@ -554,13 +579,18 @@ function renderBloc7(analysis, match) {
           ${kellyPct ? `<span class="betting-row__kelly" style="
             font-size:10px;
             color:var(--color-signal);
-            background:rgba(var(--color-signal-rgb,99,179,237),0.12);
+            background:rgba(99,179,237,0.12);
             padding:2px 6px;
             border-radius:3px;
             font-weight:600;
             margin-left:auto;
           ">Mise : ${kellyPct}</span>` : ''}
         </div>
+        ${contextNote ? `
+          <div style="font-size:11px;color:var(--color-muted);margin:4px 0 6px;line-height:1.4">
+            ${contextNote}
+          </div>
+        ` : ''}
         <div class="betting-row__stats">
           <span class="text-muted" style="font-size:11px">${
             r.type === 'OVER_UNDER'
@@ -587,7 +617,7 @@ function renderBloc7(analysis, match) {
       </div>
 
       <div class="betting-disclaimer text-muted" style="font-size:11px;margin-bottom:var(--space-3);padding:var(--space-2);border-left:2px solid var(--color-border)">
-        Le moteur compare ses calculs aux cotes du bookmaker. Une cote sous-estimée ne garantit pas le résultat, mais indique une opportunité statistique.
+        Un pari de valeur n'est pas forcément sur le favori — c'est le pari dont la cote du bookmaker sous-estime les vraies chances de gagner. La mise recommandée est calculée selon le Kelly Criterion (Kelly/4, max 5% du bankroll).
       </div>
 
       <div class="betting-list">
