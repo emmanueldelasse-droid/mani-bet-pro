@@ -1,13 +1,14 @@
 /**
- * MANI BET PRO — provider.nba.js
+ * MANI BET PRO — provider.nba.js v2
  *
  * Responsabilité unique : fournir les données ESPN et BallDontLie.
- * Les injuries sont gérées par provider.injuries.js.
  *
- * Règles :
- * - Jamais de données vides mises en cache
- * - Retourne null si la donnée est indisponible
- * - Aucune logique métier
+ * CORRECTION v2 :
+ *   - getOddsComparison() utilise ProviderCache.setWithTTL() avec le TTL
+ *     dynamique retourné par le Worker (adaptatif selon l'heure ET).
+ *     En v1, data.ttl_seconds était lu mais jamais utilisé — le cache
+ *     utilisait toujours ODDS_COMPARISON (7200s statique) quel que soit
+ *     le TTL retourné par le Worker.
  */
 
 import { API_CONFIG }    from '../config/api.config.js';
@@ -21,11 +22,6 @@ export class ProviderNBA {
 
   // ── MATCHS DU JOUR (ESPN) ─────────────────────────────────────────────
 
-  /**
-   * Matchs ESPN du jour avec stats et cotes intégrées.
-   * @param {string} date — YYYY-MM-DD
-   * @returns {Promise<ESPNMatchList|null>}
-   */
   static async getMatchesToday(date) {
     const cacheKey = ProviderCache.buildKey('nba', 'espn_matches', { date });
     const cached   = ProviderCache.get(cacheKey);
@@ -49,14 +45,6 @@ export class ProviderNBA {
 
   // ── FORME RÉCENTE (BallDontLie) ───────────────────────────────────────
 
-  /**
-   * W/L des N derniers matchs via BallDontLie.
-   * Ne met en cache que si des matchs sont présents.
-   * @param {string} bdlTeamId
-   * @param {string} season — ex: '2025'
-   * @param {number} n
-   * @returns {Promise<NBARecentForm|null>}
-   */
   static async getRecentForm(bdlTeamId, season, n = 10) {
     const cacheKey = ProviderCache.buildKey('nba', 'bdl_recent', { bdlTeamId, season, n });
     const cached   = ProviderCache.get(cacheKey);
@@ -85,7 +73,6 @@ export class ProviderNBA {
       })),
     };
 
-    // Cache uniquement si données non vides
     if (result.matches.length > 0) {
       ProviderCache.set(cacheKey, result, 'RECENT_FORM');
     }
@@ -93,12 +80,19 @@ export class ProviderNBA {
     return result;
   }
 
-  // ── COTES MULTI-BOOKS (The Odds API) ────────────────────────────────────
+  // ── COTES MULTI-BOOKS (The Odds API) ──────────────────────────────────
 
   /**
-   * Récupère les cotes multi-books depuis The Odds API via le Worker.
-   * Cache TTL adaptatif selon l'heure (6h le jour, 2h le soir, 24h la nuit).
-   * @returns {Promise<OddsComparison|null>}
+   * CORRECTION : utilise setWithTTL() avec le TTL dynamique du Worker.
+   *
+   * Le Worker retourne data.ttl_seconds selon l'heure ET :
+   *   00h-12h → 86400s (24h)
+   *   12h-18h → 21600s (6h)
+   *   18h-23h → 7200s  (2h)
+   *
+   * En v1, ce TTL était lu dans data.ttl_seconds mais ignoré —
+   * ProviderCache.set(key, data, 'ODDS_COMPARISON') utilisait
+   * toujours 7200s statique depuis api.config.js.
    */
   static async getOddsComparison() {
     const cacheKey = ProviderCache.buildKey('nba', 'odds_comparison', {});
@@ -113,19 +107,15 @@ export class ProviderNBA {
 
     if (!data?.available) return null;
 
-    // TTL dynamique retourné par le Worker
-    const ttl = data.ttl_seconds ?? 7200;
-    ProviderCache.set(cacheKey, data, 'ODDS_COMPARISON');
+    // TTL adaptatif retourné par le Worker — utilisé effectivement
+    const ttl = data.ttl_seconds ?? API_CONFIG.CACHE_TTL.ODDS_COMPARISON;
+    ProviderCache.setWithTTL(cacheKey, data, ttl);
+
     return data;
   }
 
   /**
-   * Trouve les cotes multi-books pour un match spécifique.
-   * Matching par nom d'équipe.
-   * @param {OddsComparison} comparison
-   * @param {string} homeTeam
-   * @param {string} awayTeam
-   * @returns {object|null}
+   * Trouve les cotes pour un match par nom d'équipe.
    */
   static findMatchOdds(comparison, homeTeam, awayTeam) {
     if (!comparison?.matches) return null;
@@ -135,7 +125,7 @@ export class ProviderNBA {
     ) ?? null;
   }
 
-  // ── NORMALISATEUR ─────────────────────────────────────────────────────
+  // ── NORMALISATION ─────────────────────────────────────────────────────
 
   static _normalizeMatches(data, date) {
     if (!data?.matches) return null;
@@ -156,36 +146,36 @@ export class ProviderNBA {
         source:        'espn',
         fetched_at:    m.fetched_at ?? new Date().toISOString(),
         home_team: {
-          espn_id:      m.home_team?.espn_id ?? null,
-          name:         m.home_team?.name ?? null,
-          abbreviation: m.home_team?.abbreviation ?? null,
-          score:        m.home_team?.score ?? null,
-          record:       m.home_team?.record ?? null,
-          home_record:  m.home_team?.home_record ?? null,
-          away_record:  m.home_team?.away_record ?? null,
-          logo:         m.home_team?.logo ?? null,
+          espn_id:      m.home_team?.espn_id      ?? null,
+          name:         m.home_team?.name          ?? null,
+          abbreviation: m.home_team?.abbreviation  ?? null,
+          score:        m.home_team?.score          ?? null,
+          record:       m.home_team?.record         ?? null,
+          home_record:  m.home_team?.home_record    ?? null,
+          away_record:  m.home_team?.away_record    ?? null,
+          logo:         m.home_team?.logo           ?? null,
         },
         away_team: {
-          espn_id:      m.away_team?.espn_id ?? null,
-          name:         m.away_team?.name ?? null,
-          abbreviation: m.away_team?.abbreviation ?? null,
-          score:        m.away_team?.score ?? null,
-          record:       m.away_team?.record ?? null,
-          home_record:  m.away_team?.home_record ?? null,
-          away_record:  m.away_team?.away_record ?? null,
-          logo:         m.away_team?.logo ?? null,
+          espn_id:      m.away_team?.espn_id      ?? null,
+          name:         m.away_team?.name          ?? null,
+          abbreviation: m.away_team?.abbreviation  ?? null,
+          score:        m.away_team?.score          ?? null,
+          record:       m.away_team?.record         ?? null,
+          home_record:  m.away_team?.home_record    ?? null,
+          away_record:  m.away_team?.away_record    ?? null,
+          logo:         m.away_team?.logo           ?? null,
         },
         home_season_stats: m.home_season_stats ?? null,
         away_season_stats: m.away_season_stats ?? null,
         odds: m.odds ? {
           source:        m.odds.source,
-          spread:        m.odds.spread ?? null,
-          over_under:    m.odds.over_under ?? null,
-          home_ml:       m.odds.home_ml ?? null,
-          away_ml:       m.odds.away_ml ?? null,
-          home_favorite: m.odds.home_favorite ?? null,
-          away_favorite: m.odds.away_favorite ?? null,
-          fetched_at:    m.odds.fetched_at ?? new Date().toISOString(),
+          spread:        m.odds.spread        ?? null,
+          over_under:    m.odds.over_under     ?? null,
+          home_ml:       m.odds.home_ml        ?? null,
+          away_ml:       m.odds.away_ml        ?? null,
+          home_favorite: m.odds.home_favorite  ?? null,
+          away_favorite: m.odds.away_favorite  ?? null,
+          fetched_at:    m.odds.fetched_at     ?? new Date().toISOString(),
         } : null,
       })),
     };
@@ -204,16 +194,26 @@ export class ProviderNBA {
       });
       clearTimeout(timer);
 
-      Logger.apiCall({ provider, endpoint, statusCode: response.status, cached: false,
-        error: response.ok ? null : `HTTP ${response.status}` });
+      Logger.apiCall({
+        provider,
+        endpoint,
+        statusCode: response.status,
+        cached:     false,
+        error:      response.ok ? null : `HTTP ${response.status}`,
+      });
 
       if (!response.ok) return null;
       return await response.json();
 
     } catch (err) {
       clearTimeout(timer);
-      Logger.apiCall({ provider, endpoint, statusCode: 0, cached: false,
-        error: err.name === 'AbortError' ? 'TIMEOUT' : err.message });
+      Logger.apiCall({
+        provider,
+        endpoint,
+        statusCode: 0,
+        cached:     false,
+        error:      err.name === 'AbortError' ? 'TIMEOUT' : err.message,
+      });
       return null;
     }
   }

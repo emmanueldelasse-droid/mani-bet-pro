@@ -1,26 +1,30 @@
 /**
- * MANI BET PRO — provider.cache.js
+ * MANI BET PRO — provider.cache.js v2
  *
- * Responsabilité unique : cache localStorage avec TTL et version tag.
+ * Cache localStorage avec TTL et version tag.
  *
- * Version tag : purge automatique si le cache vient d'une version antérieure.
- * Règle absolue : jamais de données vides mises en cache.
+ * CORRECTIONS v2 :
+ *   - set() : rejette aussi les tableaux vides [] et objets vides {}
+ *     (la règle "jamais de donnée vide en cache" n'était appliquée
+ *     que pour null/undefined — les structures vides passaient)
+ *   - setWithTTL() : nouvelle méthode acceptant un TTL en secondes
+ *     directement. Permet à provider.nba.js d'utiliser le TTL adaptatif
+ *     retourné par le Worker (The Odds API) au lieu du TTL statique.
  */
 
 import { API_CONFIG } from '../config/api.config.js';
 import { Logger }     from '../utils/utils.logger.js';
 
-const CACHE_PREFIX   = 'mbp_cache_';
-const QUOTA_PREFIX   = 'mbp_quota_';
-const CACHE_VERSION  = 'v5'; // Incrémenter à chaque déploiement majeur
-const VERSION_KEY    = 'mbp_cache_version';
+const CACHE_PREFIX  = 'mbp_cache_';
+const QUOTA_PREFIX  = 'mbp_quota_';
+const CACHE_VERSION = 'v5';
+const VERSION_KEY   = 'mbp_cache_version';
 
 export class ProviderCache {
 
   /**
-   * À appeler au démarrage de l'app.
-   * Purge le cache si la version a changé.
-   * Nettoie les entrées expirées.
+   * À appeler au démarrage.
+   * Purge si version changée, nettoie les expirés.
    */
   static init() {
     this._purgeIfVersionChanged();
@@ -30,7 +34,6 @@ export class ProviderCache {
   // ── LECTURE ────────────────────────────────────────────────────────────
 
   /**
-   * Lire une entrée du cache.
    * @param {string} key
    * @returns {*|null} — null si absent, expiré ou vide
    */
@@ -57,33 +60,44 @@ export class ProviderCache {
   // ── ÉCRITURE ───────────────────────────────────────────────────────────
 
   /**
-   * Écrire une entrée dans le cache.
-   * Refuse les données null/undefined/vides.
+   * Écriture avec TTL depuis api.config.js (clé ttlType).
+   *
+   * CORRECTION : rejette null, undefined, [], {} — aucune structure
+   * vide ne doit être mise en cache.
+   *
    * @param {string} key
    * @param {*} data
    * @param {string} ttlType — clé de API_CONFIG.CACHE_TTL
    * @returns {boolean}
    */
   static set(key, data, ttlType) {
-    // Refus des données vides
-    if (data === null || data === undefined) return false;
+    if (!this._isValidData(data)) return false;
 
     try {
-      const ttl        = API_CONFIG.CACHE_TTL[ttlType] ?? 3600;
-      const expires_at = ttl === 0
-        ? Number.MAX_SAFE_INTEGER
-        : Date.now() + ttl * 1000;
+      const ttl = API_CONFIG.CACHE_TTL[ttlType] ?? 3600;
+      return this._write(key, data, ttl, ttlType);
+    } catch (err) {
+      Logger.warn('CACHE_WRITE_ERROR', { key, message: err.message });
+      return false;
+    }
+  }
 
-      localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({
-        data,
-        expires_at,
-        cached_at:   new Date().toISOString(),
-        ttl_type:    ttlType,
-        version:     CACHE_VERSION,
-      }));
+  /**
+   * Écriture avec TTL dynamique en secondes.
+   * Utilisé par provider.nba.js pour les cotes The Odds API dont
+   * le TTL est retourné par le Worker (adaptatif selon l'heure).
+   *
+   * @param {string} key
+   * @param {*} data
+   * @param {number} ttlSeconds
+   * @returns {boolean}
+   */
+  static setWithTTL(key, data, ttlSeconds) {
+    if (!this._isValidData(data)) return false;
+    if (!ttlSeconds || ttlSeconds <= 0) return false;
 
-      return true;
-
+    try {
+      return this._write(key, data, ttlSeconds, 'DYNAMIC');
     } catch (err) {
       Logger.warn('CACHE_WRITE_ERROR', { key, message: err.message });
       return false;
@@ -92,12 +106,10 @@ export class ProviderCache {
 
   // ── INVALIDATION ───────────────────────────────────────────────────────
 
-  /** Invalide une clé spécifique */
   static invalidate(key) {
     localStorage.removeItem(`${CACHE_PREFIX}${key}`);
   }
 
-  /** Invalide toutes les clés d'un préfixe */
   static invalidateByPrefix(prefix) {
     const fullPrefix = `${CACHE_PREFIX}${prefix}`;
     const toRemove   = [];
@@ -111,7 +123,6 @@ export class ProviderCache {
     Logger.debug('CACHE_INVALIDATED_PREFIX', { prefix, count: toRemove.length });
   }
 
-  /** Invalide toutes les entrées du cache (garde les quotas) */
   static invalidateAll() {
     const toRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -124,18 +135,10 @@ export class ProviderCache {
 
   // ── UTILITAIRES ────────────────────────────────────────────────────────
 
-  /** Vérifie si une clé est en cache valide */
   static has(key) {
     return this.get(key) !== null;
   }
 
-  /**
-   * Génère une clé de cache normalisée et stable.
-   * @param {string} provider
-   * @param {string} resource
-   * @param {object} [params]
-   * @returns {string}
-   */
   static buildKey(provider, resource, params = {}) {
     const paramStr = Object.entries(params)
       .filter(([, v]) => v !== null && v !== undefined)
@@ -182,7 +185,7 @@ export class ProviderCache {
   }
 
   static resetQuota(provider) {
-    const quota = this.getQuota(provider);
+    const quota    = this.getQuota(provider);
     quota.used     = 0;
     quota.degraded = false;
     localStorage.setItem(`${QUOTA_PREFIX}${provider}`, JSON.stringify(quota));
@@ -190,7 +193,38 @@ export class ProviderCache {
 
   // ── PRIVÉ ─────────────────────────────────────────────────────────────
 
-  /** Purge le cache si la version a changé depuis le dernier déploiement */
+  /**
+   * Vérifie qu'une donnée est non vide avant mise en cache.
+   * Rejette : null, undefined, [] (tableau vide), {} (objet vide).
+   */
+  static _isValidData(data) {
+    if (data === null || data === undefined) return false;
+    if (Array.isArray(data) && data.length === 0) return false;
+    if (
+      typeof data === 'object' &&
+      !Array.isArray(data) &&
+      Object.keys(data).length === 0
+    ) return false;
+    return true;
+  }
+
+  /** Écrit une entrée dans localStorage. */
+  static _write(key, data, ttlSeconds, ttlType) {
+    const expires_at = ttlSeconds === 0
+      ? Number.MAX_SAFE_INTEGER
+      : Date.now() + ttlSeconds * 1000;
+
+    localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({
+      data,
+      expires_at,
+      cached_at: new Date().toISOString(),
+      ttl_type:  ttlType,
+      version:   CACHE_VERSION,
+    }));
+
+    return true;
+  }
+
   static _purgeIfVersionChanged() {
     const stored = localStorage.getItem(VERSION_KEY);
     if (stored !== CACHE_VERSION) {
@@ -200,7 +234,6 @@ export class ProviderCache {
     }
   }
 
-  /** Supprime les entrées expirées */
   static _cleanupExpired() {
     const toRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
