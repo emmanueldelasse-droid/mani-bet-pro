@@ -1,29 +1,27 @@
 /**
- * MANI BET PRO — app.js
+ * MANI BET PRO — app.js v2
  *
  * Point d'entrée principal.
- * Initialise le store, le router, le storage.
- * Aucune donnée fictive. Aucune valeur inventée.
+ * Initialise le store, le router, le cache, le paper settler.
  *
- * Version  : 0.1.0
- * Phase    : 0 — Fondations
+ * CORRECTIONS v2 :
+ *   - persistState() merge l'état existant au lieu de l'écraser.
+ *     En v1, une navigation déclenchait un écrasement de mbp_state
+ *     qui effaçait le champ 'history' persisté par la subscription
+ *     store.subscribe('history') de store.js → race condition.
+ *   - window.MBP commenté comme debug uniquement.
  */
 
-import { store }  from './state/store.js';
-import { router } from './ui/ui.router.js';
-import { ProviderCache }  from './providers/provider.cache.js';
+import { store }         from './state/store.js';
+import { router }        from './ui/ui.router.js';
+import { ProviderCache } from './providers/provider.cache.js';
 import { PaperSettler }  from './paper/paper.settler.js';
-import { Logger }         from './utils/utils.logger.js';
-import { APP_CONFIG }     from './config/sports.config.js';
+import { Logger }        from './utils/utils.logger.js';
+import { APP_CONFIG }    from './config/sports.config.js';
 
-// ── STORAGE LOCAL ─────────────────────────────────────────────────────────
+// ── PERSISTENCE ───────────────────────────────────────────────────────────
 
-/**
- * Charge l'état persisté depuis localStorage.
- * Ne charge que les clés autorisées (voir store.load).
- * @returns {object|null}
- */
-function loadPersistedState() {
+function _loadPersistedState() {
   try {
     const raw = localStorage.getItem('mbp_state');
     if (!raw) return null;
@@ -35,53 +33,52 @@ function loadPersistedState() {
 }
 
 /**
- * Persiste les clés autorisées de l'état dans localStorage.
- * Appelé sur changement de route et avant fermeture de page.
+ * Persiste les clés autorisées dans localStorage.
+ *
+ * CORRECTION : merge avec l'état existant au lieu d'écraser.
+ * Sans merge, une navigation effaçait le champ 'history' que
+ * store.subscribe('history') venait de persister.
  */
-function persistState() {
+function _persistState() {
   try {
-    const state = store.getState();
-    const toPersist = {
+    const state   = store.getState();
+    const current = JSON.parse(localStorage.getItem('mbp_state') ?? '{}');
+
+    localStorage.setItem('mbp_state', JSON.stringify({
+      ...current,                              // préserve history + autres champs persistés
       dashboardFilters: state.dashboardFilters,
       ui: {
+        ...(current.ui ?? {}),
         displayMode: state.ui?.displayMode,
       },
-    };
-    localStorage.setItem('mbp_state', JSON.stringify(toPersist));
+    }));
   } catch (err) {
     Logger.warn('STORAGE_PERSIST_FAIL', { message: err.message });
   }
 }
 
-// ── TOAST MANAGER ────────────────────────────────────────────────────────
+// ── TOAST ─────────────────────────────────────────────────────────────────
 
-/**
- * Affiche un toast de notification.
- * @param {string} message
- * @param {'success'|'warning'|'error'|'info'} type
- * @param {number} duration — ms
- */
 export function showToast(message, type = 'info', duration = 3500) {
   const container = document.getElementById('toast-container');
   if (!container) return;
 
   const toast = document.createElement('div');
-  toast.className = `toast toast--${type}`;
+  toast.className   = `toast toast--${type}`;
   toast.textContent = message;
-
   container.appendChild(toast);
 
   setTimeout(() => {
-    toast.style.opacity = '0';
+    toast.style.opacity    = '0';
     toast.style.transition = 'opacity 300ms ease';
     setTimeout(() => toast.remove(), 320);
   }, duration);
 }
 
-// ── LOADER GLOBAL ────────────────────────────────────────────────────────
+// ── LOADER GLOBAL ─────────────────────────────────────────────────────────
 
 export function setGlobalLoader(visible, text = '') {
-  const loader   = document.getElementById('global-loader');
+  const loader    = document.getElementById('global-loader');
   const loaderTxt = document.getElementById('loader-text');
 
   if (!loader) return;
@@ -100,29 +97,28 @@ export function setGlobalLoader(visible, text = '') {
 
 async function init() {
   Logger.info('APP_INIT_START', {
-    version:    APP_CONFIG.VERSION,
-    name:       APP_CONFIG.NAME,
-    userAgent:  navigator.userAgent,
-    timestamp:  new Date().toISOString(),
+    version:   APP_CONFIG.VERSION,
+    name:      APP_CONFIG.NAME,
+    timestamp: new Date().toISOString(),
   });
 
-  // 1. Initialiser le cache (purge si nouvelle version, nettoyage expirés)
+  // 1. Cache — purge si nouvelle version, nettoyage des expirés
   ProviderCache.init();
 
-  // 2. Charger l'état persisté
-  const persisted = loadPersistedState();
+  // 2. Charger l'état persisté (dashboardFilters, displayMode, history)
+  const persisted = _loadPersistedState();
   if (persisted) {
     store.load(persisted);
     Logger.debug('APP_STATE_LOADED', {});
   }
 
-  // 2. Persister l'état sur changement de route
-  store.subscribe('currentRoute', () => persistState());
+  // 3. Persister à chaque changement de route (merge, pas écrasement)
+  store.subscribe('currentRoute', () => _persistState());
 
-  // 3. Persister avant fermeture de page
-  window.addEventListener('beforeunload', () => persistState());
+  // 4. Persister avant fermeture de page
+  window.addEventListener('beforeunload', () => _persistState());
 
-  // 4. Écouter les erreurs globales non capturées
+  // 5. Erreurs globales non capturées
   window.addEventListener('error', (e) => {
     Logger.error('UNCAUGHT_ERROR', {
       message:  e.message,
@@ -137,15 +133,13 @@ async function init() {
     });
   });
 
-  // 5. Initialiser le router
+  // 6. Router
   router.init(store);
 
-  // 6. Clôturer automatiquement les paris en attente (async, non bloquant)
+  // 7. Clôture automatique des paris en attente (async, non bloquant)
   PaperSettler.settle(store).catch(() => {});
 
-  Logger.info('APP_INIT_DONE', {
-    version: APP_CONFIG.VERSION,
-  });
+  Logger.info('APP_INIT_DONE', { version: APP_CONFIG.VERSION });
 }
 
 // ── LANCEMENT ────────────────────────────────────────────────────────────
@@ -156,8 +150,8 @@ if (document.readyState === 'loading') {
   init();
 }
 
-// ── EXPORTS GLOBAUX ───────────────────────────────────────────────────────
-// Exposé sur window pour usage depuis les vues si nécessaire
+// ── DEBUG — à retirer en production multi-utilisateur ────────────────────
+// Exposé sur window pour inspection dans la console DevTools uniquement.
 window.MBP = {
   store,
   router,
