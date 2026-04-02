@@ -34,7 +34,7 @@ function _renderPage(container, storeInstance) {
 
       ${_renderBankrollCard(state)}
       ${_renderBankrollChart(state)}
-      ${_renderMetricsCard(metrics)}
+      ${_renderMetricsCard(metrics, state.bets.length)}
       ${_renderStrategyCard(metrics)}
       ${_renderBiasCard(metrics)}
       ${_renderBetsList(state.bets, storeInstance)}
@@ -152,8 +152,8 @@ function _renderBankrollChart(state) {
 
 // ── MÉTRIQUES ─────────────────────────────────────────────────────────────
 
-function _renderMetricsCard(metrics) {
-  if (metrics.total_bets === 0 && state.bets.length === 0) {
+function _renderMetricsCard(metrics, totalBets = 0) {
+  if (metrics.total_bets === 0 && totalBets === 0) {
     return `
       <div class="card" style="margin-bottom:var(--space-4);text-align:center;padding:var(--space-6)">
         <div style="font-size:24px;margin-bottom:var(--space-2)">📋</div>
