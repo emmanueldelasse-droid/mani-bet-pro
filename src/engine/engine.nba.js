@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — engine.nba.js v2
+ * MANI BET PRO — engine.nba.js v3 — Bloc A
  *
  * Moteur analytique NBA.
  * Variables calculées depuis ESPN (eFG%, TS%, win%, splits) + injuries PDF NBA.
@@ -16,6 +16,38 @@ import { SPORTS_CONFIG } from '../config/sports.config.js';
 import { Logger }        from '../utils/utils.logger.js';
 
 const CONFIG = SPORTS_CONFIG.NBA;
+
+// ── CONSTANTES BLOC A ─────────────────────────────────────────────────────
+
+// Seuils edge minimum (en fraction, pas en %)
+const EDGE_THRESHOLDS = {
+  MONEYLINE:  0.05,  // 5%
+  SPREAD:     0.03,  // 3%
+  OVER_UNDER: 0.03,  // 3%
+};
+
+// Kelly Criterion — Fractional Kelly/4, plafond 5% bankroll
+const KELLY_FRACTION  = 0.25;
+const KELLY_MAX_PCT   = 0.05;
+
+// Home court bonus calibré par équipe (altitude/facteur terrain documenté)
+const HOME_COURT_BONUS = {
+  'Denver Nuggets': 0.03,
+  'Utah Jazz':      0.03,
+};
+
+// Distance approximative entre arènes NBA (km) — paires connues
+// Clé : 'TeamA|TeamB' (ordre alphabétique)
+const TRAVEL_DISTANCES = {
+  'Boston Celtics|Los Angeles Lakers':      4350,
+  'Golden State Warriors|Miami Heat':       4680,
+  'Los Angeles Lakers|Miami Heat':          4380,
+  'Boston Celtics|Phoenix Suns':            4290,
+  'Golden State Warriors|New York Knicks':  4130,
+  'Los Angeles Lakers|New York Knicks':     4500,
+  'Miami Heat|Portland Trail Blazers':      4660,
+  'Boston Celtics|Portland Trail Blazers':  4810,
+};
 
 export class EngineNBA {
 
@@ -149,6 +181,14 @@ export class EngineNBA {
         'espn_scoreboard'
       ),
 
+      // ── Back-to-back detection ─────────────────────────────────────────────
+      // Source : champ schedule dans rawData (si disponible)
+      back_to_back: this._computeBackToBack(data),
+
+      // ── Rest days differential ─────────────────────────────────────────────
+      // Positif = équipe domicile plus reposée
+      rest_days_diff: this._computeRestDiff(data),
+
     };
   }
 
@@ -189,7 +229,7 @@ export class EngineNBA {
       });
     }
 
-    const score = totalWeight > 0
+    let score = totalWeight > 0
       ? (weightedSum / totalWeight + 1) / 2
       : null;
 
@@ -226,6 +266,12 @@ export class EngineNBA {
 
       // Avg pts diff : plage ±15 pts
       avg_pts_diff: this._clampNormalize(variables.avg_pts_diff?.value, -15, 15),
+
+      // Back-to-back : -1 si domicile en B2B, +1 si extérieur en B2B
+      back_to_back: variables.back_to_back?.value ?? null,
+
+      // Rest days diff : normalisé ±1 sur plage ±3 jours
+      rest_days_diff: this._clampNormalize(variables.rest_days_diff?.value, -3, 3),
     };
   }
 
@@ -463,59 +509,66 @@ export class EngineNBA {
       over_under: odds.over_under !== null ? Number(odds.over_under) : null,
     };
 
-    // Probabilité calculée par le moteur
-    const pHome = score;          // P(victoire domicile)
-    const pAway = 1 - score;      // P(victoire extérieur)
+    const pHome = score;
+    const pAway = 1 - score;
 
-    // ── MONEYLINE ──────────────────────────────────────────────────────────
+    // ── MONEYLINE ─────────────────────────────────────────────────────────
     if (odds.home_ml !== null && odds.away_ml !== null) {
       const impliedHome = this._americanToProb(odds.home_ml);
       const impliedAway = this._americanToProb(odds.away_ml);
+      const edgeHome    = pHome - impliedHome;
+      const edgeAway    = pAway - impliedAway;
 
-      const edgeHome = pHome - impliedHome;
-      const edgeAway = pAway - impliedAway;
-
-      // Recommander si edge > 3%
-      // Bloquer outsiders extrêmes (cote > +400 = prob < 20%)
+      // Seuil Bloc A : 5% minimum, bloquer outsiders > +400
       const isExtremeOutsider = (edgeHome > 0 && odds.home_ml > 400) ||
                                  (edgeHome < 0 && odds.away_ml > 400);
-      if (Math.abs(edgeHome) > 0.05 && !isExtremeOutsider) {
+      const absEdge = Math.abs(edgeHome);
+
+      if (absEdge >= EDGE_THRESHOLDS.MONEYLINE && !isExtremeOutsider) {
+        const side      = edgeHome > 0 ? 'HOME' : 'AWAY';
+        const oddsLine  = side === 'HOME' ? odds.home_ml : odds.away_ml;
+        const motorProb = side === 'HOME' ? pHome : pAway;
+        const kelly     = this._computeKelly(motorProb, oddsLine);
+
         recs.push({
-          type:        'MONEYLINE',
-          label:       'Vainqueur du match',
-          side:        edgeHome > 0 ? 'HOME' : 'AWAY',
-          odds_line:   edgeHome > 0 ? odds.home_ml : odds.away_ml,
-          motor_prob:  edgeHome > 0 ? Math.round(pHome * 100) : Math.round(pAway * 100),
-          implied_prob: edgeHome > 0 ? Math.round(impliedHome * 100) : Math.round(impliedAway * 100),
-          edge:        Math.round(Math.abs(edgeHome > 0 ? edgeHome : edgeAway) * 100),
-          confidence:  this._edgeToConfidence(Math.abs(edgeHome > 0 ? edgeHome : edgeAway)),
-          has_value:   true,
+          type:         'MONEYLINE',
+          label:        'Vainqueur du match',
+          side,
+          odds_line:    oddsLine,
+          motor_prob:   Math.round(motorProb * 100),
+          implied_prob: Math.round((side === 'HOME' ? impliedHome : impliedAway) * 100),
+          edge:         Math.round(absEdge * 100),
+          confidence:   this._edgeToConfidence(absEdge),
+          has_value:    true,
+          kelly_stake:  kelly,
         });
       }
     }
 
     // ── SPREAD ────────────────────────────────────────────────────────────
     if (odds.spread !== null) {
-      // Le spread DraftKings est du point de vue de l'équipe HOME
-      // spread négatif = domicile favori (doit gagner de |spread| pts)
-      const spread = odds.spread;
+      const spread       = odds.spread;
+      const motorMargin  = (score - 0.5) * 30;
+      const spreadValue  = motorMargin - (-spread);
+      const spreadEdgePct = Math.abs(spreadValue) / 30;
 
-      // Signal directionnel du moteur → score > 0.6 = domicile fort favori
-      const motorMargin = (score - 0.5) * 30; // Conversion approx en pts
-      const spreadValue = motorMargin - (-spread); // Positif = moteur plus optimiste que le spread
+      if (spreadEdgePct >= EDGE_THRESHOLDS.SPREAD) {
+        const side     = spreadValue > 0 ? 'HOME' : 'AWAY';
+        const oddsLine = side === 'HOME' ? spread : -spread;
+        const kelly    = this._computeKelly(0.52, -110); // prob approx spread ~52%
 
-      if (Math.abs(spreadValue) > 3) {
         recs.push({
-          type:        'SPREAD',
-          label:       'Handicap (spread)',
-          side:        spreadValue > 0 ? 'HOME' : 'AWAY',
-          odds_line:   spreadValue > 0 ? spread : -spread,
-          motor_prob:  Math.round(Math.abs(motorMargin)),
+          type:         'SPREAD',
+          label:        'Handicap (spread)',
+          side,
+          odds_line:    oddsLine,
+          motor_prob:   Math.round(Math.abs(motorMargin)),
           implied_prob: Math.round(Math.abs(spread)),
-          edge:        Math.round(Math.abs(spreadValue)),
-          confidence:  this._edgeToConfidence(Math.abs(spreadValue) / 30),
-          has_value:   Math.abs(spreadValue) > 5,
-          note:        `Moteur estime ${Math.round(Math.abs(motorMargin))} pts d'écart vs spread ${spread > 0 ? '+' : ''}${spread}`,
+          edge:         Math.round(Math.abs(spreadValue)),
+          confidence:   this._edgeToConfidence(spreadEdgePct),
+          has_value:    spreadEdgePct >= EDGE_THRESHOLDS.SPREAD,
+          note:         `Moteur estime ${Math.round(Math.abs(motorMargin))} pts d'écart vs spread ${spread > 0 ? '+' : ''}${spread}`,
+          kelly_stake:  kelly,
         });
       }
     }
@@ -525,33 +578,36 @@ export class EngineNBA {
       const homeAvgPts = matchData?.home_season_stats?.avg_pts;
       const awayAvgPts = matchData?.away_season_stats?.avg_pts;
 
-      if (homeAvgPts !== null && homeAvgPts !== undefined &&
-          awayAvgPts !== null && awayAvgPts !== undefined) {
+      if (homeAvgPts != null && awayAvgPts != null) {
         const projectedTotal = homeAvgPts + awayAvgPts;
         const ouLine         = odds.over_under;
         const diff           = projectedTotal - ouLine;
+        const ouEdgePct      = Math.abs(diff) / ouLine;
 
-        if (Math.abs(diff) > 3) {
+        if (ouEdgePct >= EDGE_THRESHOLDS.OVER_UNDER) {
+          const side   = diff > 0 ? 'OVER' : 'UNDER';
+          const kelly  = this._computeKelly(0.52, -110); // prob approx O/U ~52%
+
           recs.push({
-            type:        'OVER_UNDER',
-            label:       'Total de points',
-            side:        diff > 0 ? 'OVER' : 'UNDER',
-            odds_line:   ouLine,
-            motor_prob:  Math.round(projectedTotal),
+            type:         'OVER_UNDER',
+            label:        'Total de points',
+            side,
+            odds_line:    ouLine,
+            motor_prob:   Math.round(projectedTotal),
             implied_prob: Math.round(ouLine),
-            edge:        Math.round(Math.abs(diff)),
-            confidence:  this._edgeToConfidence(Math.abs(diff) / 20),
-            has_value:   Math.abs(diff) > 5,
-            note:        `Moteur projette ${Math.round(projectedTotal)} pts total vs ligne ${ouLine}`,
+            edge:         Math.round(Math.abs(diff)),
+            confidence:   this._edgeToConfidence(ouEdgePct),
+            has_value:    ouEdgePct >= EDGE_THRESHOLDS.OVER_UNDER,
+            note:         `Moteur projette ${Math.round(projectedTotal)} pts total vs ligne ${ouLine}`,
+            kelly_stake:  kelly,
           });
         }
       }
     }
 
-    // Trier par edge décroissant
     recs.sort((a, b) => b.edge - a.edge);
-
     const validRecs = recs.filter(r => r.has_value);
+
     return {
       recommendations: validRecs,
       best:            validRecs[0] ?? null,
@@ -559,11 +615,81 @@ export class EngineNBA {
     };
   }
 
+  /**
+   * Kelly Criterion Fractional (Kelly/4).
+   * Retourne la mise recommandée en % du bankroll.
+   * Plafond à 5%.
+   * @param {number} p — probabilité estimée [0,1]
+   * @param {number} americanOdds
+   * @returns {number} — % du bankroll (ex: 0.03 = 3%)
+   */
+  static _computeKelly(p, americanOdds) {
+    if (p === null || americanOdds === null) return null;
+    const b = americanOdds > 0
+      ? americanOdds / 100
+      : 100 / Math.abs(americanOdds);
+    const q     = 1 - p;
+    const kelly = (b * p - q) / b;
+    if (kelly <= 0) return 0;
+    const fractional = kelly * KELLY_FRACTION;
+    return Math.min(fractional, KELLY_MAX_PCT);
+  }
+
   // Cotes américaines → probabilité implicite (avec marge bookmaker)
   static _americanToProb(american) {
     if (american === null || american === undefined) return null;
     if (american > 0) return 100 / (american + 100);
     return Math.abs(american) / (Math.abs(american) + 100);
+  }
+
+  // ── BACK-TO-BACK DETECTION ────────────────────────────────────────────────
+
+  /**
+   * Détecte si une équipe joue un back-to-back.
+   * Source : champ back_to_back dans rawData (fourni par ESPN schedule si disponible).
+   * Positif = extérieur en B2B (avantage domicile).
+   * Négatif = domicile en B2B (désavantage domicile).
+   */
+  static _computeBackToBack(data) {
+    const homeB2B = data?.home_back_to_back ?? null;
+    const awayB2B = data?.away_back_to_back ?? null;
+
+    if (homeB2B === null && awayB2B === null) {
+      return { value: null, source: 'espn_schedule', quality: 'MISSING' };
+    }
+
+    // +1 si extérieur en B2B, -1 si domicile en B2B, 0 si aucun ou les deux
+    let value = 0;
+    if (homeB2B && !awayB2B) value = -1;
+    else if (!homeB2B && awayB2B) value = 1;
+
+    return {
+      value,
+      source:  'espn_schedule',
+      quality: 'VERIFIED',
+      raw:     { home_b2b: homeB2B, away_b2b: awayB2B },
+    };
+  }
+
+  /**
+   * Différentiel de jours de repos.
+   * Source : champ rest_days dans rawData.
+   * Positif = domicile plus reposé.
+   */
+  static _computeRestDiff(data) {
+    const homeRest = data?.home_rest_days ?? null;
+    const awayRest = data?.away_rest_days ?? null;
+
+    if (homeRest === null || awayRest === null) {
+      return { value: null, source: 'espn_schedule', quality: 'MISSING' };
+    }
+
+    return {
+      value:   Math.max(-3, Math.min(3, homeRest - awayRest)),
+      source:  'espn_schedule',
+      quality: 'VERIFIED',
+      raw:     { home_rest: homeRest, away_rest: awayRest },
+    };
   }
 
   // Edge → niveau de confiance
