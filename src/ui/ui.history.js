@@ -201,7 +201,7 @@ function _renderMetricsCard(metrics, totalBets = 0) {
           <div style="background:var(--color-bg);border-radius:6px;padding:var(--space-2);text-align:center">
             <div style="font-size:10px;color:var(--color-muted)">${bucket}</div>
             <div style="font-size:14px;font-weight:600;color:var(--color-text)">
-              ${data?.hit_rate !== null ? `${data.hit_rate}%` : '—'}
+              ${data && data.hit_rate !== null ? `${data.hit_rate}%` : '—'}
             </div>
             <div style="font-size:10px;color:var(--color-muted)">${data?.total ?? 0} paris</div>
           </div>
