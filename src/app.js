@@ -11,9 +11,10 @@
 
 import { store }  from './state/store.js';
 import { router } from './ui/ui.router.js';
-import { PaperSettler } from './paper/paper.settler.js';
-import { Logger } from './utils/utils.logger.js';
-import { APP_CONFIG } from './config/sports.config.js';
+import { ProviderCache }  from './providers/provider.cache.js';
+import { PaperSettler }  from './paper/paper.settler.js';
+import { Logger }         from './utils/utils.logger.js';
+import { APP_CONFIG }     from './config/sports.config.js';
 
 // ── STORAGE LOCAL ─────────────────────────────────────────────────────────
 
@@ -105,7 +106,10 @@ async function init() {
     timestamp:  new Date().toISOString(),
   });
 
-  // 1. Charger l'état persisté
+  // 1. Initialiser le cache (purge si nouvelle version, nettoyage expirés)
+  ProviderCache.init();
+
+  // 2. Charger l'état persisté
   const persisted = loadPersistedState();
   if (persisted) {
     store.load(persisted);
@@ -136,7 +140,7 @@ async function init() {
   // 5. Initialiser le router
   router.init(store);
 
-  // Clôturer automatiquement les paris en attente (async, non bloquant)
+  // 6. Clôturer automatiquement les paris en attente (async, non bloquant)
   PaperSettler.settle(store).catch(() => {});
 
   Logger.info('APP_INIT_DONE', {
