@@ -21,7 +21,11 @@ import { americanToDecimal, formatEdge } from '../utils/utils.odds.js';
 // ── POINT D'ENTRÉE ────────────────────────────────────────────────────────
 
 export async function render(container, storeInstance) {
-  let selectedDate = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
+  // Avant 6h heure locale : matchs de la nuit en cours → aujourd'hui
+  // Après 6h : matchs déjà joués → demain (prochaine soirée NBA)
+  const _smartDate = () => new Date().getHours() < 6 ? _getTodayDate() : _offsetDate(_getTodayDate(), 1);
+  let selectedDate = storeInstance.get('dashboardFilters')?.selectedDate ?? _smartDate();
+
 
   container.innerHTML = _renderShell(selectedDate);
   _bindFilterEvents(container, storeInstance);
@@ -125,7 +129,6 @@ function _renderShell(selectedDate) {
   });
   const today     = _getTodayDate();
   const tomorrow  = _offsetDate(today, 1);
-  const yesterday = _offsetDate(today, -1);
 
   return `
     <div class="dashboard">
@@ -138,7 +141,6 @@ function _renderShell(selectedDate) {
 
       <!-- Sélecteur de date -->
       <div class="date-selector filter-chips" id="date-selector">
-        <button class="chip ${selectedDate === yesterday ? 'chip--active' : ''}" data-date="${yesterday}">Hier</button>
         <button class="chip ${selectedDate === today     ? 'chip--active' : ''}" data-date="${today}">Aujourd'hui</button>
         <button class="chip ${selectedDate === tomorrow  ? 'chip--active' : ''}" data-date="${tomorrow}">Demain</button>
         <input type="date" id="date-picker" value="${selectedDate}"
@@ -228,6 +230,10 @@ function _createMatchCard(match) {
 
   const homeRecord = match.home_team?.record ?? '—';
   const awayRecord = match.away_team?.record ?? '—';
+  const isFinal    = match.status === 'STATUS_FINAL' || match.status === 'STATUS_FINAL_OT';
+  const homeScore  = match.home_team?.score;
+  const awayScore  = match.away_team?.score;
+  const showScore  = isFinal && homeScore != null && awayScore != null;
   const odds       = match.odds;
   const spread     = odds?.spread != null ? (odds.spread > 0 ? `+${odds.spread}` : String(odds.spread)) : '—';
   const ou         = odds?.over_under ?? '—';
@@ -235,9 +241,9 @@ function _createMatchCard(match) {
   card.innerHTML = `
     <div class="match-card__header">
       <span class="sport-tag sport-tag--nba">NBA</span>
-      <span class="match-card__time text-muted">${time}</span>
+      <span class="match-card__time text-muted">${isFinal ? "Terminé" : time}</span>
       <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}">
-        Analyse…
+        ${isFinal ? 'Final' : 'Analyse…'}
       </span>
     </div>
 
@@ -247,7 +253,12 @@ function _createMatchCard(match) {
         <span class="match-card__team-name truncate">${match.home_team?.name ?? '—'}</span>
         <span class="match-card__team-record text-muted mono">${homeRecord}</span>
       </div>
-      <div class="match-card__vs">VS</div>
+      <div class="match-card__vs" style="text-align:center">
+        ${showScore
+          ? `<div style="font-family:var(--font-mono);font-size:20px;font-weight:700;line-height:1.2">${homeScore}<br><span style="font-size:11px;color:var(--color-muted)">–</span><br>${awayScore}</div>`
+          : 'VS'
+        }
+      </div>
       <div class="match-card__team match-card__team--away">
         <span class="match-card__team-abbr">${match.away_team?.abbreviation ?? '—'}</span>
         <span class="match-card__team-name truncate">${match.away_team?.name ?? '—'}</span>
