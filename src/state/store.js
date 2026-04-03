@@ -185,7 +185,6 @@ class Store {
     if (!persisted || typeof persisted !== 'object') return;
 
     const PERSISTABLE_KEYS = [
-      'dashboardFilters',
       'ui.displayMode',
       'history',
     ];
@@ -195,6 +194,13 @@ class Store {
       if (value !== undefined) {
         this.set({ [key]: value });
       }
+    }
+
+    // dashboardFilters persisté partiellement — selectedDate exclu
+    // pour que l'app recalcule la bonne date à chaque démarrage
+    if (persisted.dashboardFilters) {
+      const { selectedDate, ...otherFilters } = persisted.dashboardFilters;
+      this.set({ dashboardFilters: otherFilters });
     }
   }
 
