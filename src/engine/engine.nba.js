@@ -522,26 +522,46 @@ export class EngineNBA {
     }
 
     // ── SPREAD ───────────────────────────────────────────────────────────
+    // La probabilité de couvrir un spread n'est pas la même que la probabilité
+    // de gagner le match. Conversion via distribution normale NBA (σ ~12 pts).
+    // P(couvrir spread S) = P(marge victoire > S) = 1 - Φ((S - μ) / σ)
+    // où μ = marge attendue estimée depuis le score prédictif.
     if (normalizedOdds.spread !== null) {
-      for (const side of ['HOME', 'AWAY']) {
-        const bestBook = this._getBestBookOdds(marketOdds, side, 'spreads');
-        if (!bestBook) continue;
-        const motorProb   = side === 'HOME' ? pHome : pAway;
+      const spreadLine = normalizedOdds.spread; // négatif = favori domicile
+      const NBA_SIGMA  = 12; // écart-type historique des marges NBA
+
+      // Estimer la marge attendue depuis le score prédictif
+      // score=0.5 → marge=0, score=1 → marge≈+24pts, score=0 → marge≈-24pts
+      const expectedMargin = (pHome - 0.5) * 48;
+
+      // P(domicile couvre spread) = P(marge > spreadLine)
+      // spread négatif = domicile favori, doit gagner de plus que |spread|
+      const zHome = (spreadLine - expectedMargin) / NBA_SIGMA;
+      const pSpreadHome = 1 - this._normalCDF(zHome);
+
+      // Comparer à la probabilité implicite Pinnacle
+      const bestHome = this._getBestBookOdds(marketOdds, 'HOME', 'spreads');
+      const bestAway = this._getBestBookOdds(marketOdds, 'AWAY', 'spreads');
+
+      const checkSpreadSide = (motorProb, bestBook, side, sLine) => {
+        if (!bestBook) return;
         const impliedProb = decimalToProb(bestBook.decimalOdds);
-        if (impliedProb === null) continue;
+        if (impliedProb === null) return;
         const edge = motorProb - impliedProb;
         if (edge >= EDGE_THRESHOLDS.SPREAD) {
           recs.push({
             type: 'SPREAD', label: 'Handicap (spread)', side,
             odds_line: bestBook.odds, odds_decimal: bestBook.decimalOdds, odds_source: bestBook.bookmaker,
-            spread_line: side === 'HOME' ? normalizedOdds.spread : -normalizedOdds.spread,
+            spread_line: sLine,
             motor_prob: Math.round(motorProb * 100), implied_prob: Math.round(impliedProb * 100),
             edge: Math.round(edge * 100), confidence: this._edgeToConfidence(edge),
             has_value: true, kelly_stake: this._computeKelly(motorProb, bestBook.odds),
           });
-          break;
         }
-      }
+      };
+
+      checkSpreadSide(pSpreadHome,       bestHome, 'HOME',  spreadLine);
+      checkSpreadSide(1 - pSpreadHome,   bestAway, 'AWAY', -spreadLine);
     }
 
     // ── OVER/UNDER ───────────────────────────────────────────────────────
