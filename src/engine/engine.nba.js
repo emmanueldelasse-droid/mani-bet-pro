@@ -60,8 +60,10 @@ export class EngineNBA {
       scoreMethod = 'WEIGHTED_SUM';
     }
 
-    const bettingRecs = (score !== null && matchData?.odds)
-      ? this._computeBettingRecommendations(score, matchData.odds, matchData, variables)
+    // Recommandations paris — utilise ESPN odds OU The Odds API (Pinnacle)
+    const hasOdds = matchData?.odds != null || matchData?.market_odds != null;
+    const bettingRecs = (score !== null && hasOdds)
+      ? this._computeBettingRecommendations(score, matchData?.odds ?? {}, matchData, variables)
       : null;
 
     Logger.debug('ENGINE_NBA_RESULT', {
@@ -456,17 +458,37 @@ export class EngineNBA {
 
   static _computeBettingRecommendations(score, odds, matchData, variables) {
     const recs = [];
+    const marketOdds = matchData?.market_odds ?? null;
+
+    // Construire les cotes de référence.
+    // Priorité : Pinnacle (The Odds API) > ESPN DraftKings.
+    // Pinnacle a le vig le plus faible — meilleur proxy du marché réel.
+    // Sans cotes ESPN (fréquent en journée), on utilise directement Pinnacle.
+    const pinnacle = marketOdds?.bookmakers?.find(b => b.key === 'pinnacle')
+                  ?? marketOdds?.bookmakers?.[0]
+                  ?? null;
+
+    // Cotes décimales Pinnacle → américaines pour le calcul interne
+    const _decToAm = d => d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1));
+
+    const espnOdds = odds ?? {};
     const normalizedOdds = {
-      ...odds,
-      home_ml:    odds.home_ml    !== null ? Number(odds.home_ml)    : null,
-      away_ml:    odds.away_ml    !== null ? Number(odds.away_ml)    : null,
-      spread:     odds.spread     !== null ? Number(odds.spread)     : null,
-      over_under: odds.over_under !== null ? Number(odds.over_under) : null,
+      home_ml:    espnOdds.home_ml    != null ? Number(espnOdds.home_ml)
+                : pinnacle?.home_ml   != null ? _decToAm(pinnacle.home_ml)
+                : null,
+      away_ml:    espnOdds.away_ml    != null ? Number(espnOdds.away_ml)
+                : pinnacle?.away_ml   != null ? _decToAm(pinnacle.away_ml)
+                : null,
+      spread:     espnOdds.spread     != null ? Number(espnOdds.spread)
+                : pinnacle?.spread_line != null ? Number(pinnacle.spread_line)
+                : null,
+      over_under: espnOdds.over_under != null ? Number(espnOdds.over_under)
+                : pinnacle?.total_line != null ? Number(pinnacle.total_line)
+                : null,
     };
 
-    const pHome      = score;
-    const pAway      = 1 - score;
-    const marketOdds = matchData?.market_odds ?? null;
+    const pHome = score;
+    const pAway = 1 - score;
 
     // ── MONEYLINE ────────────────────────────────────────────────────────
     if (normalizedOdds.home_ml !== null && normalizedOdds.away_ml !== null) {
