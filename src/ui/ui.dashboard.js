@@ -21,10 +21,9 @@ import { americanToDecimal, formatEdge } from '../utils/utils.odds.js';
 // ── POINT D'ENTRÉE ────────────────────────────────────────────────────────
 
 export async function render(container, storeInstance) {
-  // Avant 6h heure locale : matchs de la nuit en cours → aujourd'hui
-  // Après 6h : matchs déjà joués → demain (prochaine soirée NBA)
-  const _smartDate = () => new Date().getHours() < 6 ? _getTodayDate() : _offsetDate(_getTodayDate(), 1);
-  let selectedDate = storeInstance.get('dashboardFilters')?.selectedDate ?? _smartDate();
+  // Démarrage sur aujourd'hui — les matchs ESPN du jour sont les matchs du soir
+  // (calendrier NBA en heure ET = nuit heure française)
+  let selectedDate = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
 
 
   container.innerHTML = _renderShell(selectedDate);
