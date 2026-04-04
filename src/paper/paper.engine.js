@@ -61,18 +61,62 @@ export class PaperEngine {
    * @param {object} betData
    * @returns {Promise<PaperState>}
    */
+  /**
+   * Verifie l'exposition journaliere avant de placer un pari.
+   * Plafond : 20% de la bankroll initiale par journee calendaire.
+   * @returns {{ allowed: boolean, exposed: number, limit: number, remaining: number }}
+   */
+  static async checkDailyExposure(stake) {
+    const state = await this.loadAsync();
+    const today = new Date().toISOString().slice(0, 10);
+    const limit = state.initial_bankroll * 0.20;
+
+    const exposedToday = state.bets
+      .filter(function(b) {
+        const betDate = b.placed_at ? b.placed_at.slice(0, 10) : (b.date || '');
+        return betDate === today;
+      })
+      .reduce(function(s, b) { return s + b.stake; }, 0);
+
+    const remaining = Math.max(0, limit - exposedToday);
+    const allowed   = stake <= remaining;
+
+    return {
+      allowed,
+      exposed:   Math.round(exposedToday * 100) / 100,
+      limit:     Math.round(limit * 100) / 100,
+      remaining: Math.round(remaining * 100) / 100,
+    };
+  }
+
   static async placeBet(betData) {
+    // Verifier le plafond d'exposition journaliere (20% bankroll)
+    const exposure = await this.checkDailyExposure(betData.stake);
+    if (!exposure.allowed) {
+      Logger.warn('PAPER_DAILY_LIMIT', {
+        stake:     betData.stake,
+        exposed:   exposure.exposed,
+        limit:     exposure.limit,
+        remaining: exposure.remaining,
+      });
+      return {
+        error:     'DAILY_LIMIT_EXCEEDED',
+        message:   'Plafond journalier atteint (' + exposure.exposed.toFixed(0) + '/' + exposure.limit.toFixed(0) + ' \u20ac). Reste : ' + exposure.remaining.toFixed(0) + ' \u20ac.',
+        exposure,
+      };
+    }
+
     try {
-      const response = await fetch(`${WORKER}/paper/bet`, {
+      const response = await fetch(WORKER + '/paper/bet', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(betData),
       });
       if (response.ok) {
-        const { state } = await response.json();
-        _saveLocal(state);
+        const data = await response.json();
+        _saveLocal(data.state);
         Logger.info('PAPER_BET_PLACED', { stake: betData.stake, edge: betData.edge });
-        return state;
+        return data.state;
       }
     } catch (err) {
       Logger.warn('PAPER_BET_FALLBACK', { message: err.message });
