@@ -93,10 +93,11 @@ export class DataOrchestrator {
       const teamIds = _extractTeamIds(matches);
 
       // Lancer les 3 sources en parallèle
-      const [injuryReport, recentForms, oddsComparison] = await Promise.all([
+      const [injuryReport, recentForms, oddsComparison, advancedStats] = await Promise.all([
         _loadInjuries(date),
         _loadRecentForms(teamIds, season),
         _loadOddsComparison(),
+        _loadAdvancedStats(),
       ]);
 
       // ── ÉTAPE 3 : Analyser tous les matchs ────────────────────────────
@@ -107,6 +108,7 @@ export class DataOrchestrator {
         recentForms,
         injuryReport,
         oddsComparison,
+        advancedStats,
         date,
         store
       );
@@ -157,8 +159,8 @@ export class DataOrchestrator {
       away_injuries:      awayInjuries?.length > 0 ? awayInjuries : null,
       odds:               match.odds ?? null,
       absences_confirmed: injuryReport !== null,
-      // Vraies cotes multi-books (The Odds API) — null si non disponibles
-      market_odds:        null, // injecté par _analyzeMatches
+      advanced_stats:     advancedStats ?? null,
+      market_odds:        null,
     };
   }
 
@@ -237,14 +239,14 @@ async function _loadRecentForms(teamIds, season) {
  * Analyse tous les matchs avec les données complètes.
  * Stocke les analyses dans le store.
  */
-async function _analyzeMatches(matches, recentForms, injuryReport, oddsComparison, date, store) {
+async function _analyzeMatches(matches, recentForms, injuryReport, oddsComparison, advancedStats, date, store) {
   const analyses  = {};
   let conclusive  = 0;
   let rejected    = 0;
 
   for (const match of matches) {
     try {
-      const rawData  = DataOrchestrator.buildRawData(match, recentForms, injuryReport);
+      const rawData  = DataOrchestrator.buildRawData(match, recentForms, injuryReport, advancedStats);
 
       // Injecter les vraies cotes multi-books si disponibles
       if (oddsComparison?.matches) {
