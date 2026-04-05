@@ -547,7 +547,7 @@ export class EngineNBA {
 
       // P(domicile couvre spread) = P(marge > spreadLine)
       // spread négatif = domicile favori, doit gagner de plus que |spread|
-      const zHome = (spreadLine - expectedMargin) / NBA_SIGMA;
+      const zHome = ((-spreadLine) - expectedMargin) / NBA_SIGMA;
       const pSpreadHome = 1 - this._normalCDF(zHome);
 
       // Comparer à la probabilité implicite Pinnacle
