@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — engine.nba.js v5
+ * MANI BET PRO — engine.nba.js v5.3
  *
  * AJOUTS v5 :
  *   1. net_rating_diff — signal dominant depuis NBA Stats API
@@ -580,8 +580,13 @@ export class EngineNBA {
     // et non des points. Les champs predicted_total et market_total portent
     // les valeurs en points pour l'affichage UI.
     if (normalizedOdds.over_under !== null) {
-      const homeAvgPts = matchData?.home_season_stats?.avg_pts;
-      const awayAvgPts = matchData?.away_season_stats?.avg_pts;
+      const homeAvgPtsRaw = matchData?.home_season_stats?.avg_pts;
+      const awayAvgPtsRaw = matchData?.away_season_stats?.avg_pts;
+      // Guard live ESPN : avg_pts < 60 ou > 140 = score partiel de match en cours
+      const isLiveData = (homeAvgPtsRaw != null && (homeAvgPtsRaw < 60 || homeAvgPtsRaw > 140))
+                      || (awayAvgPtsRaw != null && (awayAvgPtsRaw < 60 || awayAvgPtsRaw > 140));
+      const homeAvgPts = isLiveData ? null : homeAvgPtsRaw;
+      const awayAvgPts = isLiveData ? null : awayAvgPtsRaw;
 
       if (homeAvgPts != null && awayAvgPts != null) {
         const ouLine = normalizedOdds.over_under;
@@ -648,7 +653,7 @@ export class EngineNBA {
     const _getOdds = (bk) => {
       if (market === 'h2h')      return side === 'HOME' ? bk.home_ml : bk.away_ml;
       if (market === 'spreads')  return side === 'HOME' ? bk.home_spread : bk.away_spread;
-      if (market === 'totals')   return side === 'OVER' ? bk.over_total : bk.over_total;
+      if (market === 'totals')   return side === 'OVER' ? bk.over_total : bk.under_total;
       return null;
     };
 
