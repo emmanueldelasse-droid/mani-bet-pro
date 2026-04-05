@@ -109,9 +109,12 @@ export class DataOrchestrator {
         return null;
       }
 
-      // Filtrer les matchs en cours — ESPN retourne les stats du match live
+      // Filtrer les matchs en cours ET terminés — ESPN retourne les stats du match live
       // au lieu des moyennes de saison, ce qui perturbe complètement le moteur.
-      const LIVE_STATUSES = ['STATUS_IN_PROGRESS', 'STATUS_HALFTIME', 'STATUS_END_PERIOD'];
+      const LIVE_STATUSES = [
+        'STATUS_IN_PROGRESS', 'STATUS_HALFTIME', 'STATUS_END_PERIOD',
+        'STATUS_FINAL', 'STATUS_FINAL_OT', 'STATUS_FINAL_PENALTY',
+      ];
       const matches = espnData.matches.filter(m => !LIVE_STATUSES.includes(m.status));
 
       if (!matches.length) {
