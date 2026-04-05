@@ -249,6 +249,13 @@ function _settleBetLocal(betId, result, closingOdds) {
   bet.result      = result;
   bet.settled_at  = new Date().toISOString();
   bet.closing_odds = closingOdds;
+if (closingOdds !== null && bet.motor_prob !== null) {
+  const decClosing = closingOdds > 0
+    ? closingOdds / 100 + 1
+    : 100 / Math.abs(closingOdds) + 1;
+  const impliedClosing = 1 / decClosing;
+  bet.clv = Math.round((bet.motor_prob / 100 - impliedClosing) * 10000) / 100;
+}
 
   if (result === 'WIN') {
     const b = bet.odds_taken > 0 ? bet.odds_taken / 100 + 1 : 100 / Math.abs(bet.odds_taken) + 1;
