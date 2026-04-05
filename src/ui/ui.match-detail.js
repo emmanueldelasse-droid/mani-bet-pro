@@ -439,8 +439,10 @@ function renderBlocFiabilite(analysis) {
           <div style="height:100%;width:${score}%;background:${color};border-radius:4px;transition:width 0.5s ease"></div>
         </div>
         <div style="font-size:12px;color:var(--color-muted);margin-bottom:${missingSimple.length ? '10px' : '0'}">
-          ${score >= 80
+          ${score >= 80 && missingSimple.length === 0
             ? 'Données complètes et cohérentes. L\'analyse est fiable.'
+            : score >= 80 && missingSimple.length > 0
+            ? 'Analyse fiable malgré quelques données manquantes.'
             : score >= 60
             ? 'Quelques données manquantes. L\'analyse reste valable.'
             : 'Données insuffisantes. À prendre avec précaution.'}
@@ -709,7 +711,7 @@ async function triggerAIExplanation(container, analysis, match, task) {
   responseEl.innerHTML = '<span class="text-muted">Analyse en cours…</span>';
 
   const TASK_PROMPTS = {
-    EXPLAIN: `Tu es un analyste sportif NBA. Réponds en 3-4 phrases courtes, sans titres, sans gras, sans listes. N'invente aucun chiffre. Utilise uniquement les valeurs du contexte. Phrase 1 : quelle équipe est favorisée et pourquoi. Phrase 2 : le signal principal en termes simples. Phrase 3 : confirmer ou non le pari suggéré. Phrase 4 : une limite courte. Max 80 mots.`,
+    EXPLAIN: `Tu es un analyste sportif NBA. Réponds en 3-4 phrases courtes, sans titres, sans gras, sans listes. N'invente aucun chiffre. Utilise uniquement les valeurs du contexte. Phrase 1 : quelle équipe est favorisée et pourquoi. Phrase 2 : le signal principal en termes simples. Phrase 3 : si un pari recommandé est fourni, confirme ou nuance-le — sinon dis explicitement qu'aucune valeur n'a été détectée et qu'il vaut mieux passer. Phrase 4 : une limite courte. Max 80 mots.`,
     AUDIT: `Tu es un analyste sportif NBA. En 2-3 phrases simples sans titres ni listes : dis si les signaux sont cohérents entre eux. Si contradiction, explique laquelle. Uniquement les données fournies. Max 60 mots.`,
     DETECT_INCONSISTENCY: `Tu es un analyste sportif NBA. En 2 phrases simples sans titres ni listes : dis s'il y a une anomalie dans les données. Si aucune anomalie, dis-le clairement. Max 50 mots.`,
   };
@@ -721,6 +723,11 @@ async function triggerAIExplanation(container, analysis, match, task) {
     ? (score > 50 ? `${home} (${score}%)` : score < 50 ? `${away} (${100 - score}%)` : 'Équilibré (50%)')
     : 'Non déterminé';
 
+  const best = analysis.betting_recommendations?.best;
+  const parisInfo = best
+    ? `Pari recommandé : ${best.side} à cote ${best.odds_decimal ?? '—'}, edge +${best.edge}%`
+    : 'Aucun pari recommandé — aucune valeur détectée sur ce match.';
+
   const userMessage = `
 N'INVENTE AUCUN CHIFFRE. Utilise uniquement les valeurs ci-dessous.
 Match : ${home} vs ${away}
@@ -728,6 +735,7 @@ Favori : ${favori}
 Score prédictif : ${score ?? 'non calculé'}%
 Robustesse : ${analysis.robustness_score !== null ? Math.round(analysis.robustness_score * 100) + '%' : 'non calculée'}
 Qualité données : ${analysis.data_quality_score !== null ? Math.round(analysis.data_quality_score * 100) + '%' : 'non calculée'}
+${parisInfo}
 Signaux :
 ${(analysis.key_signals ?? []).slice(0, 3).map(s =>
   `- ${_simplifyLabel(s.label, s.variable)} : ${s.direction === 'POSITIVE' ? 'avantage domicile' : 'avantage extérieur'}`
