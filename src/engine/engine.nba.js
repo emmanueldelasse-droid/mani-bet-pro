@@ -14,6 +14,12 @@
  *   3. pace_diff — différentiel de pace entre les deux équipes.
  *      Utilisé pour améliorer le calcul O/U (avg_pts biaisé pace supprimé
  *      du calcul O/U, remplacé par projection pace × possessions).
+ *
+ * CORRECTIONS v5.1 :
+ *   - O/U : motor_prob et implied_prob étaient des points (229, 219)
+ *     au lieu de probabilités (55, 52). Corrigé.
+ *   - O/U : ajout predicted_total et market_total dans la reco
+ *     pour affichage correct dans l'UI et en console.
  */
 
 import { SPORTS_CONFIG }                 from '../config/sports.config.js';
@@ -566,7 +572,9 @@ export class EngineNBA {
     }
 
     // ── OVER/UNDER ───────────────────────────────────────────────────────
-    // AMÉLIORATION v5 : utilise pace si disponible pour la projection
+    // CORRECTION v5.1 : motor_prob et implied_prob sont des probabilités (0-100)
+    // et non des points. Les champs predicted_total et market_total portent
+    // les valeurs en points pour l'affichage UI.
     if (normalizedOdds.over_under !== null) {
       const homeAvgPts = matchData?.home_season_stats?.avg_pts;
       const awayAvgPts = matchData?.away_season_stats?.avg_pts;
@@ -583,6 +591,8 @@ export class EngineNBA {
         const bestOUBook     = this._getBestBookOdds(marketOdds, side, 'totals');
 
         if (bestOUBook) {
+          // motorProb = probabilité estimée que l'OVER/UNDER se réalise (0-1)
+          // Basée sur l'écart entre projection et ligne, plafonnée à 75%
           const motorProb   = Math.min(0.75, 0.50 + Math.min(Math.abs(diff), 10) / 40);
           const impliedProb = decimalToProb(bestOUBook.decimalOdds);
           if (impliedProb !== null) {
@@ -592,7 +602,12 @@ export class EngineNBA {
                 type: 'OVER_UNDER', label: 'Total de points', side,
                 odds_line: bestOUBook.odds, odds_decimal: bestOUBook.decimalOdds, odds_source: bestOUBook.bookmaker,
                 ou_line: ouLine,
-                motor_prob: Math.round(projectedTotal), implied_prob: Math.round(ouLine),
+                // CORRECTION v5.1 : probabilités en % (0-100), pas en points
+                motor_prob:      Math.round(motorProb * 100),
+                implied_prob:    Math.round(impliedProb * 100),
+                // Champs séparés pour l'affichage en points
+                predicted_total: Math.round(projectedTotal),
+                market_total:    ouLine,
                 edge: Math.round(edge * 100), confidence: this._edgeToConfidence(edge),
                 has_value: true,
                 note: `Projection ${Math.round(projectedTotal)} pts${paceDiff !== null ? ` (ajust. pace ${paceAdj > 0 ? '+' : ''}${paceAdj.toFixed(1)})` : ''} · ligne ${ouLine}`,
@@ -689,4 +704,4 @@ export class EngineNBA {
     const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.7814779 + t * (-1.8212560 + t * 1.3302744))));
     return z >= 0 ? 1 - p : p;
   }
-} 
+}
