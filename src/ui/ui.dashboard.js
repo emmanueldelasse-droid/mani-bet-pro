@@ -492,7 +492,9 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
   const SIDE_MAP = {
     OVER:  `Plus de ${best.ou_line ?? best.market_total ?? '—'} pts`,
     AWAY:  bestMatch.away_team?.name,
+    HOME:  bestMatch.home_team?.name,
     UNDER: `Moins de ${best.ou_line ?? best.market_total ?? '—'} pts`,
+  };
   const sideLabel   = SIDE_MAP[best.side] ?? best.side;
   const oddsDecimal = americanToDecimal(best.odds_line) ?? '—';
   const gainPour100 = oddsDecimal !== '—' ? Math.round((oddsDecimal - 1) * 100) : null;
