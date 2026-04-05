@@ -592,8 +592,9 @@ export class EngineNBA {
 
         if (bestOUBook) {
           // motorProb = probabilité estimée que l'OVER/UNDER se réalise (0-1)
-          // Basée sur l'écart entre projection et ligne, plafonnée à 75%
-          const motorProb   = Math.min(0.75, 0.50 + Math.min(Math.abs(diff), 10) / 40);
+          // Sigmoid calibrée sur sigma NBA (~12 pts) — asymptote 65% max
+          // diff=5pts → ~56%, diff=10pts → ~60%, diff=15pts → ~63%
+          const motorProb   = 0.50 + 0.15 * (1 - Math.exp(-Math.abs(diff) / 12));
           const impliedProb = decimalToProb(bestOUBook.decimalOdds);
           if (impliedProb !== null) {
             const edge = motorProb - impliedProb;
