@@ -1,13 +1,15 @@
 /**
- * MANI BET PRO — paper.settler.js v2
+ * MANI BET PRO — paper.settler.js v3
  *
- * Responsabilité unique : clôturer automatiquement les paris en attente
- * en récupérant les scores finaux ESPN après chaque match.
+ * CORRECTIONS v3 :
+ *   - SPREAD sans spread_line : récupère la ligne depuis les cotes ESPN
+ *     du résultat (odds.spread) au lieu d'ignorer le pari.
+ *     Fallback : si la ligne ESPN est aussi absente, le pari reste PENDING
+ *     avec un warning.
  *
  * CORRECTION v2 :
- *   - SPREAD : utilisait odds_line (cote américaine ex: -110) comme ligne de points.
- *     Désormais lit spread_line (ligne de points ex: -5.5) stockée au moment du placement.
- *     Sans spread_line, le SPREAD est ignoré plutôt que mal clôturé.
+ *   - SPREAD : utilisait odds_line (cote américaine) comme ligne de points.
+ *     Désormais lit spread_line stockée au moment du placement.
  */
 
 import { PaperEngine } from './paper.engine.js';
@@ -18,11 +20,6 @@ const WORKER = API_CONFIG.WORKER_BASE_URL;
 
 export class PaperSettler {
 
-  /**
-   * Point d'entrée — appelé au démarrage depuis app.js.
-   * Vérifie les paris en attente et tente de les clôturer.
-   * @param {Store} store
-   */
   static async settle(store) {
     const state       = await PaperEngine.loadAsync();
     const pendingBets = state.bets.filter(b => b.result === 'PENDING');
@@ -41,8 +38,9 @@ export class PaperSettler {
     let settled = 0;
 
     for (const [date, bets] of Object.entries(byDate)) {
-      // Ne pas chercher les résultats pour aujourd'hui
-      if (date >= _getTodayDate()) continue;
+      // Pour le polling temps réel, on inclut aussi les paris du jour
+      // Le filtre is_final dans ESPN garantit que seuls les matchs terminés sont clôturés
+      // if (date >= _getTodayDate()) continue; // SUPPRIMÉ v3.1
 
       try {
         const results = await _fetchResults(date);
@@ -102,21 +100,16 @@ function _matchBetToResult(bet, results) {
 /**
  * Détermine le résultat d'un pari depuis le score final ESPN.
  *
- * CORRECTION SPREAD :
- *   bet.spread_line = ligne de points stockée au placement (ex: -5.5)
- *   bet.odds_line   = cote américaine (ex: -110) — NE PAS utiliser pour le calcul spread
- *
- * Si spread_line est absent (paris placés avant la correction), le SPREAD
- * est retourné null (ignoré) plutôt que mal calculé.
- *
- * @returns {'WIN'|'LOSS'|'PUSH'|null}
+ * CORRECTION v3 SPREAD :
+ *   Si bet.spread_line est null (paris placés avant le fix),
+ *   on tente de récupérer la ligne depuis result.odds.spread (ESPN DraftKings).
+ *   Si toujours absent, on retourne null (pari reste PENDING).
  */
 function _determineOutcome(bet, result) {
   const homeScore = result.home_team?.score ?? 0;
   const awayScore = result.away_team?.score ?? 0;
   const total     = homeScore + awayScore;
 
-  // Identifier si bet.home correspond à l'équipe à domicile dans ESPN
   const betHomeIsResultHome = result.home_team?.name === bet.home;
 
   switch (bet.market) {
@@ -133,19 +126,39 @@ function _determineOutcome(bet, result) {
     }
 
     case 'SPREAD': {
-      // CORRECTION : lire spread_line (ligne de points), pas odds_line (cote américaine)
-      if (bet.spread_line === null || bet.spread_line === undefined) {
-        // Paris placé avant la correction v2 — impossible à clôturer automatiquement
+      // Lire spread_line depuis le pari, ou fallback ESPN DraftKings
+      let spreadLine = bet.spread_line !== null && bet.spread_line !== undefined
+        ? Number(bet.spread_line)
+        : null;
+
+      // FALLBACK v3 : récupérer depuis ESPN si absent
+      if (spreadLine === null && result.odds?.spread != null) {
+        const espnSpread = Number(result.odds.spread);
+        // ESPN stocke la ligne du point de vue de la home team
+        // Si bet.side === 'HOME', on utilise espnSpread tel quel
+        // Si bet.side === 'AWAY', on inverse
+        spreadLine = betHomeIsResultHome
+          ? (bet.side === 'HOME' ? espnSpread : -espnSpread)
+          : (bet.side === 'HOME' ? -espnSpread : espnSpread);
+
+        Logger.info('PAPER_SETTLER_SPREAD_FALLBACK', {
+          bet_id: bet.bet_id,
+          match:  `${bet.home} vs ${bet.away}`,
+          espn_spread: espnSpread,
+          spread_line_used: spreadLine,
+        });
+      }
+
+      if (spreadLine === null) {
         Logger.warn('PAPER_SETTLER_SPREAD_NO_LINE', {
           bet_id: bet.bet_id,
           match:  `${bet.home} vs ${bet.away}`,
-          note:   'spread_line absent — clôture manuelle requise',
+          note:   'spread_line absent même dans ESPN — clôture manuelle requise',
         });
         return null;
       }
 
-      const spreadLine = Number(bet.spread_line);
-      const betOnHome  = bet.side === 'HOME';
+      const betOnHome = bet.side === 'HOME';
 
       let scoreDiff;
       if (betHomeIsResultHome) {
@@ -161,7 +174,31 @@ function _determineOutcome(bet, result) {
     }
 
     case 'OVER_UNDER': {
-      const line = Number(bet.odds_line);  // Pour O/U, odds_line = ligne de total (correct)
+      // Priorité : ou_line stocké au placement → fallback ESPN result.odds.over_under
+      // odds_line = cote américaine (-110) — NE PAS utiliser comme ligne de total
+      let line = bet.ou_line !== null && bet.ou_line !== undefined
+        ? Number(bet.ou_line)
+        : null;
+
+      // FALLBACK : récupérer depuis ESPN si ou_line absent
+      if (line === null && result.odds?.over_under != null) {
+        line = Number(result.odds.over_under);
+        Logger.info('PAPER_SETTLER_OU_FALLBACK', {
+          bet_id: bet.bet_id,
+          match:  `${bet.home} vs ${bet.away}`,
+          ou_line_used: line,
+        });
+      }
+
+      if (line === null) {
+        Logger.warn('PAPER_SETTLER_OU_NO_LINE', {
+          bet_id: bet.bet_id,
+          match:  `${bet.home} vs ${bet.away}`,
+          note:   'ou_line absent — clôture manuelle requise',
+        });
+        return null;
+      }
+
       if (total > line) return bet.side === 'OVER'  ? 'WIN' : 'LOSS';
       if (total < line) return bet.side === 'UNDER' ? 'WIN' : 'LOSS';
       return 'PUSH';
