@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — engine.nba.js v5.4
+ * MANI BET PRO — engine.nba.js v5.5
  *
  * AJOUTS v5.4 :
  *   - _computeAbsencesImpact() exploite le champ impact_weight pondéré par ppg
@@ -586,13 +586,15 @@ export class EngineNBA {
       const NBA_SIGMA  = 12; // écart-type historique des marges NBA
 
       // Ancre principale : spread Pinnacle = meilleur prédicteur de marge
-      // Adjustment moteur : delta marginal depuis signaux clés (±6 pts max)
+      // Adjustment moteur : delta marginal depuis signaux clés (±8 pts max)
+      // v5.5 : net_rating_diff ajouté — meilleur prédicteur de marge disponible
       const marketMargin   = -spreadLine;
       const _sig = (id) => (signals.find(s => s.variable === id)?.normalized ?? 0);
-      const adjustment     = _sig("efg_diff") * 2.0
-                           + _sig("recent_form_ema") * 1.5
-                           + _sig("absences_impact") * 2.5;
-      const expectedMargin = marketMargin + adjustment;
+      const adjustment     = _sig("net_rating_diff") * 3.0
+                           + _sig("efg_diff")         * 1.5
+                           + _sig("recent_form_ema")  * 1.0
+                           + _sig("absences_impact")  * 2.5;
+      const expectedMargin = marketMargin + Math.max(-8, Math.min(8, adjustment));
 
       // P(domicile couvre spread) = P(marge > spreadLine)
       // spread négatif = domicile favori, doit gagner de plus que |spread|
@@ -640,10 +642,22 @@ export class EngineNBA {
       if (homeAvgPts != null && awayAvgPts != null) {
         const ouLine = normalizedOdds.over_under;
 
+        // v5.5 : déduction blessures sur avg_pts avant projection.
+        // impact_score par équipe = fraction du scoring perdu (0=intact, 1=décimée).
+        // On déduit jusqu'à ~15% du scoring en cas d'équipe très affectée.
+        // absences_impact > 0 = domicile affaibli / < 0 = visiteur affaibli.
+        const absImpact  = variables?.absences_impact?.value ?? 0;
+        // Conversion : absences_impact [-1,1] → pts perdus par équipe
+        // Domicile affaibli (absImpact > 0) → réduit homeAvgPts
+        // Visiteur affaibli (absImpact < 0) → réduit awayAvgPts
+        const homeInjAdj = absImpact > 0 ? -homeAvgPts * absImpact * 0.12 : 0;
+        const awayInjAdj = absImpact < 0 ? -awayAvgPts * Math.abs(absImpact) * 0.12 : 0;
+
         // Ajustement pace si disponible
         const paceDiff = variables?.pace_diff?.value ?? null;
-        const paceAdj  = paceDiff !== null ? paceDiff * 0.5 : 0;  // ~0.5 pts par possession d'écart
-        const projectedTotal = homeAvgPts + awayAvgPts + paceAdj;
+        const paceAdj  = paceDiff !== null ? paceDiff * 0.5 : 0;
+
+        const projectedTotal = homeAvgPts + homeInjAdj + awayAvgPts + awayInjAdj + paceAdj;
         const diff           = projectedTotal - ouLine;
         const side           = diff > 0 ? 'OVER' : 'UNDER';
         const bestOUBook     = this._getBestBookOdds(marketOdds, side, 'totals');
@@ -657,19 +671,24 @@ export class EngineNBA {
           if (impliedProb !== null) {
             const edge = motorProb - impliedProb;
             if (edge >= EDGE_THRESHOLDS.OVER_UNDER) {
+              // Construire la note avec les ajustements actifs
+              const adjParts = [];
+              if (paceDiff !== null) adjParts.push(`pace ${paceAdj > 0 ? '+' : ''}${paceAdj.toFixed(1)}`);
+              if (homeInjAdj !== 0) adjParts.push(`inj.dom ${homeInjAdj.toFixed(1)}`);
+              if (awayInjAdj !== 0) adjParts.push(`inj.ext ${awayInjAdj.toFixed(1)}`);
+              const adjNote = adjParts.length > 0 ? ` (${adjParts.join(', ')})` : '';
+
               recs.push({
                 type: 'OVER_UNDER', label: 'Total de points', side,
                 odds_line: bestOUBook.odds, odds_decimal: bestOUBook.decimalOdds, odds_source: bestOUBook.bookmaker,
                 ou_line: ouLine,
-                // CORRECTION v5.1 : probabilités en % (0-100), pas en points
                 motor_prob:      Math.round(motorProb * 100),
                 implied_prob:    Math.round(impliedProb * 100),
-                // Champs séparés pour l'affichage en points
                 predicted_total: Math.round(projectedTotal),
                 market_total:    ouLine,
                 edge: Math.round(edge * 100), confidence: this._edgeToConfidence(edge),
                 has_value: true,
-                note: `Projection ${Math.round(projectedTotal)} pts${paceDiff !== null ? ` (ajust. pace ${paceAdj > 0 ? '+' : ''}${paceAdj.toFixed(1)})` : ''} · ligne ${ouLine}`,
+                note: `Projection ${Math.round(projectedTotal)} pts${adjNote} · ligne ${ouLine}`,
                 kelly_stake: this._computeKelly(motorProb, bestOUBook.odds),
               });
             }
