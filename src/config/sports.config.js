@@ -1,8 +1,12 @@
 /**
- * MANI BET PRO — sports.config.js v3
+ * MANI BET PRO — sports.config.js v4
  *
- * Source unique de vérité pour les pondérations du moteur NBA.
- * engine.nba.js ne contient plus aucune pondération hardcodée.
+ * CHANGEMENTS v4 :
+ *   - score_cap : 0.90 ajouté dans la config NBA.
+ *     Le moteur ne peut pas dépasser 90% de probabilité — les scores 92-97%
+ *     sont mathématiquement possibles mais empiriquement irréalistes en NBA.
+ *     Appliqué dans engine.core.js après calcul, avant écriture de l'analyse.
+ *     Le calcul brut (robustesse, Kelly) utilise le score non plafonné.
  *
  * CHANGEMENTS v3 :
  *   - win_pct_diff : 0.30 → 0.15 (trop influencé par le calendrier)
@@ -58,6 +62,15 @@ export const SPORTS_CONFIG = {
     },
 
     ema_lambda: 0.85,  // Décroissance exponentielle — proche de 1 = mémoire courte
+
+    /**
+     * Plafond score moteur — v4.
+     * 90% = maximum empirique raisonnable en NBA.
+     * Au-delà, le score reflète une accumulation de signaux extrêmes
+     * (OKC vs équipe décimée) qui ne se traduit pas en edge réel.
+     * Appliqué APRÈS le calcul brut pour ne pas biaiser la robustesse et Kelly.
+     */
+    score_cap: 0.90,
 
     rejection_thresholds: {
       min_robustness:             null,   // Non activé — à calibrer empiriquement
