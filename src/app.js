@@ -1,5 +1,9 @@
 /**
- * MANI BET PRO — app.js v3.1
+ * MANI BET PRO — app.js v3.2
+ *
+ * CORRECTIONS v3.2 :
+ *   - _pollerActive flag : évite les intervals multiples
+ *   - Redémarrage automatique du polling si nouveaux paris après arrêt
  *
  * AJOUTS v3.1 :
  *   - _startSettlerPolling() : clôture automatique des paris toutes les 5 minutes
@@ -56,17 +60,23 @@ function _applyTheme(theme) {
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// Flag global — évite de lancer plusieurs intervals en parallèle
+let _pollerActive = false;
+let _pollerIntervalId = null;
+
 /**
  * Lance un polling toutes les 5 minutes pour clôturer les paris en attente.
  * S'arrête automatiquement si plus aucun pari en attente.
+ * Redémarre automatiquement si de nouveaux paris sont placés.
  * Actif uniquement pendant les heures de matchs NBA (13h-6h UTC).
  */
 function _startSettlerPolling(store) {
-  let intervalId = null;
+  if (_pollerActive) return; // déjà actif
+  _pollerActive = true;
 
   const poll = async () => {
     // Matchs NBA entre 13h et 6h UTC (9h ET - 2h ET)
-    const hourUTC    = new Date().getUTCHours();
+    const hourUTC     = new Date().getUTCHours();
     const isMatchTime = hourUTC >= 13 || hourUTC < 6;
 
     if (!isMatchTime) {
@@ -80,7 +90,8 @@ function _startSettlerPolling(store) {
 
       if (pending.length === 0) {
         Logger.info('SETTLER_POLL_STOP', { reason: 'aucun pari en attente' });
-        clearInterval(intervalId);
+        clearInterval(_pollerIntervalId);
+        _pollerActive = false;
         return;
       }
 
@@ -92,7 +103,7 @@ function _startSettlerPolling(store) {
     }
   };
 
-  intervalId = setInterval(poll, POLL_INTERVAL_MS);
+  _pollerIntervalId = setInterval(poll, POLL_INTERVAL_MS);
   Logger.info('SETTLER_POLL_START', { interval_min: 5 });
 }
 
@@ -214,6 +225,9 @@ async function init() {
 
   // 9. Polling toutes les 5 minutes pour clôture en temps réel
   _startSettlerPolling(store);
+
+  // 10. Redémarrer le polling si de nouveaux paris sont placés après arrêt
+  store.subscribe('paperTradingVersion', () => _startSettlerPolling(store));
 
   Logger.info('APP_INIT_DONE', { version: APP_CONFIG.VERSION });
 }
