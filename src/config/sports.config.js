@@ -1,25 +1,25 @@
 /**
- * MANI BET PRO — sports.config.js v4
+ * MANI BET PRO — sports.config.js v5
+ *
+ * CHANGEMENTS v5 — audit complet pondérations :
+ *   - net_rating_diff : 0 -> 0.30  (ACTIVE — etait extrait mais ignore depuis v3 !)
+ *     Signal dominant Tank01, non biaise calendrier. Correction majeure.
+ *   - efg_diff : 0.30 -> 0.22      (reduit — net_rating prend le relais)
+ *   - recent_form_ema : 0.25 -> 0.20 (legerement reduit)
+ *   - home_away_split : 0.15 -> 0.12 (formule agressive -> poids reduit)
+ *   - win_pct_diff : 0.15 -> 0.04  (fortement reduit — biaise calendrier fin saison)
+ *   - absences_impact : 0.10       (maintenu — pondere ppg Tank01 depuis v5.4)
+ *   - back_to_back : 0 -> 0.01     (ACTIVE — etait extrait mais ignore)
+ *   - rest_days_diff : 0 -> 0.01   (ACTIVE — etait extrait mais ignore)
+ *   - ts_diff : 0.03 -> 0.00       (SUPPRIME — redondant efg_diff, correlation ~0.85)
+ *   - avg_pts_diff : 0.02 -> 0.00  (SUPPRIME — doublon bruité avec net_rating_diff)
+ *   Somme = 0.30+0.22+0.20+0.12+0.10+0.04+0.01+0.01 = 1.00
  *
  * CHANGEMENTS v4 :
- *   - score_cap : 0.90 ajouté dans la config NBA.
- *     Le moteur ne peut pas dépasser 90% de probabilité — les scores 92-97%
- *     sont mathématiquement possibles mais empiriquement irréalistes en NBA.
- *     Appliqué dans engine.core.js après calcul, avant écriture de l'analyse.
- *     Le calcul brut (robustesse, Kelly) utilise le score non plafonné.
+ *   - score_cap : 0.90 ajoute dans la config NBA.
  *
- * CHANGEMENTS v3 :
- *   - win_pct_diff : 0.30 → 0.15 (trop influencé par le calendrier)
- *   - recent_form_ema : 0.15 → 0.25 (meilleur prédicteur court terme)
- *   - home_away_split : 0.12 → 0.15 (avantage domicile NBA documenté ~60%)
- *   - absences_impact : 0.01 → 0.10 (un star Out change fondamentalement le match)
- *   - efg_diff : 0.35 → 0.30 (toujours dominant, légèrement réduit)
- *   - ts_diff : 0.05 → 0.03 (redondant avec eFG%)
- *   - avg_pts_diff : 0.02 → 0.02 (maintenu — biaisé pace, mais marginal)
- *   Somme = 1.00 ✓
- *
- * Note : ces pondérations sont des hypothèses d'expert non calibrées empiriquement.
- * Elles seront ajustées par optimisation Brier Score après 100+ paris (Sprint 6).
+ * Note : ces ponderations sont des hypotheses d'expert non calibrees empiriquement.
+ * Elles seront ajustees par optimisation Brier Score apres 50+ paris (Sprint 6).
  */
 
 export const APP_CONFIG = {
@@ -30,51 +30,56 @@ export const APP_CONFIG = {
 
 export const SPORTS_CONFIG = {
 
-  // ── NBA ───────────────────────────────────────────────────────────────────
+  // NBA
   NBA: {
     label:           'NBA',
     enabled:         true,
     sport_tag_class: 'sport-tag--nba',
 
     variables: [
-      { id: 'efg_diff',        label: 'eFG% différentiel',             critical: false },
-      { id: 'ts_diff',         label: 'TS% différentiel',              critical: false },
-      { id: 'win_pct_diff',    label: 'Win% différentiel (saison)',    critical: false },
-      { id: 'home_away_split', label: 'Split Domicile/Extérieur',      critical: false },
-      { id: 'recent_form_ema', label: 'Forme récente (EMA W/L)',       critical: false },
-      { id: 'absences_impact', label: 'Impact absences (PDF NBA)',     critical: false },
-      { id: 'avg_pts_diff',    label: 'Points marqués (différentiel)', critical: false },
+      { id: 'net_rating_diff', label: 'Net Rating differentiel (Tank01)',  critical: false },
+      { id: 'efg_diff',        label: 'eFG% differentiel',                 critical: false },
+      { id: 'recent_form_ema', label: 'Forme recente (EMA W/L)',            critical: false },
+      { id: 'home_away_split', label: 'Split Domicile/Exterieur',           critical: false },
+      { id: 'absences_impact', label: 'Impact absences (ESPN + Tank01)',    critical: false },
+      { id: 'win_pct_diff',    label: 'Win% differentiel (saison)',         critical: false },
+      { id: 'back_to_back',    label: 'Back-to-back',                       critical: false },
+      { id: 'rest_days_diff',  label: 'Jours de repos',                     critical: false },
     ],
 
     /**
-     * Pondérations v3 — recommandées dans prompt de référence v3.
+     * Ponderations v5 — audit complet 06/04/2026.
      * Somme = 1.00.
-     * STATUT : hypothèses d'expert — calibration empirique prévue Sprint 6.
+     * STATUT : hypotheses d'expert — calibration empirique prevue Sprint 6 (50+ paris).
+     *
+     * Signaux retires du score principal (conserves pour O/U et debug) :
+     *   ts_diff     : redondant avec efg_diff (correlation ~0.85)
+     *   avg_pts_diff: doublon bruité avec net_rating_diff
+     *   pace_diff   : contextuel O/U uniquement
      */
     default_weights: {
-      efg_diff:        0.30,
-      recent_form_ema: 0.25,
-      home_away_split: 0.15,
-      win_pct_diff:    0.15,
-      absences_impact: 0.10,
-      ts_diff:         0.03,
-      avg_pts_diff:    0.02,
+      net_rating_diff:  0.30,
+      efg_diff:         0.22,
+      recent_form_ema:  0.20,
+      home_away_split:  0.12,
+      absences_impact:  0.10,
+      win_pct_diff:     0.04,
+      back_to_back:     0.01,
+      rest_days_diff:   0.01,
     },
 
-    ema_lambda: 0.85,  // Décroissance exponentielle — proche de 1 = mémoire courte
+    ema_lambda: 0.85,
 
     /**
      * Plafond score moteur — v4.
      * 90% = maximum empirique raisonnable en NBA.
-     * Au-delà, le score reflète une accumulation de signaux extrêmes
-     * (OKC vs équipe décimée) qui ne se traduit pas en edge réel.
-     * Appliqué APRÈS le calcul brut pour ne pas biaiser la robustesse et Kelly.
+     * Applique APRES calcul brut pour ne pas biaiser robustesse et Kelly.
      */
     score_cap: 0.90,
 
     rejection_thresholds: {
-      min_robustness:             null,   // Non activé — à calibrer empiriquement
-      min_data_quality:           null,   // Non activé — à calibrer empiriquement
+      min_robustness:             null,
+      min_data_quality:           null,
       min_games_sample:           10,
       require_absences_confirmed: false,
     },
@@ -84,13 +89,13 @@ export const SPORTS_CONFIG = {
     modelisability:    'HIGH',
 
     simulator_defaults: {
-      use_h2h:      false,   // Non disponible — prévu Sprint 3
+      use_h2h:      false,
       use_absences: true,
-      use_rest:     false,   // Non disponible sans schedule complet
+      use_rest:     true,
     },
   },
 
-  // ── TENNIS ────────────────────────────────────────────────────────────────
+  // TENNIS
   TENNIS: {
     label:           'Tennis ATP/WTA',
     enabled:         false,
@@ -98,11 +103,11 @@ export const SPORTS_CONFIG = {
 
     variables: [
       { id: 'surface_winrate_diff', label: 'Win rate surface',          critical: true  },
-      { id: 'recent_form_ema',      label: 'Forme récente (EMA)',        critical: true  },
-      { id: 'h2h_surface',          label: 'H2H sur même surface',       critical: false },
+      { id: 'recent_form_ema',      label: 'Forme recente (EMA)',        critical: true  },
+      { id: 'h2h_surface',          label: 'H2H sur meme surface',       critical: false },
       { id: 'service_dominance',    label: 'Dominance au service',       critical: false },
       { id: 'fatigue_index',        label: 'Indice de fatigue',          critical: false },
-      { id: 'ranking_elo_diff',     label: 'Différentiel Elo / Ranking', critical: false },
+      { id: 'ranking_elo_diff',     label: 'Differentiel Elo / Ranking', critical: false },
     ],
 
     default_weights: {
@@ -134,18 +139,18 @@ export const SPORTS_CONFIG = {
     },
   },
 
-  // ── MLB ───────────────────────────────────────────────────────────────────
+  // MLB
   MLB: {
     label:           'MLB',
     enabled:         false,
     sport_tag_class: 'sport-tag--mlb',
 
     variables: [
-      { id: 'pitcher_fip_diff', label: 'FIP différentiel pitchers',    critical: true  },
-      { id: 'lineup_wrc_diff',  label: 'wRC+ différentiel lineups',    critical: true  },
+      { id: 'pitcher_fip_diff', label: 'FIP differentiel pitchers',    critical: true  },
+      { id: 'lineup_wrc_diff',  label: 'wRC+ differentiel lineups',    critical: true  },
       { id: 'bullpen_era_7d',   label: 'ERA Bullpen 7 derniers jours', critical: false },
       { id: 'park_factor',      label: 'Park factor stade',             critical: false },
-      { id: 'home_away_split',  label: 'Domicile / Extérieur',          critical: false },
+      { id: 'home_away_split',  label: 'Domicile / Exterieur',          critical: false },
       { id: 'rest_pitcher',     label: 'Repos pitcher titulaire',       critical: false },
     ],
 
@@ -179,7 +184,7 @@ export const SPORTS_CONFIG = {
     },
   },
 
-  // ── FOOTBALL (désactivé — bruit intrinsèque trop élevé en V1) ────────────
+  // FOOTBALL (desactive)
   FOOTBALL: {
     label:                 'Football (EPL / La Liga)',
     enabled:               false,
