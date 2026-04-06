@@ -1,15 +1,17 @@
 /**
- * MANI BET PRO - ui.history.js v3
+ * MANI BET PRO - ui.history.js v4
  *
- * AJOUTS v3 :
- *   1. Fiche detail pari - clic sur un pari ouvre un modal avec :
- *      - Score final du match (si disponible)
- *      - Cote prise + cote decimale
- *      - Probabilite moteur vs marche
- *      - Edge, Kelly, CLV
- *      - Motif de la recommandation
- *   2. Bankroll corrigee - separe capital disponible vs capital engage (PENDING)
- *   3. Exposition journaliere affichee dans les metriques
+ * CORRECTIONS v4 :
+ *   1. Bankroll actuelle = capital reel (disponible + engage) — corrige l'affichage 500€
+ *      alors que 89€ sont engages.
+ *   2. Performance globale : paris PENDING comptes separement (En attente : N).
+ *   3. Mise totale : inclut les mises PENDING dans le total engage affiche.
+ *   4. Boutons Gagne/Perdu/Push masques sur les paris PENDING — le settler
+ *      cloture automatiquement, les boutons sont conserves uniquement pour
+ *      correction manuelle d'urgence (accessibles via le modal detail).
+ *   5. Heure de match affichee sur chaque pari PENDING.
+ *   6. Paris du meme match groupes visuellement.
+ *   7. Signal dominant affiche sur chaque pari (net_rating_diff en priorite).
  */
 
 import { PaperEngine, STRATEGIES } from '../paper/paper.engine.js';
@@ -28,24 +30,20 @@ async function _renderPage(container, storeInstance) {
   const state   = await PaperEngine.loadAsync();
   const metrics = PaperEngine.computeMetrics(state.bets);
 
-  // Capital engage dans les paris PENDING
-  const pendingStake = state.bets
-    .filter(function(b) { return b.result === 'PENDING'; })
-    .reduce(function(s, b) { return s + b.stake; }, 0);
-
-  // Capital reel = disponible + engage
-  const trueCapital = state.current_bankroll + pendingStake;
+  const pendingBets  = state.bets.filter(function(b) { return b.result === 'PENDING'; });
+  const pendingStake = pendingBets.reduce(function(s, b) { return s + b.stake; }, 0);
+  const trueCapital  = state.current_bankroll + pendingStake;
 
   container.innerHTML = [
     '<div class="view-history">',
     '<div class="view-header">',
     '<div class="view-header__meta">MANI BET PRO</div>',
     '<h1 class="view-header__title">Journal de paris</h1>',
-    '<div class="view-header__sub">Paper Trading · Mode simulation</div>',
+    '<div class="view-header__sub">Paper Trading \u00b7 Mode simulation</div>',
     '</div>',
     _renderBankrollCard(state, pendingStake, trueCapital),
     _renderBankrollChart(state),
-    _renderMetricsCard(metrics, state.bets.length),
+    _renderMetricsCard(metrics, state.bets.length, pendingBets.length),
     _renderStrategyCard(metrics),
     _renderBiasCard(metrics),
     _renderBetsList(state.bets, storeInstance),
@@ -76,15 +74,23 @@ function _renderBankrollCard(state, pendingStake, trueCapital) {
     '<span class="badge badge--inconclusive" style="font-size:10px">' + state.mode + '</span>',
     '</div>',
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--space-3)">',
+
+    // Initiale
     '<div>',
     '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Initiale</div>',
     '<div style="font-size:16px;font-weight:600">' + state.initial_bankroll.toFixed(0) + ' \u20ac</div>',
     '</div>',
+
+    // Actuelle = disponible + engage
     '<div>',
     '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Actuelle</div>',
     '<div style="font-size:16px;font-weight:600">' + trueCapital.toFixed(2) + ' \u20ac</div>',
-    pendingStake > 0 ? '<div style="font-size:10px;color:var(--color-warning)">' + pendingStake.toFixed(2) + ' \u20ac engages</div>' : '',
+    pendingStake > 0
+      ? '<div style="font-size:10px;color:var(--color-warning)">' + pendingStake.toFixed(2) + ' \u20ac engag\u00e9s</div>'
+      : '<div style="font-size:10px;color:var(--color-muted)">' + state.current_bankroll.toFixed(2) + ' \u20ac disponibles</div>',
     '</div>',
+
+    // P&L
     '<div>',
     '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">P&L total</div>',
     '<div style="font-size:16px;font-weight:600;color:' + pnlColor + '">',
@@ -92,8 +98,9 @@ function _renderBankrollCard(state, pendingStake, trueCapital) {
     roiRaw !== null ? '<span style="font-size:11px;opacity:0.7"> (' + (roiRaw > 0 ? '+' : '') + roiRaw + '%)</span>' : '',
     '</div>',
     '</div>',
+
     '</div>',
-    stopLoss ? '<div style="margin-top:10px;padding:8px 10px;background:rgba(255,99,99,0.1);border-left:2px solid var(--color-danger);border-radius:4px;font-size:11px;color:var(--color-danger)">\u26a0 Stop loss \u2014 bankroll sous 80% du capital initial. Reduisez les mises.</div>' : '',
+    stopLoss ? '<div style="margin-top:10px;padding:8px 10px;background:rgba(255,99,99,0.1);border-left:2px solid var(--color-danger);border-radius:4px;font-size:11px;color:var(--color-danger)">\u26a0 Stop loss \u2014 bankroll sous 80% du capital initial. R\u00e9duisez les mises.</div>' : '',
     '<div style="margin-top:var(--space-3);display:flex;gap:8px">',
     '<button class="btn btn--ghost btn--sm" id="configure-bankroll">\u2699 Configurer bankroll</button>',
     '</div>',
@@ -104,34 +111,34 @@ function _renderBankrollCard(state, pendingStake, trueCapital) {
 // -- COURBE BANKROLL -------------------------------------------------------
 
 function _renderBankrollChart(state) {
-  var bets = state.bets.filter(function(b) { return b.result !== 'PENDING'; });
+  const bets = state.bets.filter(function(b) { return b.result !== 'PENDING'; });
   if (bets.length < 2) return '';
 
-  var bankroll = state.initial_bankroll;
-  var points = [{ x: 0, y: bankroll }];
+  let bankroll = state.initial_bankroll;
+  const points = [{ x: 0, y: bankroll }];
 
   bets.forEach(function(bet, i) {
     bankroll += (bet.pnl || 0);
     points.push({ x: i + 1, y: Math.round(bankroll * 100) / 100 });
   });
 
-  var minY   = Math.min.apply(null, points.map(function(p) { return p.y; })) * 0.98;
-  var maxY   = Math.max.apply(null, points.map(function(p) { return p.y; })) * 1.02;
-  var rangeY = maxY - minY || 1;
-  var W = 300, H = 80;
+  const minY   = Math.min.apply(null, points.map(function(p) { return p.y; })) * 0.98;
+  const maxY   = Math.max.apply(null, points.map(function(p) { return p.y; })) * 1.02;
+  const rangeY = maxY - minY || 1;
+  const W = 300, H = 80;
 
   function toX(i) { return (i / (points.length - 1)) * W; }
   function toY(y) { return H - ((y - minY) / rangeY) * H; }
 
-  var pathData = points.map(function(p, i) {
+  const pathData = points.map(function(p, i) {
     return (i === 0 ? 'M' : 'L') + ' ' + toX(i).toFixed(1) + ' ' + toY(p.y).toFixed(1);
   }).join(' ');
-  var areaData = pathData + ' L ' + toX(points.length - 1).toFixed(1) + ' ' + H + ' L 0 ' + H + ' Z';
+  const areaData = pathData + ' L ' + toX(points.length - 1).toFixed(1) + ' ' + H + ' L 0 ' + H + ' Z';
 
-  var lastY    = points[points.length - 1].y;
-  var isProfit = lastY >= state.initial_bankroll;
-  var color    = isProfit ? '#48c78e' : '#f14668';
-  var refY     = toY(state.initial_bankroll).toFixed(1);
+  const lastY    = points[points.length - 1].y;
+  const isProfit = lastY >= state.initial_bankroll;
+  const color    = isProfit ? '#48c78e' : '#f14668';
+  const refY     = toY(state.initial_bankroll).toFixed(1);
 
   return [
     '<div class="card" style="margin-bottom:var(--space-4)">',
@@ -147,7 +154,7 @@ function _renderBankrollChart(state) {
     '<circle cx="' + toX(points.length - 1).toFixed(1) + '" cy="' + toY(lastY).toFixed(1) + '" r="3" fill="' + color + '"/>',
     '</svg>',
     '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-muted);margin-top:4px">',
-    '<span>Depart : ' + state.initial_bankroll + ' \u20ac</span>',
+    '<span>D\u00e9part : ' + state.initial_bankroll + ' \u20ac</span>',
     '<span>Actuel : ' + lastY.toFixed(2) + ' \u20ac</span>',
     '</div>',
     '</div>',
@@ -156,19 +163,22 @@ function _renderBankrollChart(state) {
 
 // -- METRIQUES -------------------------------------------------------------
 
-function _renderMetricsCard(metrics, totalBets) {
+function _renderMetricsCard(metrics, totalBets, pendingCount) {
   if (metrics.total_bets === 0 && totalBets === 0) {
-    return '<div class="card" style="margin-bottom:var(--space-4);text-align:center;padding:var(--space-6)"><div style="font-size:24px;margin-bottom:var(--space-2)">&#128203;</div><div style="color:var(--color-muted);font-size:13px">Aucun pari enregistre.<br>Ouvre une fiche match et clique sur <strong>"Enregistrer ce pari"</strong>.</div></div>';
+    return '<div class="card" style="margin-bottom:var(--space-4);text-align:center;padding:var(--space-6)"><div style="font-size:24px;margin-bottom:var(--space-2)">&#128203;</div><div style="color:var(--color-muted);font-size:13px">Aucun pari enregistr\u00e9.<br>Ouvre une fiche match et clique sur <strong>"Enregistrer ce pari"</strong>.</div></div>';
   }
 
-  var hitColor  = metrics.hit_rate !== null ? (metrics.hit_rate >= 55 ? 'var(--color-success)' : metrics.hit_rate >= 45 ? 'var(--color-warning)' : 'var(--color-danger)') : 'var(--color-muted)';
-  var roiColor  = metrics.roi !== null ? (metrics.roi > 0 ? 'var(--color-success)' : 'var(--color-danger)') : 'var(--color-muted)';
-  var brierLabel = metrics.brier_score !== null ? (metrics.brier_score < 0.20 ? '\u2713 Bien calibre' : metrics.brier_score < 0.25 ? 'Acceptable' : '\u26a0 Mal calibre') : '\u2014';
-  var streakLabel = metrics.streak.current > 0 ? metrics.streak.current + ' ' + (metrics.streak.type === 'WIN' ? 'victoires' : 'defaites') + ' consecutives' : '\u2014';
-  var streakColor = metrics.streak.type === 'WIN' ? 'var(--color-success)' : metrics.streak.type === 'LOSS' ? 'var(--color-danger)' : 'var(--color-muted)';
+  const hitColor   = metrics.hit_rate !== null ? (metrics.hit_rate >= 55 ? 'var(--color-success)' : metrics.hit_rate >= 45 ? 'var(--color-warning)' : 'var(--color-danger)') : 'var(--color-muted)';
+  const roiColor   = metrics.roi !== null ? (metrics.roi > 0 ? 'var(--color-success)' : 'var(--color-danger)') : 'var(--color-muted)';
+  const brierLabel = metrics.brier_score !== null ? (metrics.brier_score < 0.20 ? '\u2713 Bien calibr\u00e9' : metrics.brier_score < 0.25 ? 'Acceptable' : '\u26a0 Mal calibr\u00e9') : '\u2014';
+  const streakLabel = metrics.streak.current > 0 ? metrics.streak.current + ' ' + (metrics.streak.type === 'WIN' ? 'victoires' : 'defaites') + ' cons\u00e9cutives' : '\u2014';
+  const streakColor = metrics.streak.type === 'WIN' ? 'var(--color-success)' : metrics.streak.type === 'LOSS' ? 'var(--color-danger)' : 'var(--color-muted)';
 
-  var edgeBuckets = Object.entries(metrics.hit_by_edge || {}).map(function(entry) {
-    var bucket = entry[0], data = entry[1];
+  // Mises totales incluant PENDING
+  const totalStakedDisplay = metrics.total_staked;
+
+  const edgeBuckets = Object.entries(metrics.hit_by_edge || {}).map(function(entry) {
+    const bucket = entry[0], data = entry[1];
     return '<div style="background:var(--color-bg);border-radius:6px;padding:var(--space-2);text-align:center"><div style="font-size:10px;color:var(--color-muted)">' + bucket + '</div><div style="font-size:14px;font-weight:600;color:var(--color-text)">' + (data && data.hit_rate !== null ? data.hit_rate + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-muted)">' + (data ? data.total : 0) + ' paris</div></div>';
   }).join('');
 
@@ -176,18 +186,28 @@ function _renderMetricsCard(metrics, totalBets) {
     '<div class="card" style="margin-bottom:var(--space-4)">',
     '<div style="font-weight:600;font-size:14px;margin-bottom:var(--space-3)">Performance globale</div>',
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-3);margin-bottom:var(--space-3)">',
-    _metricCell('Paris', metrics.won + 'W / ' + metrics.lost + 'L / ' + metrics.push + 'P', 'var(--color-text)'),
+
+    // Paris clotures + en attente
+    _metricCell(
+      'Paris',
+      metrics.won + 'W / ' + metrics.lost + 'L / ' + metrics.push + 'P',
+      'var(--color-text)',
+      pendingCount > 0 ? pendingCount + ' en attente' : null
+    ),
     _metricCell('Hit rate', metrics.hit_rate !== null ? metrics.hit_rate + '%' : '\u2014', hitColor),
     _metricCell('ROI', metrics.roi !== null ? (metrics.roi > 0 ? '+' : '') + metrics.roi + '%' : '\u2014', roiColor),
-    _metricCell('Mise total', metrics.total_staked.toFixed(2) + ' \u20ac', 'var(--color-text)'),
+
+    // Mise totale = clôturés seulement (les PENDING sont dans "engagés" de la bankroll)
+    _metricCell('Mis\u00e9 (cl\u00f4tur\u00e9s)', totalStakedDisplay.toFixed(2) + ' \u20ac', 'var(--color-text)'),
     _metricCell('CLV moyen', metrics.avg_clv !== null ? (metrics.avg_clv > 0 ? '+' : '') + metrics.avg_clv + '%' : '\u2014', metrics.avg_clv > 0 ? 'var(--color-success)' : 'var(--color-muted)'),
     _metricCell('Brier Score', metrics.brier_score !== null ? metrics.brier_score.toFixed(4) : '\u2014', 'var(--color-muted)', brierLabel),
+
     '</div>',
     '<div style="font-size:11px;color:var(--color-muted);margin-bottom:var(--space-2)">Hit rate par niveau d\'edge</div>',
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-2)">',
     edgeBuckets,
     '</div>',
-    metrics.streak.current >= 3 ? '<div style="margin-top:var(--space-3);padding:var(--space-2) var(--space-3);background:rgba(255,165,0,0.08);border-left:2px solid ' + streakColor + ';border-radius:4px;font-size:11px;color:' + streakColor + '">\u26a0 Serie en cours : ' + streakLabel + (metrics.streak.type === 'LOSS' && metrics.streak.current >= 5 ? ' \u2014 Reduction des mises recommandee' : '') + '</div>' : '',
+    metrics.streak.current >= 3 ? '<div style="margin-top:var(--space-3);padding:var(--space-2) var(--space-3);background:rgba(255,165,0,0.08);border-left:2px solid ' + streakColor + ';border-radius:4px;font-size:11px;color:' + streakColor + '">\u26a0 S\u00e9rie en cours : ' + streakLabel + (metrics.streak.type === 'LOSS' && metrics.streak.current >= 5 ? ' \u2014 R\u00e9duction des mises recommand\u00e9e' : '') + '</div>' : '',
     '</div>',
   ].join('');
 }
@@ -195,35 +215,35 @@ function _renderMetricsCard(metrics, totalBets) {
 // -- STRATEGIES ------------------------------------------------------------
 
 function _renderStrategyCard(metrics) {
-  var strategies = metrics.by_strategy;
-  var hasData = Object.values(strategies).some(function(s) { return s !== null; });
+  const strategies = metrics.by_strategy;
+  const hasData = Object.values(strategies).some(function(s) { return s !== null; });
   if (!hasData) return '';
 
-  var rows = Object.entries(STRATEGIES).map(function(entry) {
-    var key = entry[0], strat = entry[1];
-    var data = strategies[key];
-    if (!data) return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-muted)">Strategie ' + key + '</div></div><span style="font-size:11px;color:var(--color-muted)">Pas de donnees</span></div>';
-    var roiColor = data.roi > 0 ? 'var(--color-success)' : 'var(--color-danger)';
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-muted)">Strategie ' + key + ' · ' + data.total + ' paris</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:' + roiColor + '">ROI ' + (data.roi !== null ? (data.roi > 0 ? '+' : '') + data.roi + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-muted)">' + data.hit_rate + '% hit rate</div></div></div>';
+  const rows = Object.entries(STRATEGIES).map(function(entry) {
+    const key = entry[0], strat = entry[1];
+    const data = strategies[key];
+    if (!data) return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-muted)">Strat\u00e9gie ' + key + '</div></div><span style="font-size:11px;color:var(--color-muted)">Pas de donn\u00e9es</span></div>';
+    const roiColor = data.roi > 0 ? 'var(--color-success)' : 'var(--color-danger)';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-muted)">Strat\u00e9gie ' + key + ' \u00b7 ' + data.total + ' paris</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:' + roiColor + '">ROI ' + (data.roi !== null ? (data.roi > 0 ? '+' : '') + data.roi + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-muted)">' + data.hit_rate + '% hit rate</div></div></div>';
   }).join('');
 
-  return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-3)">Comparaison strategies</div><div style="display:flex;flex-direction:column;gap:var(--space-2)">' + rows + '</div></div>';
+  return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-3)">Comparaison strat\u00e9gies</div><div style="display:flex;flex-direction:column;gap:var(--space-2)">' + rows + '</div></div>';
 }
 
 // -- BIAIS -----------------------------------------------------------------
 
 function _renderBiasCard(metrics) {
-  var bias = metrics.bias;
+  const bias = metrics.bias;
   if (!bias || bias.insufficient_data) {
-    return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-2)">Detection de biais</div><div style="font-size:12px;color:var(--color-muted)">' + (bias ? bias.min_required : 10) + ' paris minimum requis pour detecter les biais. Actuellement : ' + metrics.total_bets + ' paris.</div></div>';
+    return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-2)">D\u00e9tection de biais</div><div style="font-size:12px;color:var(--color-muted)">' + (bias ? bias.min_required : 10) + ' paris minimum requis pour d\u00e9tecter les biais. Actuellement : ' + metrics.total_bets + ' paris cl\u00f4tur\u00e9s.</div></div>';
   }
 
   return [
     '<div class="card" style="margin-bottom:var(--space-4)">',
-    '<div style="font-weight:600;font-size:14px;margin-bottom:var(--space-3)">Detection de biais</div>',
+    '<div style="font-weight:600;font-size:14px;margin-bottom:var(--space-3)">D\u00e9tection de biais</div>',
     '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:var(--space-2)">',
     _biasRow('Domicile', bias.home_hit_rate, bias.home_bets),
-    _biasRow('Exterieur', bias.away_hit_rate, bias.away_bets),
+    _biasRow('Ext\u00e9rieur', bias.away_hit_rate, bias.away_bets),
     _biasRow('Over', bias.over_hit_rate),
     _biasRow('Under', bias.under_hit_rate),
     '</div>',
@@ -232,7 +252,7 @@ function _renderBiasCard(metrics) {
 }
 
 function _biasRow(label, hitRate, count) {
-  var color = hitRate !== null ? (hitRate >= 55 ? 'var(--color-success)' : hitRate >= 45 ? 'var(--color-warning)' : 'var(--color-danger)') : 'var(--color-muted)';
+  const color = hitRate !== null ? (hitRate >= 55 ? 'var(--color-success)' : hitRate >= 45 ? 'var(--color-warning)' : 'var(--color-danger)') : 'var(--color-muted)';
   return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2);background:var(--color-bg);border-radius:6px"><span style="font-size:12px">' + label + (count != null ? ' (' + count + ')' : '') + '</span><span style="font-size:12px;font-weight:600;color:' + color + '">' + (hitRate !== null ? hitRate + '%' : '\u2014') + '</span></div>';
 }
 
@@ -241,47 +261,76 @@ function _biasRow(label, hitRate, count) {
 function _renderBetsList(bets, storeInstance) {
   if (!bets.length) return '';
 
-  var sorted = bets.slice().reverse();
+  const sorted = bets.slice().reverse();
+
+  // Grouper visuellement les paris du meme match
+  const groups = {};
+  sorted.forEach(function(bet) {
+    const key = (bet.home || '') + '_' + (bet.away || '') + '_' + (bet.date || '');
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(bet);
+  });
+
+  const rows = sorted.map(function(bet, i) {
+    const key = (bet.home || '') + '_' + (bet.away || '') + '_' + (bet.date || '');
+    const isFirstInGroup = groups[key][0].bet_id === bet.bet_id;
+    const groupSize = groups[key].length;
+    return _renderBetRow(bet, isFirstInGroup, groupSize);
+  }).join('');
 
   return [
     '<div class="card" style="margin-bottom:var(--space-4)">',
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3)">',
-    '<span style="font-weight:600;font-size:14px">Paris enregistres (' + bets.length + ')</span>',
+    '<span style="font-weight:600;font-size:14px">Paris enregistr\u00e9s (' + bets.length + ')</span>',
     '</div>',
-    '<div style="display:flex;flex-direction:column;gap:var(--space-3)">',
-    sorted.map(function(bet) { return _renderBetRow(bet); }).join(''),
+    '<div style="display:flex;flex-direction:column;gap:var(--space-2)">',
+    rows,
     '</div>',
     '</div>',
   ].join('');
 }
 
-function _renderBetRow(bet) {
-  var isPending    = bet.result === 'PENDING';
-  var resultColor  = bet.result === 'WIN' ? 'var(--color-success)' : bet.result === 'LOSS' ? 'var(--color-danger)' : bet.result === 'PUSH' ? 'var(--color-muted)' : 'var(--color-warning)';
-  var resultLabel  = { WIN: '\u2713 Gagne', LOSS: '\u2717 Perdu', PUSH: '\u2014 Push', PENDING: '\u23f3 En attente' };
-  var oddsDecimal  = _americanToDecimal(bet.odds_taken);
-  var marketLabel  = { MONEYLINE: 'Vainqueur', SPREAD: 'Handicap', OVER_UNDER: 'Total pts' };
+function _renderBetRow(bet, isFirstInGroup, groupSize) {
+  const isPending   = bet.result === 'PENDING';
+  const resultColor = bet.result === 'WIN' ? 'var(--color-success)' : bet.result === 'LOSS' ? 'var(--color-danger)' : bet.result === 'PUSH' ? 'var(--color-muted)' : 'var(--color-warning)';
+  const resultLabel = { WIN: '\u2713 Gagn\u00e9', LOSS: '\u2717 Perdu', PUSH: '\u2014 Push', PENDING: '\u23f3 En attente' };
+  const oddsDecimal = _americanToDecimal(bet.odds_taken);
+  const marketLabel = { MONEYLINE: 'Vainqueur', SPREAD: 'Handicap', OVER_UNDER: 'Total pts' };
 
   // Score du match si disponible
-  var scoreStr = '';
-  if (!isPending && bet.home_score != null && bet.away_score != null) {
-    scoreStr = '<span style="font-family:var(--font-mono);font-size:11px;color:var(--color-text);margin-left:8px">' + bet.home_score + '\u2013' + bet.away_score + '</span>';
-  }
+  const scoreStr = (!isPending && bet.home_score != null && bet.away_score != null)
+    ? '<span style="font-family:var(--font-mono);font-size:11px;color:var(--color-text);margin-left:8px">' + bet.home_score + '\u2013' + bet.away_score + '</span>'
+    : '';
+
+  // Heure du match si disponible (PENDING uniquement)
+  const timeStr = (isPending && bet.match_time)
+    ? '<span style="font-size:10px;color:var(--color-muted);margin-left:6px">\u23f0 ' + bet.match_time + '</span>'
+    : '';
+
+  // Signal dominant
+  const signalStr = bet.top_signal
+    ? '<span style="font-size:10px;color:var(--color-muted);margin-left:6px">\u2022 ' + bet.top_signal + '</span>'
+    : '';
+
+  // Bordure top si premier du groupe multi-paris
+  const groupStyle = (groupSize > 1 && isFirstInGroup)
+    ? 'border-top:2px solid var(--color-border);'
+    : '';
 
   return [
-    '<div class="bet-row" data-bet-id="' + bet.bet_id + '" style="padding:var(--space-3);background:var(--color-bg);border-radius:8px;border-left:3px solid ' + resultColor + ';cursor:pointer" title="Cliquer pour les details">',
+    '<div class="bet-row" data-bet-id="' + bet.bet_id + '" style="padding:var(--space-3);background:var(--color-bg);border-radius:8px;border-left:3px solid ' + resultColor + ';' + groupStyle + 'cursor:pointer" title="Cliquer pour les d\u00e9tails">',
 
     // En-tete
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">',
     '<div>',
     '<div style="font-size:12px;font-weight:600">' + (bet.home || '') + ' vs ' + (bet.away || '') + scoreStr + '</div>',
-    '<div style="font-size:10px;color:var(--color-muted)">' + _formatDate(bet.date) + ' \u00b7 ' + (marketLabel[bet.market] || bet.market) + '</div>',
+    '<div style="font-size:10px;color:var(--color-muted)">' + _formatDate(bet.date) + ' \u00b7 ' + (marketLabel[bet.market] || bet.market) + timeStr + signalStr + '</div>',
     '</div>',
     '<span style="font-size:11px;font-weight:600;color:' + resultColor + '">' + (resultLabel[bet.result] || bet.result) + '</span>',
     '</div>',
 
     // Details
-    '<div style="display:flex;gap:12px;font-size:11px;margin-bottom:6px;flex-wrap:wrap">',
+    '<div style="display:flex;gap:12px;font-size:11px;margin-bottom:4px;flex-wrap:wrap">',
     '<span><strong>' + (bet.side_label || '') + '</strong> ' + (oddsDecimal ? oddsDecimal.toFixed(2) : '') + '</span>',
     '<span style="color:var(--color-muted)">Mise : ' + bet.stake.toFixed(2) + ' \u20ac</span>',
     '<span style="color:var(--color-muted)">Edge : ' + bet.edge + '%</span>',
@@ -289,15 +338,10 @@ function _renderBetRow(bet) {
     bet.clv !== null ? '<span style="color:var(--color-muted)">CLV : ' + (bet.clv > 0 ? '+' : '') + bet.clv + '%</span>' : '',
     '</div>',
 
-    // Boutons settle si PENDING
-    isPending ? [
-      '<div class="bet-settle-row" style="display:flex;gap:8px;margin-top:6px">',
-      '<span style="font-size:10px;color:var(--color-muted);align-self:center;flex:1">Resultat :</span>',
-      '<button class="btn btn--sm settle-btn" style="background:var(--color-success);color:#000;font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="WIN">\u2713 Gagne</button>',
-      '<button class="btn btn--sm settle-btn" style="background:var(--color-danger);color:#fff;font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="LOSS">\u2717 Perdu</button>',
-      '<button class="btn btn--ghost btn--sm settle-btn" style="font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="PUSH">\u2014 Push</button>',
-      '</div>',
-    ].join('') : '',
+    // Settler automatique actif — pas de boutons manuels sauf via modal
+    isPending
+      ? '<div style="font-size:10px;color:var(--color-muted);margin-top:2px">\u21bb Cl\u00f4ture automatique en cours \u00b7 <span style="text-decoration:underline;cursor:pointer" class="manual-settle-hint" data-bet-id="' + bet.bet_id + '">Forcer manuellement</span></div>'
+      : '',
 
     '</div>',
   ].join('');
@@ -310,7 +354,7 @@ function _renderBetModal() {
     '<div id="bet-detail-modal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;padding:16px">',
     '<div style="background:var(--color-card);border-radius:12px;max-width:480px;width:100%;max-height:90vh;overflow-y:auto;padding:var(--space-5)">',
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4)">',
-    '<span style="font-weight:700;font-size:15px">Detail du pari</span>',
+    '<span style="font-weight:700;font-size:15px">D\u00e9tail du pari</span>',
     '<button id="close-bet-modal" style="background:none;border:none;color:var(--color-muted);font-size:20px;cursor:pointer;padding:0">&times;</button>',
     '</div>',
     '<div id="bet-detail-content"></div>',
@@ -320,44 +364,56 @@ function _renderBetModal() {
 }
 
 function _renderBetDetail(bet) {
-  var oddsDecimal = _americanToDecimal(bet.odds_taken);
-  var marketLabel = { MONEYLINE: 'Vainqueur du match', SPREAD: 'Handicap (spread)', OVER_UNDER: 'Total de points' };
-  var resultLabel = { WIN: '\u2713 Gagne', LOSS: '\u2717 Perdu', PUSH: '\u2014 Push', PENDING: '\u23f3 En attente' };
-  var resultColor = bet.result === 'WIN' ? 'var(--color-success)' : bet.result === 'LOSS' ? 'var(--color-danger)' : bet.result === 'PUSH' ? 'var(--color-muted)' : 'var(--color-warning)';
+  const oddsDecimal = _americanToDecimal(bet.odds_taken);
+  const marketLabel = { MONEYLINE: 'Vainqueur du match', SPREAD: 'Handicap (spread)', OVER_UNDER: 'Total de points' };
+  const resultLabel = { WIN: '\u2713 Gagn\u00e9', LOSS: '\u2717 Perdu', PUSH: '\u2014 Push', PENDING: '\u23f3 En attente' };
+  const resultColor = bet.result === 'WIN' ? 'var(--color-success)' : bet.result === 'LOSS' ? 'var(--color-danger)' : bet.result === 'PUSH' ? 'var(--color-muted)' : 'var(--color-warning)';
 
-  var rows = [];
+  const rows = [];
 
-  // Match
   rows.push(_detailRow('Match', (bet.home || '') + ' vs ' + (bet.away || '')));
   rows.push(_detailRow('Date', _formatDate(bet.date)));
 
-  // Score final
   if (bet.home_score != null && bet.away_score != null) {
     rows.push(_detailRow('Score final', bet.home_score + ' \u2013 ' + bet.away_score, bet.result === 'WIN' ? 'var(--color-success)' : null));
   }
 
-  rows.push(_detailRow('Marche', marketLabel[bet.market] || bet.market));
-  rows.push(_detailRow('Cote prise', oddsDecimal ? oddsDecimal.toFixed(2) + ' (' + (bet.odds_taken > 0 ? '+' : '') + bet.odds_taken + ')' : String(bet.odds_taken)));
+  rows.push(_detailRow('March\u00e9', marketLabel[bet.market] || bet.market));
+  rows.push(_detailRow('C\u00f4te prise', oddsDecimal ? oddsDecimal.toFixed(2) + ' (' + (bet.odds_taken > 0 ? '+' : '') + bet.odds_taken + ')' : String(bet.odds_taken)));
 
-  if (bet.odds_source) rows.push(_detailRow('Bookmaker', bet.odds_source));
+  if (bet.odds_source)    rows.push(_detailRow('Bookmaker', bet.odds_source));
   if (bet.spread_line != null) rows.push(_detailRow('Ligne spread', (bet.spread_line > 0 ? '+' : '') + bet.spread_line + ' pts'));
+  if (bet.ou_line != null)     rows.push(_detailRow('Ligne O/U', bet.ou_line + ' pts'));
 
   rows.push(_detailRow('Mise', bet.stake.toFixed(2) + ' \u20ac'));
   rows.push(_detailRow('Edge moteur', '+' + bet.edge + '%'));
 
-  if (bet.motor_prob != null) rows.push(_detailRow('Prob. moteur', bet.motor_prob + '%'));
-  if (bet.implied_prob != null) rows.push(_detailRow('Prob. marche', bet.implied_prob + '%'));
-  if (bet.kelly_stake != null) rows.push(_detailRow('Kelly recommande', (bet.kelly_stake * 100).toFixed(1) + '% de bankroll'));
+  if (bet.motor_prob   != null) rows.push(_detailRow('Prob. moteur', bet.motor_prob + '%'));
+  if (bet.implied_prob != null) rows.push(_detailRow('Prob. march\u00e9', bet.implied_prob + '%'));
+  if (bet.kelly_stake  != null) rows.push(_detailRow('Kelly recommand\u00e9', (bet.kelly_stake * 100).toFixed(1) + '% de bankroll'));
+  if (bet.top_signal)           rows.push(_detailRow('Signal dominant', bet.top_signal));
 
-  rows.push(_detailRow('Resultat', resultLabel[bet.result] || bet.result, resultColor));
+  rows.push(_detailRow('R\u00e9sultat', resultLabel[bet.result] || bet.result, resultColor));
 
   if (bet.pnl !== null) rows.push(_detailRow('P&L', (bet.pnl >= 0 ? '+' : '') + bet.pnl.toFixed(2) + ' \u20ac', bet.pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)'));
   if (bet.clv !== null) rows.push(_detailRow('CLV', (bet.clv > 0 ? '+' : '') + bet.clv + '%'));
   if (bet.decision_note) rows.push(_detailRow('Signal moteur', bet.decision_note));
-  if (bet.placed_at) rows.push(_detailRow('Place le', new Date(bet.placed_at).toLocaleString('fr-FR')));
-  if (bet.settled_at) rows.push(_detailRow('Cloture le', new Date(bet.settled_at).toLocaleString('fr-FR')));
+  if (bet.placed_at)    rows.push(_detailRow('Plac\u00e9 le', new Date(bet.placed_at).toLocaleString('fr-FR')));
+  if (bet.settled_at)   rows.push(_detailRow('Cl\u00f4tur\u00e9 le', new Date(bet.settled_at).toLocaleString('fr-FR')));
 
-  return '<div style="display:flex;flex-direction:column;gap:8px">' + rows.join('') + '</div>';
+  // Boutons settle manuels accessibles uniquement depuis le modal
+  const manualSettle = bet.result === 'PENDING' ? [
+    '<div style="margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--color-border)">',
+    '<div style="font-size:11px;color:var(--color-muted);margin-bottom:var(--space-2)">Forcer le r\u00e9sultat manuellement :</div>',
+    '<div style="display:flex;gap:8px">',
+    '<button class="btn btn--sm modal-settle-btn" style="background:var(--color-success);color:#000;font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="WIN">\u2713 Gagn\u00e9</button>',
+    '<button class="btn btn--sm modal-settle-btn" style="background:var(--color-danger);color:#fff;font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="LOSS">\u2717 Perdu</button>',
+    '<button class="btn btn--ghost btn--sm modal-settle-btn" style="font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="PUSH">\u2014 Push</button>',
+    '</div>',
+    '</div>',
+  ].join('') : '';
+
+  return '<div style="display:flex;flex-direction:column;gap:8px">' + rows.join('') + '</div>' + manualSettle;
 }
 
 function _detailRow(label, value, color) {
@@ -377,7 +433,7 @@ function _renderDangerZone(state) {
     '<div style="font-weight:600;font-size:13px;margin-bottom:var(--space-3);color:var(--color-muted)">Gestion</div>',
     '<div style="display:flex;gap:8px;flex-wrap:wrap">',
     '<button class="btn btn--ghost btn--sm" id="export-bets">&#128205; Exporter CSV</button>',
-    '<button class="btn btn--ghost btn--sm" id="reset-paper" style="color:var(--color-danger)">\u26a0 Reinitialiser</button>',
+    '<button class="btn btn--ghost btn--sm" id="reset-paper" style="color:var(--color-danger)">\u26a0 R\u00e9initialiser</button>',
     '</div>',
     '</div>',
   ].join('');
@@ -387,60 +443,61 @@ function _renderDangerZone(state) {
 
 function _bindEvents(container, storeInstance, state) {
   // Configurer bankroll
-  var configBtn = container.querySelector('#configure-bankroll');
+  const configBtn = container.querySelector('#configure-bankroll');
   if (configBtn) {
     configBtn.addEventListener('click', async function() {
-      var input = prompt('Nouvelle bankroll initiale (\u20ac) :', state.initial_bankroll);
-      var val   = parseFloat(input);
+      const input = prompt('Nouvelle bankroll initiale (\u20ac) :', state.initial_bankroll);
+      const val   = parseFloat(input);
       if (!val || val <= 0) return;
       await PaperEngine.reset(val);
       storeInstance.set({ paperTradingVersion: (storeInstance.get('paperTradingVersion') || 0) + 1 });
     });
   }
 
-  // Settle buttons
-  container.querySelectorAll('.settle-btn').forEach(function(btn) {
-    btn.addEventListener('click', async function(e) {
-      e.stopPropagation(); // ne pas ouvrir le modal
-      var betId  = btn.dataset.betId;
-      var result = btn.dataset.result;
-      btn.disabled = true;
-      btn.textContent = '...';
-      await PaperEngine.settleBet(betId, result);
-      storeInstance.set({ paperTradingVersion: (storeInstance.get('paperTradingVersion') || 0) + 1 });
-    });
-  });
-
   // Clic sur une ligne de pari -> ouvrir modal detail
   container.querySelectorAll('.bet-row').forEach(function(row) {
     row.addEventListener('click', function(e) {
-      // Ne pas ouvrir si on clique sur un bouton settle
-      if (e.target.classList.contains('settle-btn') || e.target.closest('.settle-btn')) return;
+      if (e.target.classList.contains('manual-settle-hint') || e.target.closest('.manual-settle-hint')) {
+        // Ouvrir le modal directement sur la section settle
+        const betId = e.target.dataset.betId || e.target.closest('.manual-settle-hint').dataset.betId;
+        const bet   = state.bets.find(function(b) { return b.bet_id === betId; });
+        if (!bet) return;
+        _openModal(container, bet);
+        return;
+      }
 
-      var betId = row.dataset.betId;
-      var bet   = state.bets.find(function(b) { return b.bet_id === betId; });
+      const betId = row.dataset.betId;
+      const bet   = state.bets.find(function(b) { return b.bet_id === betId; });
       if (!bet) return;
-
-      var modal   = container.querySelector('#bet-detail-modal');
-      var content = container.querySelector('#bet-detail-content');
-      if (!modal || !content) return;
-
-      content.innerHTML = _renderBetDetail(bet);
-      modal.style.display = 'flex';
+      _openModal(container, bet);
     });
   });
 
+  // Boutons settle dans le modal
+  container.addEventListener('click', async function(e) {
+    const btn = e.target.closest('.modal-settle-btn');
+    if (!btn) return;
+    const betId  = btn.dataset.betId;
+    const result = btn.dataset.result;
+    btn.disabled = true;
+    btn.textContent = '...';
+    await PaperEngine.settleBet(betId, result);
+    const modal = container.querySelector('#bet-detail-modal');
+    if (modal) modal.style.display = 'none';
+    storeInstance.set({ paperTradingVersion: (storeInstance.get('paperTradingVersion') || 0) + 1 });
+  });
+
   // Fermer modal
-  var closeBtn = container.querySelector('#close-bet-modal');
+  const closeBtn = container.querySelector('#close-bet-modal');
   if (closeBtn) {
     closeBtn.addEventListener('click', function() {
-      var modal = container.querySelector('#bet-detail-modal');
+      const modal = container.querySelector('#bet-detail-modal');
       if (modal) modal.style.display = 'none';
     });
   }
 
   // Fermer modal en cliquant dehors
-  var modal = container.querySelector('#bet-detail-modal');
+  const modal = container.querySelector('#bet-detail-modal');
   if (modal) {
     modal.addEventListener('click', function(e) {
       if (e.target === modal) modal.style.display = 'none';
@@ -448,16 +505,16 @@ function _bindEvents(container, storeInstance, state) {
   }
 
   // Export CSV
-  var exportBtn = container.querySelector('#export-bets');
+  const exportBtn = container.querySelector('#export-bets');
   if (exportBtn) {
     exportBtn.addEventListener('click', function() { _exportCSV(state.bets); });
   }
 
   // Reset
-  var resetBtn = container.querySelector('#reset-paper');
+  const resetBtn = container.querySelector('#reset-paper');
   if (resetBtn) {
     resetBtn.addEventListener('click', async function() {
-      if (confirm('Reinitialiser tout le paper trading ? Cette action est irreversible.')) {
+      if (confirm('R\u00e9initialiser tout le paper trading ? Cette action est irr\u00e9versible.')) {
         await PaperEngine.reset(state.initial_bankroll);
         storeInstance.set({ paperTradingVersion: (storeInstance.get('paperTradingVersion') || 0) + 1 });
       }
@@ -465,14 +522,22 @@ function _bindEvents(container, storeInstance, state) {
   }
 }
 
+function _openModal(container, bet) {
+  const modal   = container.querySelector('#bet-detail-modal');
+  const content = container.querySelector('#bet-detail-content');
+  if (!modal || !content) return;
+  content.innerHTML = _renderBetDetail(bet);
+  modal.style.display = 'flex';
+}
+
 // -- EXPORT CSV ------------------------------------------------------------
 
 function _exportCSV(bets) {
   if (!bets.length) return;
 
-  var headers = ['Date', 'Match', 'Score', 'Marche', 'Cote', 'Cote decimale', 'Mise', 'Edge', 'Moteur%', 'Marche%', 'Resultat', 'P&L', 'CLV', 'Strategie'];
-  var rows = bets.map(function(b) {
-    var dec = _americanToDecimal(b.odds_taken);
+  const headers = ['Date', 'Match', 'Score', 'March\u00e9', 'C\u00f4te', 'C\u00f4te decimale', 'Mise', 'Edge', 'Moteur%', 'March\u00e9%', 'R\u00e9sultat', 'P&L', 'CLV', 'Strat\u00e9gie', 'Signal dominant'];
+  const rows = bets.map(function(b) {
+    const dec = _americanToDecimal(b.odds_taken);
     return [
       b.date,
       (b.home || '') + ' vs ' + (b.away || ''),
@@ -488,13 +553,14 @@ function _exportCSV(bets) {
       b.pnl != null ? b.pnl.toFixed(2) : '',
       b.clv != null ? b.clv : '',
       b.strategy || '',
+      b.top_signal || '',
     ];
   });
 
-  var csv  = [headers].concat(rows).map(function(r) { return r.map(function(v) { return '"' + v + '"'; }).join(','); }).join('\n');
-  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  var url  = URL.createObjectURL(blob);
-  var a    = document.createElement('a');
+  const csv  = [headers].concat(rows).map(function(r) { return r.map(function(v) { return '"' + v + '"'; }).join(','); }).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
   a.href     = url;
   a.download = 'mani-bet-pro-paris-' + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
@@ -515,14 +581,14 @@ function _metricCell(label, value, color, subtitle) {
 
 function _americanToDecimal(american) {
   if (!american) return null;
-  var n = Number(american);
+  const n = Number(american);
   if (n > 0) return Math.round((n / 100 + 1) * 100) / 100;
   return Math.round((100 / Math.abs(n) + 1) * 100) / 100;
 }
 
 function _formatDate(iso) {
   if (!iso) return '\u2014';
-  var normalized = iso.length === 8
+  const normalized = iso.length === 8
     ? iso.slice(0, 4) + '-' + iso.slice(4, 6) + '-' + iso.slice(6, 8)
     : iso;
   return new Date(normalized + 'T12:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
