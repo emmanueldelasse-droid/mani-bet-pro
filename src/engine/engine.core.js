@@ -1,8 +1,17 @@
 /**
- * MANI BET PRO — engine.core.js v2
+ * MANI BET PRO — engine.core.js v2.2
  *
- * Orchestrateur du moteur déterministe.
- * Coordonne : extraction → qualité données → calcul → robustesse → rejet.
+ * AJOUTS v2.2 :
+ *   - Plafonnement du predictive_score via sportConfig.score_cap.
+ *     Le score brut (non plafonné) est conservé dans raw_predictive_score
+ *     pour debug et traçabilité.
+ *     Le plafonnement est appliqué APRÈS le calcul de robustesse et Kelly
+ *     pour ne pas biaiser ces calculs intermédiaires.
+ *     Concrètement : OKC vs équipe décimée ne peut plus afficher 97%.
+ *
+ * CORRECTION v2.1 :
+ *   - variables_used exposé dans l'analyse (utilisé par ui.dashboard.js
+ *     pour afficher NET RTG en console).
  *
  * CORRECTION v2 :
  *   - _recomputeScore utilise SportEngine.computeFromVariables() au lieu de compute().
@@ -63,9 +72,8 @@ export class EngineCore {
       );
     }
 
-    // CORRECTION : passer SportEngine.computeFromVariables à EngineRobustness
-    // pour que la perturbation soit appliquée directement sur les variables extraites,
-    // sans repasser par _extractVariables (qui lirait les données brutes non perturbées).
+    // Robustesse calculée sur le score BRUT (non plafonné) — intentionnel.
+    // Le plafond ne doit pas masquer la sensibilité réelle du modèle.
     const robustness = EngineRobustness.compute(
       sport,
       engineResult.variables_used,
@@ -82,8 +90,19 @@ export class EngineCore {
       );
     }
 
+    // ── PLAFONNEMENT DU SCORE ──────────────────────────────────────────────
+    // Appliqué ici, après robustesse et Kelly, pour ne pas biaiser ces calculs.
+    // score_cap défini dans sports.config.js (0.90 pour NBA).
+    // Score symétrique : le plancher = 1 - score_cap (ex: 0.10 pour NBA).
+    const rawScore  = engineResult.score;
+    const scoreCap  = sportConfig.score_cap ?? 1.0;
+    const scoreFloor = 1 - scoreCap;
+    const cappedScore = rawScore !== null
+      ? Math.max(scoreFloor, Math.min(scoreCap, rawScore))
+      : null;
+
     const confidenceLevel = this._computeConfidenceLevel(
-      engineResult.score,
+      cappedScore,
       robustness.score,
       dataQuality.score
     );
@@ -101,7 +120,11 @@ export class EngineCore {
       computed_at:          new Date().toISOString(),
       computation_ms:       Date.now() - startTime,
 
-      predictive_score:     engineResult.score,
+      // Score plafonné — affiché dans l'UI
+      predictive_score:     cappedScore,
+      // Score brut conservé pour debug/traçabilité
+      raw_predictive_score: rawScore !== cappedScore ? rawScore : undefined,
+
       robustness_score:     robustness.score,
       data_quality_score:   dataQuality.score,
       volatility_index:     engineResult.volatility,
@@ -119,13 +142,13 @@ export class EngineCore {
       robustness_breakdown:    robustness,
       data_quality_breakdown:  dataQuality,
 
-model_disagreement: null,  // V2 — Sprint 6
+      model_disagreement: null,  // V2 — Sprint 6
 
       variables_used:          engineResult.variables_used ?? {},
       betting_recommendations: engineResult.betting_recommendations ?? null,
 
       explanation_context: this._buildExplanationContext(
-        sport, engineResult, robustness, dataQuality, confidenceLevel
+        sport, engineResult, robustness, dataQuality, confidenceLevel, cappedScore
       ),
     };
 
@@ -184,6 +207,7 @@ model_disagreement: null,  // V2 — Sprint 6
   static _assessDataQuality(engineResult, sportConfig) {
     const QUALITY_SCORES = {
       'VERIFIED':             1.0,
+      'WEIGHTED':             0.9,  // v2.2 : données Tank01 pondérées ppg
       'PARTIAL':              0.6,
       'ESTIMATED':            0.5,
       'LOW_SAMPLE':           0.4,
@@ -247,11 +271,12 @@ model_disagreement: null,  // V2 — Sprint 6
 
   // ── CONTEXTE POUR L'IA ────────────────────────────────────────────────
 
-  static _buildExplanationContext(sport, engineResult, robustness, dataQuality, confidenceLevel) {
+  static _buildExplanationContext(sport, engineResult, robustness, dataQuality, confidenceLevel, cappedScore) {
     return {
       sport,
       confidence_level:       confidenceLevel,
-      predictive_score:       engineResult.score,
+      predictive_score:       cappedScore,
+      raw_predictive_score:   engineResult.score,
       robustness_score:       robustness.score,
       data_quality_score:     dataQuality.score,
       volatility:             engineResult.volatility,
@@ -291,6 +316,7 @@ model_disagreement: null,  // V2 — Sprint 6
       computation_ms:       null,
 
       predictive_score:     null,
+      raw_predictive_score: null,
       robustness_score:     robustness?.score ?? null,
       data_quality_score:   dataQuality?.score ?? null,
       volatility_index:     null,
