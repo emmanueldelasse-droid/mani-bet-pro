@@ -496,22 +496,44 @@ function _updateMatchCard(list, matchId, analysis, match) {
     }
   }
 
-  // Net Rating — badge coloré v4 (signal dominant du moteur)
+  // Net Rating — lecture directe v4 (signal dominant du moteur)
   const netRating = analysis.variables_used?.net_rating_diff?.value;
   if (card && netRating != null) {
     const existing = card.querySelector('.match-card__net-rating-v4');
     if (!existing) {
-      const sign  = netRating > 0 ? '+' : '';
-      const color = netRating > 3  ? 'var(--color-success)'
-                  : netRating < -3 ? 'var(--color-danger)'
-                  : 'var(--color-muted)';
-      const bg    = netRating > 3  ? 'rgba(72,199,142,0.10)'
-                  : netRating < -3 ? 'rgba(241,70,104,0.10)'
-                  : 'rgba(255,255,255,0.04)';
+      // Déterminer quelle équipe domine et à quel niveau
+      const absVal   = Math.abs(netRating);
+      const domTeam  = netRating > 0
+        ? (match?.home_team?.abbreviation ?? 'DOM')
+        : (match?.away_team?.abbreviation ?? 'EXT');
+
+      let domLabel, color, bg;
+      if (absVal < 2) {
+        domLabel = 'Niveau équivalent';
+        color    = 'var(--color-muted)';
+        bg       = 'rgba(255,255,255,0.04)';
+      } else if (absVal < 4) {
+        domLabel = `Léger avantage ${domTeam}`;
+        color    = 'var(--color-warning)';
+        bg       = 'rgba(255,165,0,0.08)';
+      } else if (absVal < 7) {
+        domLabel = `Avantage ${domTeam}`;
+        color    = 'var(--color-warning)';
+        bg       = 'rgba(255,165,0,0.08)';
+      } else if (absVal < 10) {
+        domLabel = `Domination forte — ${domTeam}`;
+        color    = netRating > 0 ? 'var(--color-success)' : 'var(--color-danger)';
+        bg       = netRating > 0 ? 'rgba(72,199,142,0.10)' : 'rgba(241,70,104,0.10)';
+      } else {
+        domLabel = `Mismatch total — ${domTeam}`;
+        color    = netRating > 0 ? 'var(--color-success)' : 'var(--color-danger)';
+        bg       = netRating > 0 ? 'rgba(72,199,142,0.10)' : 'rgba(241,70,104,0.10)';
+      }
+
       const nr = document.createElement('div');
       nr.className = 'match-card__net-rating-v4';
       nr.style.cssText = `color:${color};background:${bg}`;
-      nr.innerHTML = `<span style="font-size:9px;opacity:0.7;font-weight:400">NET RTG</span><span>${sign}${netRating.toFixed(1)}</span>`;
+      nr.innerHTML = `<span style="font-size:9px;opacity:0.7;font-weight:400">Niveau</span><span>${domLabel}</span>`;
       const edgeBlock = list.querySelector(`#edge-${matchId}`);
       if (edgeBlock) edgeBlock.before(nr);
     }
