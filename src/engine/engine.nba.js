@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — engine.nba.js v5.6
+ * MANI BET PRO — engine.nba.js v5.7
  *
  * AJOUTS v5.4 :
  *   - _computeAbsencesImpact() exploite le champ impact_weight pondéré par ppg
@@ -187,6 +187,15 @@ export class EngineNBA {
         awayGames
       ),
 
+      // ── Défense adverse différentiel ─────────────────────────────────
+      // defensive_rating = oppg (points encaissés par match) depuis Tank01.
+      // Positif = domicile a une meilleure défense (encaisse moins).
+      // Note : inversé par rapport aux autres signaux (moins = mieux pour la défense)
+      // On inverse le signe : home_oppg - away_oppg → positif = home défend mieux
+      defensive_diff: this._safeAdvancedDiff(
+        advancedStats, homeStats, awayStats, 'defensive_rating', true  // invertSign=true
+      ),
+
       // ── Pace différentiel ─────────────────────────────────────────────
       // Utilisé pour l'O/U. Non inclus dans les pondérations du score
       // principal — contextuel uniquement.
@@ -268,6 +277,8 @@ export class EngineNBA {
       avg_pts_diff:    this._clampNormalize(variables.avg_pts_diff?.value,    -15,   15),
       back_to_back:    variables.back_to_back?.value    ?? null,
       rest_days_diff:  this._clampNormalize(variables.rest_days_diff?.value,  -3,    3),
+      // defensive_diff : plage typique NBA ±5 pts encaissés → ±1
+      defensive_diff:  this._clampNormalize(variables.defensive_diff?.value,  -5,    5),
       // pace_diff non inclus dans le score principal (contextuel O/U uniquement)
     };
   }
@@ -317,8 +328,11 @@ export class EngineNBA {
    * advancedStats est indexé par nom d'équipe ESPN.
    * Si non disponible, fallback sur les stats ESPN directes (pour net_rating/pace).
    */
-  static _safeAdvancedDiff(advancedStats, homeStats, awayStats, field) {
-    // Chercher dans les stats avancées NBA Stats API en premier
+  /**
+   * Différentiel depuis les stats avancées (Tank01/NBA Stats API).
+   * @param {boolean} invertSign — si true, inverse le signe du diff (pour oppg : moins = mieux)
+   */
+  static _safeAdvancedDiff(advancedStats, homeStats, awayStats, field, invertSign = false) {
     if (advancedStats && homeStats?.name && awayStats?.name) {
       const homeAdv = advancedStats[homeStats.name] ?? advancedStats[homeStats.team_name];
       const awayAdv = advancedStats[awayStats.name] ?? advancedStats[awayStats.team_name];
@@ -332,23 +346,24 @@ export class EngineNBA {
           ? 'LOW_SAMPLE'
           : 'VERIFIED';
 
+        const rawDiff = homeAdv[field] - awayAdv[field];
         return {
-          value:   Math.round((homeAdv[field] - awayAdv[field]) * 100) / 100,
-          source:  'nba_stats_api',
+          value:   Math.round((invertSign ? -rawDiff : rawDiff) * 100) / 100,
+          source:  'tank01',
           quality,
         };
       }
     }
 
-    // Fallback : chercher dans les stats ESPN (net_rating peut être null)
     const homeVal = homeStats?.[field] ?? null;
     const awayVal = awayStats?.[field] ?? null;
 
     if (homeVal === null || awayVal === null) {
-      return { value: null, source: 'nba_stats_api', quality: 'MISSING' };
+      return { value: null, source: 'tank01', quality: 'MISSING' };
     }
 
-    return { value: homeVal - awayVal, source: 'espn_scoreboard', quality: 'PARTIAL' };
+    const rawDiff = homeVal - awayVal;
+    return { value: invertSign ? -rawDiff : rawDiff, source: 'espn_scoreboard', quality: 'PARTIAL' };
   }
 
   static _computeHomeSplit(homeStats, awayStats) {
@@ -769,6 +784,7 @@ export class EngineNBA {
       recent_form_ema:  `Forme récente (EMA) ${int} ${dir} — BallDontLie`,
       absences_impact:  `Impact absences ${int} ${dir} — NBA PDF officiel`,
       avg_pts_diff:     `Différentiel scoring ${int} ${dir} — ESPN`,
+      defensive_diff:   `Défense adverse ${int} ${dir} — Tank01`,
       back_to_back:     `Back-to-back ${int} ${dir} — ESPN`,
       rest_days_diff:   `Jours de repos ${int} ${dir} — ESPN`,
     };
