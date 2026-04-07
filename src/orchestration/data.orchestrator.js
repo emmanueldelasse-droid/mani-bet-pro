@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — data.orchestrator.js v3.2
+ * MANI BET PRO — data.orchestrator.js v3.3
  *
  * AJOUTS v3.2 :
  *   - _loadInjuries() appelle /nba/injuries/impact (ESPN + Tank01 pondéré ppg)
@@ -391,8 +391,9 @@ async function _loadAdvancedStats() {
       const name = ABV_TO_ESPN_NAME[abv];
       if (name) {
         byName[name] = {
-          net_rating: stats.net_rating_approx,
-          pace:       null,
+          net_rating:       stats.net_rating_approx,
+          defensive_rating: stats.oppg ?? null,  // oppg = points encaissés par match (proxy défense)
+          pace:             null,
         };
       }
     }
