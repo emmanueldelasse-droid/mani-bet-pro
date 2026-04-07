@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — ui.match-detail.js v3.1
+ * MANI BET PRO — ui.match-detail.js v3.3
  *
  * AJOUTS v3.1 :
  *   - top_signal sauvegardé dans le payload PaperEngine.placeBet()
@@ -219,7 +219,14 @@ function renderBlocParis(analysis, match) {
                     : r.motor_prob;
 
     let whyText = '';
-    if (r.type === 'MONEYLINE')      whyText = `Le moteur estime ${motorProb}% de chances pour ${sideLabel}. La cote ${oddsDecimal} chez ${r.odds_source ?? 'le bookmaker'} offre un avantage de +${r.edge}%.`;
+    if (r.type === 'MONEYLINE') {
+      if (r.is_contrarian) {
+        // Pari sur l'outsider : le moteur favorise l'adversaire mais la cote est sous-évaluée
+        whyText = `Bien que le moteur favorise l'adversaire, la cote ${oddsDecimal} sur ${sideLabel} est sous-évaluée par le marché. Le moteur estime ${motorProb}% de chances — la cote implicite du bookmaker est inférieure, d'où un avantage de +${r.edge}%.`;
+      } else {
+        whyText = `Le moteur estime ${motorProb}% de chances pour ${sideLabel}. La cote ${oddsDecimal} chez ${r.odds_source ?? 'le bookmaker'} offre un avantage de +${r.edge}%.`;
+      }
+    }
     else if (r.type === 'SPREAD')    whyText = `Le moteur pense que ${sideLabel} peut gagner avec ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts d'écart. La cote de ${oddsDecimal} sous-estime cette probabilité.`;
     else if (r.type === 'OVER_UNDER') whyText = r.side === 'OVER' ? `Le moteur projette un match à points élevés. La ligne de ${r.ou_line} pts semble trop basse.` : `Le moteur projette un match serré et défensif. La ligne de ${r.ou_line} pts semble trop haute.`;
 

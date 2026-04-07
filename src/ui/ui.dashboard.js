@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — ui.dashboard.js v4
+ * MANI BET PRO — ui.dashboard.js v4.2
  *
  * AMÉLIORATIONS v3 :
  *   - Labels recommandations plus clairs : 'Vainqueur du match', 'Handicap (points)', 'Total de points'
@@ -577,9 +577,15 @@ function _updateMatchCard(list, matchId, analysis, match) {
                       : rec.edge >= 7  ? 'var(--color-warning)'
                       : 'var(--color-muted)';
 
+      // is_contrarian vient directement du moteur (engine.nba.js v5.6)
+      // Plus fiable que de recalculer côté UI
+      const underdogNote = rec.is_contrarian
+        ? `<span style="font-size:9px;color:var(--color-warning);margin-left:4px" title="Le moteur favorise l'adversaire mais la cote est sous-évaluée">cote sous-évaluée</span>`
+        : '';
+
       return `<div class="match-card__rec" title="${oddsTooltip}">
         <span class="match-card__rec-type text-muted">${typeLabel}</span>
-        <span class="match-card__rec-side">${sideLabel}</span>
+        <span class="match-card__rec-side">${sideLabel}${underdogNote}</span>
         <span class="match-card__rec-odds mono">${oddsFormatted}
           <span style="font-size:9px;color:var(--color-muted);margin-left:2px">${rec.odds_source ?? ''}</span>
         </span>
@@ -605,11 +611,16 @@ function _updateMatchCard(list, matchId, analysis, match) {
     } catch {}
   }
 
-  // Motif de rejet
-  if (analysis.rejection_reason) {
-    const el       = document.createElement('div');
-    el.className   = 'match-card__rejection text-muted';
-    el.textContent = `↳ ${_formatRejection(analysis.rejection_reason)}`;
+  // Motif de rejet, insuffisance ou absence de cotes
+  const hasReason = analysis.rejection_reason || analysis.insuffisant_reason;
+  if (hasReason) {
+    const el     = document.createElement('div');
+    el.className = 'match-card__rejection text-muted';
+    if (analysis.rejection_reason) {
+      el.textContent = `↳ ${_formatRejection(analysis.rejection_reason)}`;
+    } else {
+      el.textContent = `↳ ${analysis.insuffisant_reason}`;
+    }
     const edgeEl   = list.querySelector(`#edge-${matchId}`);
     if (edgeEl) edgeEl.after(el);
   }
