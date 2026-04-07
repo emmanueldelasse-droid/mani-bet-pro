@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — sports.config.js v6.1
+ * MANI BET PRO — sports.config.js v6.2
  *
  * CHANGEMENTS v6 — défense adverse :
  *   - defensive_diff : 0 → 0.05 (NOUVEAU — oppg Tank01, 0 appel supplémentaire)
@@ -103,42 +103,60 @@ export const SPORTS_CONFIG = {
     },
   },
 
-  // TENNIS
+  // TENNIS ATP
+  // Sources : The Odds API (cotes h2h) + Jeff Sackmann CSV (stats joueurs)
+  // Activé v6.2 — Monte-Carlo 13-20 avril 2026
+  // Poids provisoires — à calibrer après 30+ paris (Brier Score)
   TENNIS: {
-    label:           'Tennis ATP/WTA',
-    enabled:         false,
+    label:           'Tennis ATP',
+    enabled:         true,
     sport_tag_class: 'sport-tag--tennis',
 
     variables: [
-      { id: 'surface_winrate_diff', label: 'Win rate surface',          critical: true  },
-      { id: 'recent_form_ema',      label: 'Forme recente (EMA)',        critical: true  },
-      { id: 'h2h_surface',          label: 'H2H sur meme surface',       critical: false },
-      { id: 'service_dominance',    label: 'Dominance au service',       critical: false },
-      { id: 'fatigue_index',        label: 'Indice de fatigue',          critical: false },
-      { id: 'ranking_elo_diff',     label: 'Differentiel Elo / Ranking', critical: false },
+      { id: 'ranking_elo_diff',     label: 'Différentiel classement ATP', critical: true  },
+      { id: 'surface_winrate_diff', label: 'Win rate sur la surface',     critical: true  },
+      { id: 'recent_form_ema',      label: 'Forme récente (EMA 10)',      critical: false },
+      { id: 'h2h_surface',          label: 'H2H même surface',            critical: false },
+      { id: 'service_dominance',    label: 'Dominance au service',        critical: false },
+      { id: 'fatigue_index',        label: 'Indice de fatigue',           critical: false },
     ],
 
+    // Poids provisoires basés sur littérature tennis betting
+    // ranking_diff = prédicteur le plus stable en tennis (R²~0.35)
+    // surface_winrate = essentiel sur terre battue Monte-Carlo
+    // Somme = 0.35+0.30+0.15+0.10+0.05+0.05 = 1.00
     default_weights: {
-      surface_winrate_diff: null,
-      recent_form_ema:      null,
-      h2h_surface:          null,
-      service_dominance:    null,
-      fatigue_index:        null,
-      ranking_elo_diff:     null,
+      ranking_elo_diff:     0.35,
+      surface_winrate_diff: 0.30,
+      recent_form_ema:      0.15,
+      h2h_surface:          0.10,
+      service_dominance:    0.05,
+      fatigue_index:        0.05,
     },
 
-    ema_lambda: null,
+    ema_lambda:  0.3,   // EMA plus réactive que NBA (matchs moins fréquents)
+    score_cap:   0.85,  // Plus conservateur que NBA — tennis plus aléatoire
 
     rejection_thresholds: {
-      min_robustness:       null,
-      min_data_quality:     null,
-      min_games_sample:     8,
-      min_h2h_same_surface: 2,
+      min_robustness:       0.40,   // seuil bas — données partielles acceptées
+      min_data_quality:     0.50,   // idem
+      min_games_sample:     8,      // minimum 8 matchs sur la surface sur 12 mois
+      min_h2h_same_surface: 0,      // H2H pas critique — souvent 0 ou 1
     },
 
     sensitivity_steps: [-0.20, -0.10, 0.10, 0.20],
     intrinsic_noise:   'MEDIUM',
     modelisability:    'HIGH',
+
+    // Tournois couverts — sport_key The Odds API
+    tournaments: {
+      monte_carlo:  { key: 'tennis_atp_monte_carlo',  surface: 'Clay',  label: 'Monte-Carlo Masters' },
+      madrid:       { key: 'tennis_atp_madrid_open',  surface: 'Clay',  label: 'Madrid Open' },
+      rome:         { key: 'tennis_atp_rome',         surface: 'Clay',  label: 'Rome Masters' },
+      french_open:  { key: 'tennis_atp_french_open',  surface: 'Clay',  label: 'Roland Garros' },
+      wimbledon:    { key: 'tennis_atp_wimbledon',    surface: 'Grass', label: 'Wimbledon' },
+      us_open:      { key: 'tennis_atp_us_open',      surface: 'Hard',  label: 'US Open' },
+    },
 
     simulator_defaults: {
       use_h2h:           true,
