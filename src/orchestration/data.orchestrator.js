@@ -1,5 +1,16 @@
 /**
- * MANI BET PRO — data.orchestrator.js v3.7
+ * MANI BET PRO — data.orchestrator.js v3.8
+ *
+ * AJOUTS v3.8 :
+ *   - _mergeInjuryReports : intègre players_limited (status_weight 0.4)
+ *     dans le calcul du modificateur star.
+ *   - team_context et market_signal exposés dans le rapport mergé
+ *     pour affichage UI dans renderBlocPourquoi..1
+ *
+ * CORRECTIONS v3.7.1 :
+ *   - _mergeInjuryReports() : statut Day-To-Day mis à jour en Doubtful
+ *     quand l'IA confirme DOUBTFUL. Permet au modificateur star de s'appliquer
+ *     sur les joueurs comme Wembanyama listé DTD puis confirmé Doubtful par l'IA.
  *
  * AJOUTS v3.7 :
  *   - Refactor Promise.all : _loadAIInjuries() tourne en parallèle avec
@@ -181,6 +192,9 @@ export class DataOrchestrator {
 
       // Merger les deux rapports de blessures
       const mergedInjuryReport = _mergeInjuryReports(injuryReport, aiInjuries);
+
+      // Stocker le rapport enrichi dans le store pour ui.match-detail
+      store.set({ injuryReport: mergedInjuryReport });
 
       // ÉTAPE 3 : Analyser tous les matchs
       LoadingUI.update('Analyse en cours...', 70);
@@ -586,16 +600,22 @@ async function _loadAIInjuries(matches, date) {
       })
     );
 
-    // Construire index par nom ESPN
-    const aiByTeam = {};
+    // Construire index par nom ESPN + collecter team_context et market_signal
+    const aiByTeam      = {};
+    const aiTeamContext = {}; // { [espnName]: note }
+    const aiMarketSignals = []; // liste des signaux marché détectés
+
     results.forEach(function(result) {
       if (result.status !== 'fulfilled' || !result.value) return;
-      var aiData = result.value.aiData;
+      var aiData  = result.value.aiData;
+      var homeAbv = result.value.homeAbv;
+      var awayAbv = result.value.awayAbv;
 
       var allPlayers = []
         .concat(aiData.players_out || [])
         .concat(aiData.players_doubtful || [])
-        .concat(aiData.players_dtd_confirmed_out || []);
+        .concat(aiData.players_dtd_confirmed_out || [])
+        .concat(aiData.players_limited || []);
 
       allPlayers.forEach(function(p) {
         var teamAbv  = (p.team || '').toUpperCase();
@@ -604,17 +624,37 @@ async function _loadAIInjuries(matches, date) {
         if (!aiByTeam[espnName]) aiByTeam[espnName] = [];
         aiByTeam[espnName].push(p);
       });
+
+      // Collecter team_context
+      if (aiData.team_context) {
+        var homeEspn = ABV_TO_ESPN_NAME[homeAbv] || null;
+        var awayEspn = ABV_TO_ESPN_NAME[awayAbv] || null;
+        if (homeEspn && aiData.team_context.home_note) aiTeamContext[homeEspn] = aiData.team_context.home_note;
+        if (awayEspn && aiData.team_context.away_note) aiTeamContext[awayEspn] = aiData.team_context.away_note;
+      }
+
+      // Collecter market_signal
+      if (aiData.market_signal && aiData.market_signal.movement) {
+        aiMarketSignals.push(aiData.market_signal);
+      }
     });
 
     var totalPlayers = Object.values(aiByTeam).reduce(function(s, p) { return s + p.length; }, 0);
     if (totalPlayers > 0) {
       Logger.info('AI_INJURIES_LOADED', {
-        teams:   Object.keys(aiByTeam).length,
-        players: totalPlayers,
+        teams:    Object.keys(aiByTeam).length,
+        players:  totalPlayers,
+        contexts: Object.keys(aiTeamContext).length,
       });
     }
 
-    return Object.keys(aiByTeam).length > 0 ? aiByTeam : null;
+    // Retourner un objet enrichi si données disponibles
+    var hasData = Object.keys(aiByTeam).length > 0 || Object.keys(aiTeamContext).length > 0;
+    return hasData ? {
+      by_team:       aiByTeam,
+      team_context:  aiTeamContext,
+      market_signal: aiMarketSignals[0] || null,
+    } : null;
 
   } catch (err) {
     Logger.warn('AI_INJURIES_LOAD_FAILED', { message: err.message });
@@ -633,12 +673,40 @@ async function _loadAIInjuries(matches, date) {
  * @param {object|null} aiByTeam   - données IA { [espnTeamName]: [players] }
  * @returns {object|null} rapport fusionné
  */
-function _mergeInjuryReports(espnReport, aiByTeam) {
-  if (!aiByTeam || Object.keys(aiByTeam).length === 0) return espnReport;
+function _mergeInjuryReports(espnReport, aiData) {
+  // aiData peut être null, un objet { by_team, team_context, market_signal }
+  // ou (ancien format) directement un objet by_team
+  var aiByTeam     = null;
+  var aiTeamCtx    = {};
+  var aiMarketSig  = null;
+
+  if (!aiData) return espnReport;
   if (!espnReport || !espnReport.by_team) return espnReport;
 
+  // Détecter le format : nouveau ({ by_team, team_context }) ou ancien (objet direct)
+  if (aiData.by_team && typeof aiData.by_team === 'object') {
+    aiByTeam    = aiData.by_team;
+    aiTeamCtx   = aiData.team_context || {};
+    aiMarketSig = aiData.market_signal || null;
+  } else {
+    // Ancien format — objet directement indexé par nom d'équipe
+    aiByTeam = aiData;
+  }
+
+  if (!aiByTeam || Object.keys(aiByTeam).length === 0) {
+    // Pas de joueurs mais peut avoir team_context
+    if (Object.keys(aiTeamCtx).length > 0 || aiMarketSig) {
+      return Object.assign({}, espnReport, {
+        team_context:  aiTeamCtx,
+        market_signal: aiMarketSig,
+        source:        'espn_injuries_weighted+ai',
+      });
+    }
+    return espnReport;
+  }
+
   var STATUS_WEIGHTS = {
-    'Out': 1.0, 'Doubtful': 0.75, 'Day-To-Day': 0.3, 'Questionable': 0.5
+    'Out': 1.0, 'Doubtful': 0.75, 'Day-To-Day': 0.3, 'Questionable': 0.5, 'Limited': 0.4
   };
   var TEAM_PPG_FALLBACK = 108;
 
@@ -710,6 +778,7 @@ function _mergeInjuryReports(espnReport, aiByTeam) {
         var aiStatusUpper2 = (aiPlayer.status || 'OUT').toUpperCase();
         var sw2 = aiStatusUpper2 === 'OUT' ? 1.0
                : aiStatusUpper2 === 'DOUBTFUL' ? 0.75
+               : aiStatusUpper2 === 'LIMITED' ? 0.4
                : 0.3;
         var ppg2    = aiPlayer.ppg || null;
         var impact2 = ppg2
@@ -720,11 +789,13 @@ function _mergeInjuryReports(espnReport, aiByTeam) {
           name:           aiPlayer.name,
           status:         aiStatusUpper2 === 'OUT' ? 'Out'
                         : aiStatusUpper2 === 'DOUBTFUL' ? 'Doubtful'
+                        : aiStatusUpper2 === 'LIMITED' ? 'Limited'
                         : 'Day-To-Day',
           impact_weight:  impact2,
           ppg:            ppg2,
           importance_pct: ppg2 ? Math.round((ppg2 / TEAM_PPG_FALLBACK) * 100) : 13,
           source:         'ai_only',
+          detail:         aiPlayer.detail || null,
         });
         mergedCount++;
       }
@@ -738,8 +809,10 @@ function _mergeInjuryReports(espnReport, aiByTeam) {
   }
 
   return Object.assign({}, espnReport, {
-    by_team: enrichedByTeam,
-    source:  'espn_injuries_weighted+ai',
+    by_team:       enrichedByTeam,
+    source:        'espn_injuries_weighted+ai',
+    team_context:  aiTeamCtx,
+    market_signal: aiMarketSig,
   });
 }
 
