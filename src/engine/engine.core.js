@@ -1,5 +1,10 @@
 /**
- * MANI BET PRO — engine.core.js v2.3
+ * MANI BET PRO — engine.core.js v2.4
+ *
+ * AJOUTS v2.4 :
+ *   - weight_coverage exposé dans l'analyse depuis engineResult.
+ *     Fraction des poids effectivement couverts par des données disponibles.
+ *
  *
  * AJOUTS v2.2 :
  *   - Plafonnement du predictive_score via sportConfig.score_cap.
@@ -150,6 +155,7 @@ export class EngineCore {
       model_disagreement: null,  // V2 — Sprint 6
 
       variables_used:          engineResult.variables_used ?? {},
+      weight_coverage:         engineResult.weight_coverage ?? null,
       betting_recommendations: engineResult.betting_recommendations ?? null,
       // v2.3 : distingue "pas d'edge" de "pas de cotes disponibles"
       no_odds_available: !rawData?.odds && !rawData?.market_odds,

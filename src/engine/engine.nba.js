@@ -1,5 +1,14 @@
 /**
- * MANI BET PRO — engine.nba.js v5.7
+ * MANI BET PRO — engine.nba.js v5.9
+ *
+ * AJOUTS v5.9 :
+ *   - _computeStarAbsenceModifier() : modificateur multiplicatif sur le score
+ *     si une star (ppg > 20) est Out ou Doubtful pour l'une des deux équipes.
+ *     Appliqué après _computeScore() avant le return — indépendant des poids.
+ *     Formule : coefficient = 1 - (ppg/team_ppg) × status_weight × STAR_FACTOR
+ *     Plafond : -20% max sur le score (modifier >= 0.80).
+ *     STAR_PPG_THRESHOLD = 20, STAR_FACTOR = 1.2, MAX_REDUCTION = 0.20.
+ *     Exposé dans star_absence_modifier pour traçabilité UI.
  *
  * AJOUTS v5.4 :
  *   - _computeAbsencesImpact() exploite le champ impact_weight pondéré par ppg
@@ -48,6 +57,12 @@ const EDGE_THRESHOLDS = {
 const KELLY_FRACTION = 0.25;
 const KELLY_MAX_PCT  = 0.05;
 
+// Modificateur star absente — v5.9
+const STAR_PPG_THRESHOLD = 20;   // seuil star (ppg saison)
+const STAR_FACTOR        = 1.2;  // amplificateur impact star (à calibrer post-50 paris)
+const STAR_MAX_REDUCTION = 0.20; // plafond réduction score (-20% max)
+const STAR_TEAM_PPG_FALLBACK = 115; // ppg équipe si non disponible
+
 export class EngineNBA {
 
   static compute(matchData, customWeights = null) {
@@ -74,6 +89,21 @@ export class EngineNBA {
       scoreMethod = 'WEIGHTED_SUM';
     }
 
+    // v5.9 : Modificateur star absente — appliqué après _computeScore
+    // Indépendant des poids — agit directement sur le score brut.
+    // Exposé dans star_absence_modifier pour traçabilité.
+    let starAbsenceModifier = null;
+    if (score !== null) {
+      starAbsenceModifier = this._computeStarAbsenceModifier(
+        matchData?.home_injuries ?? null,
+        matchData?.away_injuries ?? null
+      );
+      if (starAbsenceModifier !== null && starAbsenceModifier < 1.0) {
+        score = Math.max(0, Math.min(1, Math.round(score * starAbsenceModifier * 1000) / 1000));
+        scoreMethod = 'WEIGHTED_SUM+STAR_MODIFIER';
+      }
+    }
+
     // Recommandations paris — utilise ESPN odds OU The Odds API (Pinnacle)
     const hasOdds = matchData?.odds != null || matchData?.market_odds != null;
     const bettingRecs = (score !== null && hasOdds)
@@ -83,6 +113,7 @@ export class EngineNBA {
     Logger.debug('ENGINE_NBA_RESULT', {
       score, method: scoreMethod,
       missing_count: missing.length, critical_missing: missingCritical.length,
+      star_modifier: starAbsenceModifier,
     });
 
     return {
@@ -95,6 +126,7 @@ export class EngineNBA {
       missing_critical:     missingCritical,
       uncalibrated_weights: uncalibrated,
       variables_used:       variables,
+      star_absence_modifier: starAbsenceModifier,
       betting_recommendations: bettingRecs,
       computed_at:          new Date().toISOString(),
     };
@@ -252,12 +284,23 @@ export class EngineNBA {
       ? Math.max(0, Math.min(1, Math.round(raw * 1000) / 1000))
       : null;
 
+    // v5.8 : weight_coverage = fraction des poids effectivement utilisés.
+    // Ex: 0.80 = 80% des poids disponibles ont une variable non-null.
+    // Transmis à engine.core.js → UI peut afficher un warning si < seuil.
+    const totalDefinedWeight = Object.entries(weights)
+      .filter(([, w]) => w !== null && w !== undefined && w > 0)
+      .reduce((s, [, w]) => s + w, 0);
+    const weightCoverage = totalDefinedWeight > 0
+      ? Math.round((totalWeight / totalDefinedWeight) * 1000) / 1000
+      : null;
+
     signals.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
 
     return {
       score,
       signals,
-      volatility: this._estimateVolatility(variables),
+      volatility:      this._estimateVolatility(variables),
+      weight_coverage: weightCoverage,
     };
   }
 
@@ -482,6 +525,79 @@ export class EngineNBA {
         is_weighted: isWeighted,
       },
     };
+  }
+
+
+  /**
+   * v5.9 : Calcule le modificateur multiplicatif si une star est absente.
+   *
+   * Une star = joueur avec ppg > STAR_PPG_THRESHOLD (20 pts/j).
+   * Statuts concernés : Out (weight 1.0) et Doubtful (weight 0.75).
+   * Day-To-Day non inclus — statut trop incertain pour un modificateur fort.
+   *
+   * Formule par joueur star absent :
+   *   impact = (ppg / team_ppg) × status_weight × STAR_FACTOR
+   *   modifier_equipe = 1 - clamp(impact, 0, STAR_MAX_REDUCTION)
+   *
+   * Modificateur final :
+   *   - Si star DOM absente : modifier < 1 → score baisse (faveur visiteur)
+   *   - Si star EXT absente : modifier > 1 → score monte (faveur domicile)
+   *   - Si les deux : effets combinés
+   *
+   * Retourne null si aucune star absente détectée (pas de modification).
+   *
+   * @param {Array|null} homeInjuries
+   * @param {Array|null} awayInjuries
+   * @returns {number|null} modificateur [0.80, 1.20] ou null
+   */
+  static _computeStarAbsenceModifier(homeInjuries, awayInjuries) {
+    const STAR_STATUSES = new Set(['Out', 'Doubtful']);
+    const STATUS_WEIGHT = { 'Out': 1.0, 'Doubtful': 0.75 };
+
+    /**
+     * Calcule la réduction de score due aux stars absentes d'une équipe.
+     * Retourne un delta positif = réduction (ex: 0.12 = -12% sur le score).
+     */
+    const computeTeamReduction = (injuries) => {
+      if (!Array.isArray(injuries) || injuries.length === 0) return 0;
+
+      let totalReduction = 0;
+
+      for (const player of injuries) {
+        if (!STAR_STATUSES.has(player.status)) continue;
+
+        const ppg = player.ppg ?? null;
+        if (ppg === null || ppg <= STAR_PPG_THRESHOLD) continue;
+
+        // ppg disponible via IA ou Tank01
+        const sw     = STATUS_WEIGHT[player.status] ?? 0.75;
+        const impact = (ppg / STAR_TEAM_PPG_FALLBACK) * sw * STAR_FACTOR;
+        totalReduction += impact;
+      }
+
+      // Plafonner la réduction totale à STAR_MAX_REDUCTION
+      return Math.min(totalReduction, STAR_MAX_REDUCTION);
+    };
+
+    const homeReduction = computeTeamReduction(homeInjuries);
+    const awayReduction = computeTeamReduction(awayInjuries);
+
+    // Aucune star absente — pas de modification
+    if (homeReduction === 0 && awayReduction === 0) return null;
+
+    // Score = probabilité domicile
+    // Si dom affaibli → score baisse → modifier < 1
+    // Si ext affaibli → score monte → modifier > 1
+    // Formule : modifier = (1 - homeReduction) / (1 - awayReduction)
+    // Exemple SA vs POR avec Wemby Doubtful :
+    //   homeReduction = (24.8/115) × 0.75 × 1.2 = 0.194 → min(0.194, 0.20) = 0.194
+    //   awayReduction = 0
+    //   modifier = (1 - 0.194) / (1 - 0) = 0.806 → score SA : 0.89 × 0.806 = 0.717
+
+    const modifier = (1 - homeReduction) / (1 - awayReduction);
+
+    // Clamp final entre 0.75 et 1.25 (sécurité)
+    return Math.round(Math.max(0.75, Math.min(1.25, modifier)) * 1000) / 1000;
   }
 
   static _computeBackToBack(data) {
