@@ -1,5 +1,21 @@
 /**
- * MANI BET PRO — data.orchestrator.js v3.4
+ * MANI BET PRO — data.orchestrator.js v3.7
+ *
+ * AJOUTS v3.7 :
+ *   - Refactor Promise.all : _loadAIInjuries() tourne en parallèle avec
+ *     _loadInjuries() et les autres sources — plus de séquence bloquante.
+ *     _mergeInjuryReports() fusionne les deux rapports après resolution.
+ *     Résout le timeout qui empêchait l'enrichissement IA d'atteindre le moteur.
+ *
+ * AJOUTS v3.6 :
+ *
+ * AJOUTS v3.6 :
+ *   - _enrichInjuriesWithAI() : après chargement ESPN injuries, appel Claude
+ *     web_search pour enrichir les données manquantes (ppg=null, DTD non confirmés).
+ *     Sources : nba.com + espn.com uniquement. Fallback transparent si IA échoue.
+ *     Format retourné compatible avec _computeAbsencesImpact() engine.nba.js.
+ *
+ * AJOUTS v3.5 :
  *
  * AJOUTS v3.2 :
  *   - _loadInjuries() appelle /nba/injuries/impact (ESPN + Tank01 pondéré ppg)
@@ -155,12 +171,16 @@ export class DataOrchestrator {
       const season  = _getCurrentNBASeason();
       const teamIds = _extractTeamIds(matches);
 
-      const [injuryReport, recentForms, oddsComparison, advancedStats] = await Promise.all([
-        _loadInjuries(date),
+      const [injuryReport, aiInjuries, recentForms, oddsComparison, advancedStats] = await Promise.all([
+        _loadInjuries(date),              // ESPN + Tank01 (sans enrichissement IA)
+        _loadAIInjuries(matches, date),   // IA web_search en parallèle
         _loadRecentForms(teamIds, season),
         _loadOddsComparison(),
         _loadAdvancedStats(),
       ]);
+
+      // Merger les deux rapports de blessures
+      const mergedInjuryReport = _mergeInjuryReports(injuryReport, aiInjuries);
 
       // ÉTAPE 3 : Analyser tous les matchs
       LoadingUI.update('Analyse en cours...', 70);
@@ -168,7 +188,7 @@ export class DataOrchestrator {
       const analyses = await _analyzeMatches(
         matches,
         recentForms,
-        injuryReport,
+        mergedInjuryReport,
         oddsComparison,
         advancedStats,
         date,
@@ -282,7 +302,7 @@ async function _loadInjuries(date) {
         // Adapter le format pour ProviderInjuries.getForTeam()
         // getForTeam() attend : { by_team: { [teamName]: [...players] } }
         // players_weighted contient déjà impact_weight pondéré par ppg (Tank01)
-        return {
+        const injuryReport = {
           source:  'espn_injuries_weighted',
           by_team: Object.fromEntries(
             Object.entries(data.by_team).map(function([teamName, teamData]) {
@@ -308,6 +328,8 @@ async function _loadInjuries(date) {
             })
           ),
         };
+
+        return injuryReport;
       }
     }
   } catch (err) {
@@ -322,6 +344,391 @@ async function _loadInjuries(date) {
     Logger.warn('ORCHESTRATOR_INJURIES_FAILED', { message: err.message });
     return null;
   }
+}
+
+
+/**
+ * v3.6 : Enrichit le rapport de blessures ESPN avec Claude web_search.
+ *
+ * Stratégie :
+ *   1. Pour chaque match du jour, appelle /nba/ai-injuries
+ *   2. Merge les données IA sur les données ESPN existantes :
+ *      - Joueur avec ppg=null → ppg mis à jour depuis IA
+ *      - Joueur DTD confirmé OUT par IA → statut mis à jour
+ *      - Nouveaux joueurs absents non listés ESPN → ajoutés
+ *   3. Fallback transparent — si IA échoue, retourne le rapport ESPN intact
+ *
+ * @param {object} injuryReport - rapport ESPN existant
+ * @param {Array}  matches      - matchs du jour
+ * @param {string} date         - YYYYMMDD
+ * @returns {object} rapport enrichi
+ */
+async function _enrichInjuriesWithAI(injuryReport, matches, date) {
+  if (!injuryReport || !matches || !matches.length) return injuryReport;
+
+  // Normaliser la date en YYYYMMDD (le worker l'attend sans tirets)
+  const dateForWorker = date ? date.replace(/-/g, '') : '';
+  if (!dateForWorker || dateForWorker.length !== 8) return injuryReport;
+
+  try {
+    // Lancer les appels IA en parallèle pour tous les matchs
+    const aiResults = await Promise.allSettled(
+      matches.map(async function(match) {
+        const homeAbv = _getTeamAbv(match.home_team && match.home_team.name);
+        const awayAbv = _getTeamAbv(match.away_team && match.away_team.name);
+        if (!homeAbv || !awayAbv) return null;
+
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(function() { controller.abort(); }, 20000);
+          const response = await fetch(
+            API_CONFIG.WORKER_BASE_URL + '/nba/ai-injuries' +
+            '?home=' + encodeURIComponent(homeAbv) +
+            '&away=' + encodeURIComponent(awayAbv) +
+            '&date=' + dateForWorker,
+            { signal: controller.signal, headers: { 'Accept': 'application/json' } }
+          );
+          clearTimeout(timer);
+          if (!response.ok) return null;
+          const data = await response.json();
+          if (!data.available || !data.data) return null;
+          return {
+            home: match.home_team && match.home_team.name,
+            away: match.away_team && match.away_team.name,
+            homeAbv,
+            awayAbv,
+            aiData: data.data,
+          };
+        } catch (err) {
+          Logger.warn('AI_INJURIES_MATCH_FAILED', { message: err.message });
+          return null;
+        }
+      })
+    );
+
+    // Construire un index de toutes les données IA par équipe ESPN name
+    // abv → espn team name via ABV_TO_ESPN_NAME
+    const aiByTeam = {}; // { [espnTeamName]: [players...] }
+
+    aiResults.forEach(function(result) {
+      if (result.status !== 'fulfilled' || !result.value) return;
+      const { home, away, homeAbv, awayAbv, aiData } = result.value;
+
+      // Fusionner players_out + players_doubtful + players_dtd_confirmed_out
+      const allAIPlayers = [
+        ...(aiData.players_out || []),
+        ...(aiData.players_doubtful || []),
+        ...(aiData.players_dtd_confirmed_out || []),
+      ];
+
+      allAIPlayers.forEach(function(p) {
+        // Résoudre le nom ESPN depuis l'abv retourné par l'IA
+        const teamAbv    = (p.team || '').toUpperCase();
+        const espnName   = ABV_TO_ESPN_NAME[teamAbv] || null;
+        if (!espnName) return;
+        if (!aiByTeam[espnName]) aiByTeam[espnName] = [];
+        aiByTeam[espnName].push(p);
+      });
+    });
+
+    if (Object.keys(aiByTeam).length === 0) {
+      Logger.info('AI_INJURIES_NO_DATA', {});
+      return injuryReport;
+    }
+
+    // Merger les données IA sur le rapport ESPN
+    const enrichedByTeam = Object.assign({}, injuryReport.by_team);
+
+    Object.entries(aiByTeam).forEach(function([teamName, aiPlayers]) {
+      if (!enrichedByTeam[teamName]) {
+        enrichedByTeam[teamName] = [];
+      }
+
+      const existingPlayers = enrichedByTeam[teamName];
+
+      aiPlayers.forEach(function(aiPlayer) {
+        // Chercher si le joueur existe déjà dans ESPN
+        const existingIdx = existingPlayers.findIndex(function(ep) {
+          return ep.name && ep.name.toLowerCase() === aiPlayer.name.toLowerCase();
+        });
+
+        if (existingIdx >= 0) {
+          // Joueur existant — enrichir avec données IA
+          const existing = existingPlayers[existingIdx];
+
+          // Mettre à jour ppg si manquant
+          if ((existing.ppg === null || existing.ppg === undefined) && aiPlayer.ppg !== null) {
+            existing.ppg = aiPlayer.ppg;
+            // Recalculer impact_weight avec le vrai ppg
+            // team_ppg estimé depuis impact existant ou fallback 108
+            const teamPpg = 108;
+            const sw = { 'Out': 1.0, 'Doubtful': 0.75, 'Day-To-Day': 0.3, 'Questionable': 0.5 };
+            const statusWeight = sw[existing.status] || 0.3;
+            existing.impact_weight = (aiPlayer.ppg / teamPpg) * statusWeight;
+            existing.source = 'tank01_via_ai';
+          }
+
+          // Confirmer OUT si DTD et IA dit OUT
+          if (
+            (existing.status === 'Day-To-Day' || existing.status === 'Doubtful') &&
+            (aiPlayer.status === 'OUT' || aiPlayer.status === 'Out')
+          ) {
+            existing.status = 'Out';
+            const sw = { 'Out': 1.0 };
+            if (existing.ppg || aiPlayer.ppg) {
+              const ppg = existing.ppg || aiPlayer.ppg;
+              existing.impact_weight = (ppg / 108) * 1.0;
+            } else {
+              existing.impact_weight = 0.125; // fallback
+            }
+            existing.source = 'espn_confirmed_by_ai';
+          }
+
+          existingPlayers[existingIdx] = existing;
+
+        } else {
+          // Nouveau joueur non listé ESPN — ajouter
+          const sw = { 'OUT': 1.0, 'Out': 1.0, 'DOUBTFUL': 0.75, 'Doubtful': 0.75, 'DTD': 0.3 };
+          const statusKey = aiPlayer.status || 'OUT';
+          const statusWeight = sw[statusKey] || 0.3;
+          const ppg = aiPlayer.ppg || null;
+          const impact = ppg ? (ppg / 108) * statusWeight : 0.125 * statusWeight;
+
+          existingPlayers.push({
+            name:          aiPlayer.name,
+            status:        aiPlayer.status === 'OUT' ? 'Out' : aiPlayer.status,
+            impact_weight: Math.round(impact * 1000) / 1000,
+            ppg:           ppg,
+            importance_pct: ppg ? Math.round((ppg / 108) * 100) : 13,
+            source:        'ai_only',
+          });
+        }
+      });
+
+      enrichedByTeam[teamName] = existingPlayers;
+    });
+
+    const enrichedCount = Object.values(aiByTeam).reduce(function(s, p) { return s + p.length; }, 0);
+    Logger.info('AI_INJURIES_ENRICHED', {
+      teams:   Object.keys(aiByTeam).length,
+      players: enrichedCount,
+    });
+
+    return Object.assign({}, injuryReport, { by_team: enrichedByTeam, source: 'espn_injuries_weighted+ai' });
+
+  } catch (err) {
+    Logger.warn('AI_INJURIES_ENRICH_FAILED', { message: err.message });
+    return injuryReport; // fallback transparent
+  }
+}
+
+/**
+ * Retourne l'abréviation Tank01 d'une équipe depuis son nom ESPN complet.
+ * Inverse de ABV_TO_ESPN_NAME.
+ */
+function _getTeamAbv(espnName) {
+  if (!espnName) return null;
+  for (var abv in ABV_TO_ESPN_NAME) {
+    if (ABV_TO_ESPN_NAME[abv] === espnName) return abv;
+  }
+  return null;
+}
+
+
+/**
+ * v3.7 : Charge les données blessures enrichies via IA (Claude web_search).
+ * Appel en parallèle avec _loadInjuries dans le Promise.all principal.
+ * Timeout 25s — non bloquant si IA indisponible (retourne null).
+ *
+ * @param {Array}  matches - matchs du jour
+ * @param {string} date    - YYYY-MM-DD
+ * @returns {Promise<object|null>} { [espnTeamName]: [aiPlayers] } ou null
+ */
+async function _loadAIInjuries(matches, date) {
+  if (!matches || !matches.length) return null;
+
+  // Normaliser la date en YYYYMMDD pour le worker
+  const dateForWorker = date ? date.replace(/-/g, '') : '';
+  if (!dateForWorker || dateForWorker.length !== 8) return null;
+
+  try {
+    const results = await Promise.allSettled(
+      matches.map(async function(match) {
+        const homeAbv = _getTeamAbv(match.home_team && match.home_team.name);
+        const awayAbv = _getTeamAbv(match.away_team && match.away_team.name);
+        if (!homeAbv || !awayAbv) return null;
+
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(function() { controller.abort(); }, 25000);
+          const response = await fetch(
+            API_CONFIG.WORKER_BASE_URL + '/nba/ai-injuries' +
+            '?home=' + encodeURIComponent(homeAbv) +
+            '&away=' + encodeURIComponent(awayAbv) +
+            '&date=' + dateForWorker,
+            { signal: controller.signal, headers: { 'Accept': 'application/json' } }
+          );
+          clearTimeout(timer);
+          if (!response.ok) return null;
+          const data = await response.json();
+          if (!data.available || !data.data) return null;
+          return {
+            home:    match.home_team && match.home_team.name,
+            away:    match.away_team && match.away_team.name,
+            homeAbv: homeAbv,
+            awayAbv: awayAbv,
+            aiData:  data.data,
+          };
+        } catch (err) {
+          Logger.warn('AI_INJURIES_MATCH_FAILED', { message: err.message });
+          return null;
+        }
+      })
+    );
+
+    // Construire index par nom ESPN
+    const aiByTeam = {};
+    results.forEach(function(result) {
+      if (result.status !== 'fulfilled' || !result.value) return;
+      var aiData = result.value.aiData;
+
+      var allPlayers = []
+        .concat(aiData.players_out || [])
+        .concat(aiData.players_doubtful || [])
+        .concat(aiData.players_dtd_confirmed_out || []);
+
+      allPlayers.forEach(function(p) {
+        var teamAbv  = (p.team || '').toUpperCase();
+        var espnName = ABV_TO_ESPN_NAME[teamAbv] || null;
+        if (!espnName) return;
+        if (!aiByTeam[espnName]) aiByTeam[espnName] = [];
+        aiByTeam[espnName].push(p);
+      });
+    });
+
+    var totalPlayers = Object.values(aiByTeam).reduce(function(s, p) { return s + p.length; }, 0);
+    if (totalPlayers > 0) {
+      Logger.info('AI_INJURIES_LOADED', {
+        teams:   Object.keys(aiByTeam).length,
+        players: totalPlayers,
+      });
+    }
+
+    return Object.keys(aiByTeam).length > 0 ? aiByTeam : null;
+
+  } catch (err) {
+    Logger.warn('AI_INJURIES_LOAD_FAILED', { message: err.message });
+    return null;
+  }
+}
+
+/**
+ * v3.7 : Fusionne le rapport ESPN+Tank01 avec les données IA.
+ * Stratégie :
+ *   - Joueur existant ESPN avec ppg=null → ppg mis à jour depuis IA
+ *   - Joueur DTD/Doubtful ESPN confirmé OUT par IA → statut mis à jour
+ *   - Nouveau joueur absent non listé ESPN → ajouté avec données IA
+ *
+ * @param {object|null} espnReport - rapport ESPN+Tank01
+ * @param {object|null} aiByTeam   - données IA { [espnTeamName]: [players] }
+ * @returns {object|null} rapport fusionné
+ */
+function _mergeInjuryReports(espnReport, aiByTeam) {
+  if (!aiByTeam || Object.keys(aiByTeam).length === 0) return espnReport;
+  if (!espnReport || !espnReport.by_team) return espnReport;
+
+  var STATUS_WEIGHTS = {
+    'Out': 1.0, 'Doubtful': 0.75, 'Day-To-Day': 0.3, 'Questionable': 0.5
+  };
+  var TEAM_PPG_FALLBACK = 108;
+
+  var enrichedByTeam = Object.assign({}, espnReport.by_team);
+  var mergedCount = 0;
+
+  Object.entries(aiByTeam).forEach(function(entry) {
+    var teamName  = entry[0];
+    var aiPlayers = entry[1];
+    if (!Array.isArray(aiPlayers) || !aiPlayers.length) return;
+
+    if (!enrichedByTeam[teamName]) {
+      enrichedByTeam[teamName] = [];
+    }
+
+    var existingPlayers = enrichedByTeam[teamName].slice(); // clone
+
+    aiPlayers.forEach(function(aiPlayer) {
+      if (!aiPlayer.name) return;
+
+      var existingIdx = existingPlayers.findIndex(function(ep) {
+        return ep.name && ep.name.toLowerCase() === aiPlayer.name.toLowerCase();
+      });
+
+      if (existingIdx >= 0) {
+        var existing = Object.assign({}, existingPlayers[existingIdx]);
+
+        // Mettre à jour ppg si manquant et IA l'a trouvé
+        if ((existing.ppg === null || existing.ppg === undefined) &&
+            aiPlayer.ppg !== null && aiPlayer.ppg !== undefined) {
+          existing.ppg = aiPlayer.ppg;
+          var sw = STATUS_WEIGHTS[existing.status] || 0.3;
+          existing.impact_weight = Math.round((aiPlayer.ppg / TEAM_PPG_FALLBACK) * sw * 1000) / 1000;
+          existing.source = 'tank01_via_ai';
+          mergedCount++;
+        }
+
+        // Confirmer OUT si DTD/Doubtful ESPN et IA dit OUT
+        var aiStatusUpper = (aiPlayer.status || '').toUpperCase();
+        if (
+          (existing.status === 'Day-To-Day' || existing.status === 'Doubtful') &&
+          aiStatusUpper === 'OUT'
+        ) {
+          existing.status = 'Out';
+          var ppg = existing.ppg || aiPlayer.ppg || null;
+          existing.impact_weight = ppg
+            ? Math.round((ppg / TEAM_PPG_FALLBACK) * 1.0 * 1000) / 1000
+            : 0.125;
+          existing.source = 'espn_confirmed_by_ai';
+          mergedCount++;
+        }
+
+        existingPlayers[existingIdx] = existing;
+
+      } else {
+        // Nouveau joueur non listé ESPN
+        var aiStatusUpper2 = (aiPlayer.status || 'OUT').toUpperCase();
+        var sw2 = aiStatusUpper2 === 'OUT' ? 1.0
+               : aiStatusUpper2 === 'DOUBTFUL' ? 0.75
+               : 0.3;
+        var ppg2    = aiPlayer.ppg || null;
+        var impact2 = ppg2
+          ? Math.round((ppg2 / TEAM_PPG_FALLBACK) * sw2 * 1000) / 1000
+          : Math.round(0.125 * sw2 * 1000) / 1000;
+
+        existingPlayers.push({
+          name:           aiPlayer.name,
+          status:         aiStatusUpper2 === 'OUT' ? 'Out'
+                        : aiStatusUpper2 === 'DOUBTFUL' ? 'Doubtful'
+                        : 'Day-To-Day',
+          impact_weight:  impact2,
+          ppg:            ppg2,
+          importance_pct: ppg2 ? Math.round((ppg2 / TEAM_PPG_FALLBACK) * 100) : 13,
+          source:         'ai_only',
+        });
+        mergedCount++;
+      }
+    });
+
+    enrichedByTeam[teamName] = existingPlayers;
+  });
+
+  if (mergedCount > 0) {
+    Logger.info('AI_INJURIES_MERGED', { updates: mergedCount });
+  }
+
+  return Object.assign({}, espnReport, {
+    by_team: enrichedByTeam,
+    source:  'espn_injuries_weighted+ai',
+  });
 }
 
 async function _loadRecentForms(teamIds, season) {
