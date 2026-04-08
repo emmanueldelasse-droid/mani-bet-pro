@@ -1,10 +1,13 @@
 /**
- * MANI BET PRO — data.orchestrator.js v3.5
+ * MANI BET PRO — data.orchestrator.js v3.6
+ *
+ * AJOUTS v3.6 :
+ *   - _enrichInjuriesWithAI() : après chargement ESPN injuries, appel Claude
+ *     web_search pour enrichir les données manquantes (ppg=null, DTD non confirmés).
+ *     Sources : nba.com + espn.com uniquement. Fallback transparent si IA échoue.
+ *     Format retourné compatible avec _computeAbsencesImpact() engine.nba.js.
  *
  * AJOUTS v3.5 :
- *   - Timeout _loadInjuries 10000ms → 20000ms.
- *     En fin de saison avec Day-To-Day inclus, le worker fait 30-40 appels
- *     Tank01 en parallèle — le calcul dépasse 10s côté worker.
  *
  * AJOUTS v3.2 :
  *   - _loadInjuries() appelle /nba/injuries/impact (ESPN + Tank01 pondéré ppg)
@@ -161,7 +164,7 @@ export class DataOrchestrator {
       const teamIds = _extractTeamIds(matches);
 
       const [injuryReport, recentForms, oddsComparison, advancedStats] = await Promise.all([
-        _loadInjuries(date),
+        _loadInjuries(date, matches),
         _loadRecentForms(teamIds, season),
         _loadOddsComparison(),
         _loadAdvancedStats(),
@@ -264,10 +267,10 @@ function _extractTeamIds(matches) {
  *
  * Fallback automatique sur ESPN brut (ProviderInjuries.getReport) si la route échoue.
  */
-async function _loadInjuries(date) {
+async function _loadInjuries(date, matches) {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(function() { controller.abort(); }, 20000); // v3.5 : 20s pour couvrir N appels Tank01 fin de saison
+    const timer = setTimeout(function() { controller.abort(); }, 10000);
 
     const response = await fetch(
       API_CONFIG.WORKER_BASE_URL + '/nba/injuries/impact',
@@ -287,7 +290,7 @@ async function _loadInjuries(date) {
         // Adapter le format pour ProviderInjuries.getForTeam()
         // getForTeam() attend : { by_team: { [teamName]: [...players] } }
         // players_weighted contient déjà impact_weight pondéré par ppg (Tank01)
-        return {
+        const injuryReport = {
           source:  'espn_injuries_weighted',
           by_team: Object.fromEntries(
             Object.entries(data.by_team).map(function([teamName, teamData]) {
@@ -313,6 +316,11 @@ async function _loadInjuries(date) {
             })
           ),
         };
+
+        // v3.6 : enrichissement IA — comble les données manquantes (ppg=null, DTD non confirmés)
+        // Appel non bloquant — fallback transparent si IA indisponible
+        const enriched = await _enrichInjuriesWithAI(injuryReport, matches, date);
+        return enriched;
       }
     }
   } catch (err) {
@@ -327,6 +335,194 @@ async function _loadInjuries(date) {
     Logger.warn('ORCHESTRATOR_INJURIES_FAILED', { message: err.message });
     return null;
   }
+}
+
+
+/**
+ * v3.6 : Enrichit le rapport de blessures ESPN avec Claude web_search.
+ *
+ * Stratégie :
+ *   1. Pour chaque match du jour, appelle /nba/ai-injuries
+ *   2. Merge les données IA sur les données ESPN existantes :
+ *      - Joueur avec ppg=null → ppg mis à jour depuis IA
+ *      - Joueur DTD confirmé OUT par IA → statut mis à jour
+ *      - Nouveaux joueurs absents non listés ESPN → ajoutés
+ *   3. Fallback transparent — si IA échoue, retourne le rapport ESPN intact
+ *
+ * @param {object} injuryReport - rapport ESPN existant
+ * @param {Array}  matches      - matchs du jour
+ * @param {string} date         - YYYYMMDD
+ * @returns {object} rapport enrichi
+ */
+async function _enrichInjuriesWithAI(injuryReport, matches, date) {
+  if (!injuryReport || !matches || !matches.length) return injuryReport;
+
+  // Normaliser la date en YYYYMMDD (le worker l'attend sans tirets)
+  const dateForWorker = date ? date.replace(/-/g, '') : '';
+  if (!dateForWorker || dateForWorker.length !== 8) return injuryReport;
+
+  try {
+    // Lancer les appels IA en parallèle pour tous les matchs
+    const aiResults = await Promise.allSettled(
+      matches.map(async function(match) {
+        const homeAbv = _getTeamAbv(match.home_team && match.home_team.name);
+        const awayAbv = _getTeamAbv(match.away_team && match.away_team.name);
+        if (!homeAbv || !awayAbv) return null;
+
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(function() { controller.abort(); }, 20000);
+          const response = await fetch(
+            API_CONFIG.WORKER_BASE_URL + '/nba/ai-injuries' +
+            '?home=' + encodeURIComponent(homeAbv) +
+            '&away=' + encodeURIComponent(awayAbv) +
+            '&date=' + dateForWorker,
+            { signal: controller.signal, headers: { 'Accept': 'application/json' } }
+          );
+          clearTimeout(timer);
+          if (!response.ok) return null;
+          const data = await response.json();
+          if (!data.available || !data.data) return null;
+          return {
+            home: match.home_team && match.home_team.name,
+            away: match.away_team && match.away_team.name,
+            homeAbv,
+            awayAbv,
+            aiData: data.data,
+          };
+        } catch (err) {
+          Logger.warn('AI_INJURIES_MATCH_FAILED', { message: err.message });
+          return null;
+        }
+      })
+    );
+
+    // Construire un index de toutes les données IA par équipe ESPN name
+    // abv → espn team name via ABV_TO_ESPN_NAME
+    const aiByTeam = {}; // { [espnTeamName]: [players...] }
+
+    aiResults.forEach(function(result) {
+      if (result.status !== 'fulfilled' || !result.value) return;
+      const { home, away, homeAbv, awayAbv, aiData } = result.value;
+
+      // Fusionner players_out + players_doubtful + players_dtd_confirmed_out
+      const allAIPlayers = [
+        ...(aiData.players_out || []),
+        ...(aiData.players_doubtful || []),
+        ...(aiData.players_dtd_confirmed_out || []),
+      ];
+
+      allAIPlayers.forEach(function(p) {
+        // Résoudre le nom ESPN depuis l'abv retourné par l'IA
+        const teamAbv    = (p.team || '').toUpperCase();
+        const espnName   = ABV_TO_ESPN_NAME[teamAbv] || null;
+        if (!espnName) return;
+        if (!aiByTeam[espnName]) aiByTeam[espnName] = [];
+        aiByTeam[espnName].push(p);
+      });
+    });
+
+    if (Object.keys(aiByTeam).length === 0) {
+      Logger.info('AI_INJURIES_NO_DATA', {});
+      return injuryReport;
+    }
+
+    // Merger les données IA sur le rapport ESPN
+    const enrichedByTeam = Object.assign({}, injuryReport.by_team);
+
+    Object.entries(aiByTeam).forEach(function([teamName, aiPlayers]) {
+      if (!enrichedByTeam[teamName]) {
+        enrichedByTeam[teamName] = [];
+      }
+
+      const existingPlayers = enrichedByTeam[teamName];
+
+      aiPlayers.forEach(function(aiPlayer) {
+        // Chercher si le joueur existe déjà dans ESPN
+        const existingIdx = existingPlayers.findIndex(function(ep) {
+          return ep.name && ep.name.toLowerCase() === aiPlayer.name.toLowerCase();
+        });
+
+        if (existingIdx >= 0) {
+          // Joueur existant — enrichir avec données IA
+          const existing = existingPlayers[existingIdx];
+
+          // Mettre à jour ppg si manquant
+          if ((existing.ppg === null || existing.ppg === undefined) && aiPlayer.ppg !== null) {
+            existing.ppg = aiPlayer.ppg;
+            // Recalculer impact_weight avec le vrai ppg
+            // team_ppg estimé depuis impact existant ou fallback 108
+            const teamPpg = 108;
+            const sw = { 'Out': 1.0, 'Doubtful': 0.75, 'Day-To-Day': 0.3, 'Questionable': 0.5 };
+            const statusWeight = sw[existing.status] || 0.3;
+            existing.impact_weight = (aiPlayer.ppg / teamPpg) * statusWeight;
+            existing.source = 'tank01_via_ai';
+          }
+
+          // Confirmer OUT si DTD et IA dit OUT
+          if (
+            (existing.status === 'Day-To-Day' || existing.status === 'Doubtful') &&
+            (aiPlayer.status === 'OUT' || aiPlayer.status === 'Out')
+          ) {
+            existing.status = 'Out';
+            const sw = { 'Out': 1.0 };
+            if (existing.ppg || aiPlayer.ppg) {
+              const ppg = existing.ppg || aiPlayer.ppg;
+              existing.impact_weight = (ppg / 108) * 1.0;
+            } else {
+              existing.impact_weight = 0.125; // fallback
+            }
+            existing.source = 'espn_confirmed_by_ai';
+          }
+
+          existingPlayers[existingIdx] = existing;
+
+        } else {
+          // Nouveau joueur non listé ESPN — ajouter
+          const sw = { 'OUT': 1.0, 'Out': 1.0, 'DOUBTFUL': 0.75, 'Doubtful': 0.75, 'DTD': 0.3 };
+          const statusKey = aiPlayer.status || 'OUT';
+          const statusWeight = sw[statusKey] || 0.3;
+          const ppg = aiPlayer.ppg || null;
+          const impact = ppg ? (ppg / 108) * statusWeight : 0.125 * statusWeight;
+
+          existingPlayers.push({
+            name:          aiPlayer.name,
+            status:        aiPlayer.status === 'OUT' ? 'Out' : aiPlayer.status,
+            impact_weight: Math.round(impact * 1000) / 1000,
+            ppg:           ppg,
+            importance_pct: ppg ? Math.round((ppg / 108) * 100) : 13,
+            source:        'ai_only',
+          });
+        }
+      });
+
+      enrichedByTeam[teamName] = existingPlayers;
+    });
+
+    const enrichedCount = Object.values(aiByTeam).reduce(function(s, p) { return s + p.length; }, 0);
+    Logger.info('AI_INJURIES_ENRICHED', {
+      teams:   Object.keys(aiByTeam).length,
+      players: enrichedCount,
+    });
+
+    return Object.assign({}, injuryReport, { by_team: enrichedByTeam, source: 'espn_injuries_weighted+ai' });
+
+  } catch (err) {
+    Logger.warn('AI_INJURIES_ENRICH_FAILED', { message: err.message });
+    return injuryReport; // fallback transparent
+  }
+}
+
+/**
+ * Retourne l'abréviation Tank01 d'une équipe depuis son nom ESPN complet.
+ * Inverse de ABV_TO_ESPN_NAME.
+ */
+function _getTeamAbv(espnName) {
+  if (!espnName) return null;
+  for (var abv in ABV_TO_ESPN_NAME) {
+    if (ABV_TO_ESPN_NAME[abv] === espnName) return abv;
+  }
+  return null;
 }
 
 async function _loadRecentForms(teamIds, season) {
