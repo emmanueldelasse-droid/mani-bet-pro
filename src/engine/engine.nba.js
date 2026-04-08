@@ -1,5 +1,9 @@
 /**
- * MANI BET PRO — engine.nba.js v5.9
+ * MANI BET PRO — engine.nba.js v5.10
+ *
+ * AJOUTS v5.10 :
+ *   - _computeStarAbsenceModifier : statut Limited ajouté (status_weight 0.4).
+ *     Capture les joueurs qui jouent avec une restriction physique (retour blessure, minutes limitées).
  *
  * AJOUTS v5.9 :
  *   - _computeStarAbsenceModifier() : modificateur multiplicatif sur le score
@@ -551,8 +555,9 @@ export class EngineNBA {
    * @returns {number|null} modificateur [0.80, 1.20] ou null
    */
   static _computeStarAbsenceModifier(homeInjuries, awayInjuries) {
-    const STAR_STATUSES = new Set(['Out', 'Doubtful']);
-    const STATUS_WEIGHT = { 'Out': 1.0, 'Doubtful': 0.75 };
+    // v5.9 : Out + Doubtful. v5.10 : Limited ajouté (retour blessure, minutes restreintes)
+    const STAR_STATUSES = new Set(['Out', 'Doubtful', 'Limited']);
+    const STATUS_WEIGHT = { 'Out': 1.0, 'Doubtful': 0.75, 'Limited': 0.4 };
 
     /**
      * Calcule la réduction de score due aux stars absentes d'une équipe.
