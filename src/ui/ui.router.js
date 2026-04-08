@@ -2,8 +2,9 @@
  * MANI BET PRO — ui.router.js v1.2
  *
  * CORRECTIONS v1.2 :
- *   - Écran noir au retour dashboard : nettoyage vues non-cachées avant affichage cache DOM.
- *   - Bouton retour navigateur : ne plus faire innerHTML="" qui détruisait les vues cachées.
+ *   - Cache DOM dashboard + history pour navigation instantanée.
+ *   - Guards défensifs sur _viewCache et _CACHED_ROUTES.
+ *   - Nettoyage propre du container avant affichage vue cachée.
  *
  * Router SPA vanilla JS.
  * Gère la navigation entre les vues principales.
@@ -47,10 +48,12 @@ const NAV_ROUTES = ['dashboard', 'history', 'lab', 'settings'];
 class Router {
 
   constructor() {
-    this._container   = null;
-    this._navLinks    = null;
-    this._currentView = null;
-    this._store       = null;
+    this._container     = null;
+    this._navLinks      = null;
+    this._currentView   = null;
+    this._store         = null;
+    this._viewCache     = {};
+    this._CACHED_ROUTES = new Set(['dashboard', 'history']);
   }
 
   /**
@@ -132,41 +135,44 @@ class Router {
         throw new Error(`La vue "${route}" n'exporte pas de fonction render()`);
       }
 
-      // v1.1 : si la vue précédente est cacheable, on cache son DOM au lieu de le détruire
-      const prevRoute = this._store.get('previousRoute');
-      if (prevRoute && this._CACHED_ROUTES.has(prevRoute) && this._viewCache[prevRoute]) {
-        this._viewCache[prevRoute].el.style.display = 'none';
+      const viewCache     = this._viewCache     ?? {};
+      const cachedRoutes  = this._CACHED_ROUTES ?? new Set();
+      const prevRoute     = this._store.get('previousRoute');
+
+      // Cacher la vue précédente si elle est cacheable
+      if (prevRoute && cachedRoutes.has(prevRoute) && viewCache[prevRoute]) {
+        viewCache[prevRoute].el.style.display = 'none';
       } else if (this._currentView?.destroy) {
         this._currentView.destroy();
       }
-      // Note : ne jamais faire innerHTML='' ici — détruirait les vues cachées en DOM
 
-      // v1.1 : si la route cible est en cache DOM → afficher instantanément
-      if (this._CACHED_ROUTES.has(route) && this._viewCache[route]) {
-        // Cacher toutes les autres vues cachées avant d'afficher celle-ci
-        Object.entries(this._viewCache).forEach(([r, cached]) => {
-          if (r !== route) cached.el.style.display = 'none';
-        });
-        // Vider le container des vues non-cachées (ex: match-detail)
+      // Si la route cible est en cache DOM → afficher instantanément
+      if (cachedRoutes.has(route) && viewCache[route]) {
+        // Supprimer les vues non-cachées du container
         Array.from(this._container.children).forEach(child => {
-          const isCached = Object.values(this._viewCache).some(c => c.el === child);
+          const isCached = Object.values(viewCache).some(c => c.el === child);
           if (!isCached) child.remove();
         });
-        this._viewCache[route].el.style.display = '';
-        this._currentView = this._viewCache[route].view;
+        // Cacher les autres vues cachées
+        Object.entries(viewCache).forEach(([r, cached]) => {
+          if (r !== route) cached.el.style.display = 'none';
+        });
+        viewCache[route].el.style.display = '';
+        this._currentView = viewCache[route].view;
         this._hideLoader();
         return;
       }
 
-      // Sinon : créer la vue normalement
-      // Cacher les vues cachées, supprimer les non-cachées
-      Object.values(this._viewCache).forEach(cached => {
+      // Créer la vue normalement
+      // Supprimer les vues non-cachées, cacher les cachées
+      Object.values(viewCache).forEach(cached => {
         cached.el.style.display = 'none';
       });
       Array.from(this._container.children).forEach(child => {
-        const isCached = Object.values(this._viewCache).some(c => c.el === child);
+        const isCached = Object.values(viewCache).some(c => c.el === child);
         if (!isCached) child.remove();
       });
+
       const viewEl = document.createElement('div');
       viewEl.style.cssText = 'width:100%;height:100%';
       this._container.appendChild(viewEl);
@@ -175,7 +181,7 @@ class Router {
       this._currentView = view;
 
       // Mettre en cache si la route est cacheable
-      if (this._CACHED_ROUTES.has(route)) {
+      if (cachedRoutes.has(route)) {
         this._viewCache[route] = { el: viewEl, view };
       }
 
