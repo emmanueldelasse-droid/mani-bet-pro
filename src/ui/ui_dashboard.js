@@ -1,5 +1,10 @@
 /**
- * MANI BET PRO — ui.dashboard.js v4.5
+ * MANI BET PRO — ui.dashboard.js v4.6
+ *
+ * AJOUTS v4.6 :
+ *   - TTL cache dashboard : 5 minutes. Si les données ont moins de 5 min,
+ *     la navigation retour/dashboard est instantanée — zéro appel API.
+ *     Le timestamp est stocké dans le store via 'dashboardCacheAt'.
  *
  * AJOUTS v4.5 :
  *   - Badge warning "Données partielles" quand weight_coverage < 0.75.
@@ -129,10 +134,15 @@ async function _loadAndDisplay(container, storeInstance, date) {
     const cachedMatches  = storeInstance.get('matches')  ?? {};
     const cachedDate     = storeInstance.get('dashboardFilters')?.selectedDate;
 
+    const cachedAt  = storeInstance.get('dashboardCacheAt') ?? 0;
+    const cacheAge  = Date.now() - cachedAt;
+    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
     if (
       cachedDate === date &&
       Object.keys(cachedAnalyses).length > 0 &&
-      Object.keys(cachedMatches).length > 0
+      Object.keys(cachedMatches).length > 0 &&
+      cacheAge < CACHE_TTL
     ) {
       const matchList     = Object.values(cachedMatches).filter(m => m.sport === 'NBA');
       const analysisIndex = _buildAnalysisIndex(cachedAnalyses);
@@ -170,6 +180,9 @@ async function _loadAndDisplay(container, storeInstance, date) {
       _updateSummary(container, 0, 0, 0);
       return;
     }
+
+    // Stocker le timestamp de chargement pour le TTL cache
+    storeInstance.set({ dashboardCacheAt: Date.now() });
 
     const analysisIndex = _buildAnalysisIndex(result.analyses);
 
