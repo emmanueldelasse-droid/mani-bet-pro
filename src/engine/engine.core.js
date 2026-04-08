@@ -1,5 +1,9 @@
 /**
- * MANI BET PRO — engine.core.js v2.4
+ * MANI BET PRO — engine.core.js v2.5
+ *
+ * AJOUTS v2.5 :
+ *   - score_method et star_absence_modifier exposés depuis engineResult.
+ *     Nécessaire pour que l'UI et les tests puissent vérifier le modificateur star.
  *
  * AJOUTS v2.4 :
  *   - weight_coverage exposé dans l'analyse depuis engineResult.
@@ -156,6 +160,8 @@ export class EngineCore {
 
       variables_used:          engineResult.variables_used ?? {},
       weight_coverage:         engineResult.weight_coverage ?? null,
+      score_method:            engineResult.score_method ?? null,
+      star_absence_modifier:   engineResult.star_absence_modifier ?? null,
       betting_recommendations: engineResult.betting_recommendations ?? null,
       // v2.3 : distingue "pas d'edge" de "pas de cotes disponibles"
       no_odds_available: !rawData?.odds && !rawData?.market_odds,
