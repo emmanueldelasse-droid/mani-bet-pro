@@ -678,14 +678,26 @@ function _mergeInjuryReports(espnReport, aiByTeam) {
 
         // Confirmer OUT si DTD/Doubtful ESPN et IA dit OUT
         var aiStatusUpper = (aiPlayer.status || '').toUpperCase();
-        if (
-          (existing.status === 'Day-To-Day' || existing.status === 'Doubtful') &&
-          aiStatusUpper === 'OUT'
-        ) {
+        if (existing.status === 'Day-To-Day' && aiStatusUpper === 'OUT') {
           existing.status = 'Out';
           var ppg = existing.ppg || aiPlayer.ppg || null;
           existing.impact_weight = ppg
             ? Math.round((ppg / TEAM_PPG_FALLBACK) * 1.0 * 1000) / 1000
+            : 0.125;
+          existing.source = 'espn_confirmed_by_ai';
+          mergedCount++;
+        } else if (existing.status === 'Day-To-Day' && aiStatusUpper === 'DOUBTFUL') {
+          // v3.7.1 : DTD confirmé Doubtful par IA → upgrade statut pour modificateur star
+          existing.status = 'Doubtful';
+          var ppgD = existing.ppg || aiPlayer.ppg || null;
+          if (ppgD) existing.impact_weight = Math.round((ppgD / TEAM_PPG_FALLBACK) * 0.75 * 1000) / 1000;
+          existing.source = 'espn_confirmed_by_ai';
+          mergedCount++;
+        } else if (existing.status === 'Doubtful' && aiStatusUpper === 'OUT') {
+          existing.status = 'Out';
+          var ppgO = existing.ppg || aiPlayer.ppg || null;
+          existing.impact_weight = ppgO
+            ? Math.round((ppgO / TEAM_PPG_FALLBACK) * 1.0 * 1000) / 1000
             : 0.125;
           existing.source = 'espn_confirmed_by_ai';
           mergedCount++;
