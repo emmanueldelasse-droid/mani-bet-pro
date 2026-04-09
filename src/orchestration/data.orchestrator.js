@@ -1,5 +1,13 @@
 /**
- * MANI BET PRO — data.orchestrator.js v3.9
+ * MANI BET PRO — data.orchestrator.js v3.10
+ *
+ * AJOUTS v3.10 :
+ *   - _loadTeamDetail(homeAbv, awayAbv) : charge /nba/team-detail depuis le worker.
+ *     Retourne last10 matchs avec scores, top10 scoreurs, H2H, O/U trend, splits, momentum.
+ *     Cache KV 6h géré côté worker — 0 appel supplémentaire si cache chaud.
+ *     Ajouté dans le Promise.all principal, teamDetail transmis au store et à l'UI.
+ *   - buildRawData() : teamDetail exposé dans le rawData pour usage futur moteur.
+ *   - store.set({ teamDetail }) après resolution du Promise.all.
  *
  * AJOUTS v3.9 :
  *   - _loadAIInjuries() : refactorisé pour le pipeline v6.27.
@@ -191,6 +199,9 @@ export class DataOrchestrator {
       const season  = _getCurrentNBASeason();
       const teamIds = _extractTeamIds(matches);
 
+      // Extraire les abréviations Tank01 pour team-detail (1 appel par match)
+      // On ne charge que le premier match pour les splits/top10 — chaque match-detail
+      // appelle _loadTeamDetail individuellement via le store
       const [injuryReport, aiInjuries, recentForms, oddsComparison, advancedStats] = await Promise.all([
         _loadInjuries(date),              // ESPN + Tank01 (sans enrichissement IA)
         _loadAIInjuries(matches, date),   // IA web_search en parallèle
@@ -204,6 +215,12 @@ export class DataOrchestrator {
 
       // Stocker le rapport enrichi dans le store pour ui.match-detail
       store.set({ injuryReport: mergedInjuryReport });
+
+      // Pré-charger teamDetail pour tous les matchs en parallèle (cache KV 6h côté worker)
+      // Stocké par matchId pour accès rapide depuis ui.match-detail
+      _preloadTeamDetails(matches).then(function(teamDetails) {
+        store.set({ teamDetails });
+      }).catch(function() {});  // silencieux — non bloquant
 
       // ÉTAPE 3 : Analyser tous les matchs
       LoadingUI.update('Analyse en cours...', 70);
@@ -1150,4 +1167,56 @@ function _normalizeDate(s) {
 function _getCurrentNBASeason() {
   const now = new Date();
   return String(now.getMonth() + 1 >= 10 ? now.getFullYear() : now.getFullYear() - 1);
+}
+
+// ── TEAM DETAIL — v3.10 ───────────────────────────────────────────────────────
+
+/**
+ * Charge /nba/team-detail pour un match spécifique.
+ * Cache KV 6h géré côté worker — ~23 appels Tank01 sur cache miss, 0 sur cache hit.
+ * @param {string} homeAbv - abv Tank01 (ex: 'TOR')
+ * @param {string} awayAbv - abv Tank01 (ex: 'MIA')
+ * @returns {Promise<object|null>}
+ */
+async function _loadTeamDetail(homeAbv, awayAbv) {
+  if (!homeAbv || !awayAbv) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(function() { controller.abort(); }, 20000);
+    const response = await fetch(
+      API_CONFIG.WORKER_BASE_URL + '/nba/team-detail?home=' + encodeURIComponent(homeAbv) + '&away=' + encodeURIComponent(awayAbv),
+      { signal: controller.signal, headers: { 'Accept': 'application/json' } }
+    );
+    clearTimeout(timer);
+    if (!response.ok) {
+      Logger.warn('TEAM_DETAIL_HTTP_ERROR', { status: response.status, home: homeAbv, away: awayAbv });
+      return null;
+    }
+    const data = await response.json();
+    return data && data.home ? data : null;
+  } catch (err) {
+    Logger.warn('TEAM_DETAIL_FAILED', { message: err.message, home: homeAbv, away: awayAbv });
+    return null;
+  }
+}
+
+/**
+ * Pré-charge les teamDetails pour tous les matchs du soir en parallèle.
+ * Retourne { [matchId]: teamDetail } — non bloquant pour le dashboard.
+ * @param {Array} matches
+ * @returns {Promise<object>}
+ */
+async function _preloadTeamDetails(matches) {
+  const results = {};
+  await Promise.allSettled(
+    matches.map(async function(match) {
+      const homeAbv = _getTeamAbv(match.home_team && match.home_team.name);
+      const awayAbv = _getTeamAbv(match.away_team && match.away_team.name);
+      if (!homeAbv || !awayAbv) return;
+      const detail = await _loadTeamDetail(homeAbv, awayAbv);
+      if (detail) results[match.id] = detail;
+    })
+  );
+  Logger.info('TEAM_DETAILS_PRELOADED', { count: Object.keys(results).length });
+  return results;
 }
