@@ -203,25 +203,20 @@ export class DataOrchestrator {
       // On ne charge que le premier match pour les splits/top10 — chaque match-detail
       // appelle _loadTeamDetail individuellement via le store
       // Étape 2a : ESPN + Tank01 + Odds + Stats — bloquant (données critiques moteur)
-      const [injuryReport, recentForms, oddsComparison, advancedStats] = await Promise.all([
-        _loadInjuries(date),              // ESPN + Tank01 pondéré ppg
+      // FIX 3 : _loadAIInjuries bloquant — moteur attend Claude avant de calculer
+      // Claude retourne injuries+PPG+contexte en 8-12s (cache KV 6h après)
+      // Fallback ESPN transparent si Claude timeout ou indisponible
+      const [injuryReport, aiInjuries, recentForms, oddsComparison, advancedStats] = await Promise.all([
+        _loadInjuries(date),              // ESPN fallback (statuts basiques)
+        _loadAIInjuries(matches, date),   // Claude : injuries+PPG+contexte (bloquant)
         _loadRecentForms(teamIds, season),
         _loadOddsComparison(),
         _loadAdvancedStats(),
       ]);
 
-      // Stocker ESPN injuries de base immédiatement
-      store.set({ injuryReport });
-
-      // Étape 2b : Claude IA — NON BLOQUANT (peut prendre 15-25s)
-      // Le dashboard charge sans attendre Claude. Quand Claude répond,
-      // le rapport est mis à jour dans le store et l'UI se rafraîchit.
-      _loadAIInjuries(matches, date).then(function(aiInjuries) {
-        if (!aiInjuries) return;
-        const merged = _mergeInjuryReports(injuryReport, aiInjuries);
-        store.set({ injuryReport: merged });
-        Logger.info('AI_INJURIES_LATE_MERGE', { teams: Object.keys(aiInjuries.by_team || {}).length });
-      }).catch(function() {});  // silencieux — non bloquant
+      // Merger ESPN + Claude → injuryReport enrichi avec vrais PPG
+      const mergedInjuryReport = _mergeInjuryReports(injuryReport, aiInjuries);
+      store.set({ injuryReport: mergedInjuryReport });
 
       // Pré-charger teamDetail pour tous les matchs (non bloquant)
       _preloadTeamDetails(matches).then(function(teamDetails) {
@@ -234,7 +229,7 @@ export class DataOrchestrator {
       const analyses = await _analyzeMatches(
         matches,
         recentForms,
-        injuryReport,   // rapport ESPN de base — Claude enrichit en arrière-plan
+        mergedInjuryReport,  // rapport fusionné ESPN + Claude (PPG inclus)
         oddsComparison,
         advancedStats,
         date,
@@ -438,48 +433,19 @@ async function _loadAIInjuries(matches, date) {
     return (homeAbv && awayAbv) ? awayAbv + '@' + homeAbv : null;
   }).filter(Boolean).join(',');
 
-  // Lancer les deux appels en parallèle
-  const [rosterResult, contextResult] = await Promise.allSettled([
-    _fetchRosterInjuries(),
-    _fetchAIContext(dateForWorker, gamesParam),
-  ]);
+  // FIX — Un seul appel Claude (injuries + contexte fusionnés)
+  // Tank01 roster supprimé — ne retournait pas les PPG des blessés LT
+  const contextData = await _fetchAIContext(dateForWorker, gamesParam);
 
-  const rosterData  = rosterResult.status === 'fulfilled' ? rosterResult.value : null;
-  const contextData = contextResult.status === 'fulfilled' ? contextResult.value : null;
-
-  // ── 1. Construire aiByTeam depuis le roster Tank01 ──────────────────────
-  const aiByTeam = {};
-
-  if (rosterData && rosterData.data) {
-    const HIGH_IMPACT = new Set(['Out', 'Doubtful', 'Day-To-Day']);
-
-    Object.values(rosterData.data).forEach(function(player) {
-      const designation = player.injury && player.injury.designation;
-      if (!designation || !HIGH_IMPACT.has(designation)) return;
-
-      const teamAbv  = (player.team || '').toUpperCase();
-      const espnName = ABV_TO_ESPN_NAME[teamAbv] || null;
-      if (!espnName) return;
-
-      if (!aiByTeam[espnName]) aiByTeam[espnName] = [];
-      aiByTeam[espnName].push({
-        name:   player.longName || '',
-        team:   teamAbv,
-        status: designation === 'Out' ? 'OUT' : designation === 'Doubtful' ? 'DOUBTFUL' : 'DTD',
-        ppg:    player.ppg || null,
-        source: 'tank01_roster',
-        note:   player.injury && player.injury.description || null,
-      });
-    });
-  }
-
-  // ── 2. Construire aiTeamContext et aiMarketSignals depuis ai-context ─────
-  const aiTeamContext   = {}; // { [espnName]: note }
+  // ── Construire aiByTeam depuis les injuries Claude ────────────────────
+  // FIX 2 : lire injuries_home/away depuis contextData (auparavant ignorées)
+  const aiByTeam      = {};
+  const aiTeamContext = {};
   const aiMarketSignals = [];
 
   if (contextData && contextData.data) {
     Object.values(contextData.data).forEach(function(ctx) {
-      if (!ctx || !ctx.game) return; // skip _raw / _parse_error
+      if (!ctx || !ctx.game) return;
 
       // Décoder AWAY@HOME
       const parts   = ctx.game.split('@');
@@ -489,28 +455,60 @@ async function _loadAIInjuries(matches, date) {
       const homeEspn = ABV_TO_ESPN_NAME[homeAbv] || null;
       const awayEspn = ABV_TO_ESPN_NAME[awayAbv] || null;
 
+      // ── Injuries HOME depuis Claude ──────────────────────────────────
+      if (homeEspn && Array.isArray(ctx.injuries_home)) {
+        ctx.injuries_home.forEach(function(p) {
+          if (!p || !p.name) return;
+          if (!aiByTeam[homeEspn]) aiByTeam[homeEspn] = [];
+          aiByTeam[homeEspn].push({
+            name:          p.name,
+            team:          homeAbv,
+            status:        p.status || 'Out',
+            ppg:           p.ppg    || null,
+            source:        'claude_web_search',
+            note:          p.reason || null,
+          });
+        });
+      }
+
+      // ── Injuries AWAY depuis Claude ──────────────────────────────────
+      if (awayEspn && Array.isArray(ctx.injuries_away)) {
+        ctx.injuries_away.forEach(function(p) {
+          if (!p || !p.name) return;
+          if (!aiByTeam[awayEspn]) aiByTeam[awayEspn] = [];
+          aiByTeam[awayEspn].push({
+            name:          p.name,
+            team:          awayAbv,
+            status:        p.status || 'Out',
+            ppg:           p.ppg    || null,
+            source:        'claude_web_search',
+            note:          p.reason || null,
+          });
+        });
+      }
+
+      // ── Contexte motivationnel ────────────────────────────────────────
       if (homeEspn && ctx.motivation_home) aiTeamContext[homeEspn] = ctx.motivation_home;
       if (awayEspn && ctx.motivation_away) aiTeamContext[awayEspn] = ctx.motivation_away;
 
+      // ── Line movement ─────────────────────────────────────────────────
       if (ctx.line_movement) {
         aiMarketSignals.push({
           movement: null,
           detail:   ctx.line_movement,
-          source:   'claude_web_search_cache',
+          source:   'claude_web_search',
         });
       }
     });
   }
 
-  const totalPlayers = Object.values(aiByTeam).reduce(function(s, p) { return s + p.length; }, 0);
-  if (totalPlayers > 0 || Object.keys(aiTeamContext).length > 0) {
-    Logger.info('AI_INJURIES_LOADED', {
-      teams:    Object.keys(aiByTeam).length,
-      players:  totalPlayers,
-      contexts: Object.keys(aiTeamContext).length,
-      source:   'tank01_roster+ai_context',
-    });
-  }
+  const totalPlayers = Object.values(aiByTeam).reduce(function(s, arr) { return s + arr.length; }, 0);
+  Logger.info('AI_INJURIES_LOADED', {
+    teams:    Object.keys(aiByTeam).length,
+    players:  totalPlayers,
+    contexts: Object.keys(aiTeamContext).length,
+    source:   'claude_web_search',
+  });
 
   const hasData = totalPlayers > 0 || Object.keys(aiTeamContext).length > 0;
   return hasData ? {
