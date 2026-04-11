@@ -38,7 +38,7 @@ import { DataOrchestrator } from '../orchestration/data.orchestrator.js';
 import { EngineCore }       from '../engine/engine.core.js';
 import { LoadingUI }        from './ui.loading.js';
 import { Logger }           from '../utils/utils.logger.js';
-import { americanToDecimal, formatEdge } from '../utils/utils.odds.js';
+import { americanToDecimal, formatEdge, formatDecimal } from '../utils/utils.odds.js';
 
 // Injecter les styles dynamiques v4 (pulse, barre proba, countdown)
 function _injectStyles() {
@@ -705,13 +705,11 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
           : `Moins de ${rec.ou_line ?? rec.market_total ?? '—'} pts`;
 
       // Cote décimale
-      const oddsDecimal = rec.odds_decimal ?? (rec.odds_line > 0
-        ? (rec.odds_line / 100 + 1)
-        : (1 - 100 / rec.odds_line));
-      const oddsFormatted = Number(oddsDecimal).toFixed(2);
+      const oddsDecimal = rec.odds_decimal ?? americanToDecimal(rec.odds_line);
+      const oddsFormatted = formatDecimal(oddsDecimal);
 
       // Gain pour 100€
-      const gainPour100 = Math.round((oddsDecimal - 1) * 100);
+      const gainPour100 = oddsDecimal ? Math.round((oddsDecimal - 1) * 100) : null;
       const oddsTooltip = `Cote ${oddsFormatted} = gain de ${gainPour100}€ pour 100€ misés`;
 
       // Couleur edge
@@ -729,7 +727,7 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
         <span class="match-card__rec-type text-muted">${typeLabel}</span>
         <span class="match-card__rec-side">${sideLabel}${underdogNote}</span>
         <span class="match-card__rec-odds mono">${oddsFormatted}
-          <span style="font-size:9px;color:var(--color-muted);margin-left:2px">${rec.odds_source ?? ''}</span>
+          <span style="font-size:9px;color:var(--color-muted);margin-left:2px">${rec.odds_source ?? '—'}</span>
         </span>
         <span class="match-card__rec-edge" style="color:${edgeColor}">+${rec.edge}%</span>
       </div>`;
@@ -824,8 +822,8 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
     UNDER: `Moins de ${best.ou_line ?? best.market_total ?? '—'} pts`,
   };
   const sideLabel   = SIDE_MAP[best.side] ?? best.side;
-  const oddsDecimal = americanToDecimal(best.odds_line) ?? '—';
-  const gainPour100 = oddsDecimal !== '—' ? Math.round((oddsDecimal - 1) * 100) : null;
+  const oddsDecimal = best.odds_decimal ?? americanToDecimal(best.odds_line);
+  const gainPour100 = oddsDecimal ? Math.round((oddsDecimal - 1) * 100) : null;
 
   el.style.display = 'block';
   const bestCountdown = bestMatch.datetime ? _renderCountdown(bestMatch.datetime) : '';
@@ -848,7 +846,7 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
             ${bestMatch.home_team?.abbreviation} vs ${bestMatch.away_team?.abbreviation}
           </div>
           <div style="font-size:12px;color:var(--color-muted);margin-top:3px">
-            Parier sur <strong style="color:var(--color-text)">${sideLabel}</strong> · cote <strong style="color:var(--color-signal)">${oddsDecimal}</strong>${gainPour100 ? ` <span style="color:var(--color-muted)">(+${gainPour100}€ / 100€)</span>` : ''}
+            Parier sur <strong style="color:var(--color-text)">${sideLabel}</strong> · cote <strong style="color:var(--color-signal)">${formatDecimal(oddsDecimal)}</strong>${best.odds_source ? ` <span style="color:var(--color-muted)">· ${best.odds_source}</span>` : ''}${gainPour100 ? ` <span style="color:var(--color-muted)">(+${gainPour100}€ / 100€)</span>` : ''}
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">

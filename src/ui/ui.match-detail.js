@@ -45,19 +45,7 @@ import { EngineCore }  from '../engine/engine.core.js';
 import { PaperEngine } from '../paper/paper.engine.js';
 import { ProviderNBA } from '../providers/provider.nba.js';
 import { Logger }      from '../utils/utils.logger.js';
-
-function _americanToDecimal(american) {
-  if (!american) return null;
-  const n = Number(american);
-  if (n > 0) return Math.round((n / 100 + 1) * 100) / 100;
-  return Math.round((100 / Math.abs(n) + 1) * 100) / 100;
-}
-
-function _decimalToAmerican(decimal) {
-  if (!decimal || decimal <= 1) return null;
-  if (decimal >= 2) return Math.round((decimal - 1) * 100);
-  return Math.round(-100 / (decimal - 1));
-}
+import { americanToDecimal, decimalToAmerican, formatDecimal } from '../utils/utils.odds.js';
 
 const WORKER_URL = 'https://manibetpro.emmanueldelasse.workers.dev';
 
@@ -237,7 +225,7 @@ function renderBlocParis(analysis, match) {
   const rows = betting.recommendations.map(r => {
     const isBest      = best && r.type === best.type && r.side === best.side;
     const sideLabel   = SIDE_LABELS[r.side] ?? r.side;
-    const oddsDecimal = r.odds_decimal ?? _americanToDecimal(r.odds_line);
+    const oddsDecimal = r.odds_decimal ?? americanToDecimal(r.odds_line);
     const gainPour100 = oddsDecimal ? Math.round((oddsDecimal - 1) * 100) : null;
     const kellyEuros  = r.kelly_stake > 0 ? Math.round(r.kelly_stake * bankroll * 100) / 100 : null;
     const edgeColor   = r.edge >= 12 ? 'var(--color-success)' : r.edge >= 7 ? 'var(--color-warning)' : 'var(--color-muted)';
@@ -247,17 +235,17 @@ function renderBlocParis(analysis, match) {
     if (r.type === 'SPREAD')      sideDisplay = `${sideLabel} ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts`;
     else if (r.type === 'OVER_UNDER') sideDisplay = r.side === 'OVER' ? `Plus de ${r.ou_line ?? '—'} pts` : `Moins de ${r.ou_line ?? '—'} pts`;
 
-    const motorProb = r.side === 'HOME' ? Math.round(analysis.predictive_score * 100)
+    const motorProb = r.motor_prob ?? (r.side === 'HOME' ? Math.round(analysis.predictive_score * 100)
                     : r.side === 'AWAY' ? Math.round((1 - analysis.predictive_score) * 100)
-                    : r.motor_prob;
+                    : null);
 
     let whyText = '';
     if (r.type === 'MONEYLINE') {
       if (r.is_contrarian) {
         // Pari sur l'outsider : le moteur favorise l'adversaire mais la cote est sous-évaluée
-        whyText = `Bien que le moteur favorise l'adversaire, la cote ${oddsDecimal} sur ${sideLabel} est sous-évaluée par le marché. Le moteur estime ${motorProb}% de chances — la cote implicite du bookmaker est inférieure, d'où un avantage de +${r.edge}%.`;
+        whyText = `Bien que le moteur favorise l'adversaire, la cote ${formatDecimal(oddsDecimal)} sur ${sideLabel} est sous-évaluée par le marché. Le moteur estime ${motorProb}% de chances — la cote implicite du bookmaker est inférieure, d'où un avantage de +${r.edge}%.`;
       } else {
-        whyText = `Le moteur estime ${motorProb}% de chances pour ${sideLabel}. La cote ${oddsDecimal} chez ${r.odds_source ?? 'le bookmaker'} offre un avantage de +${r.edge}%.`;
+        whyText = `Le moteur estime ${motorProb}% de chances pour ${sideLabel}. La cote ${formatDecimal(oddsDecimal)} chez ${r.odds_source ?? 'le bookmaker'} offre un avantage de +${r.edge}%.`;
       }
     }
     else if (r.type === 'SPREAD')    whyText = `Le moteur pense que ${sideLabel} peut gagner avec ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts d'écart. La cote de ${oddsDecimal} sous-estime cette probabilité.`;
@@ -273,7 +261,7 @@ function renderBlocParis(analysis, match) {
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <div>
             <div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Cote</div>
-            <div style="font-size:22px;font-weight:700;color:var(--color-signal)">${oddsDecimal ?? '—'}</div>
+            <div style="font-size:22px;font-weight:700;color:var(--color-signal)">${formatDecimal(oddsDecimal)}</div>
             ${gainPour100 ? `<div style="font-size:10px;color:var(--color-muted)">+${gainPour100}€ pour 100€ misés</div>` : ''}
             ${r.odds_source ? `<div style="font-size:9px;color:var(--color-muted);text-transform:uppercase">${r.odds_source}</div>` : ''}
           </div>
@@ -288,7 +276,9 @@ function renderBlocParis(analysis, match) {
           data-market="${r.type}"
           data-side="${r.side}"
           data-side-label="${sideDisplay}"
-          data-odds="${r.odds_line}"
+          data-odds="${r.odds_line ?? decimalToAmerican(r.odds_decimal) ?? ''}"
+          data-odds-decimal="${r.odds_decimal ?? americanToDecimal(r.odds_line) ?? ''}"
+          data-odds-source="${r.odds_source ?? ''}"
           data-edge="${r.edge}"
           data-motor-prob="${r.motor_prob}"
           data-implied-prob="${r.implied_prob}"
@@ -509,8 +499,9 @@ function renderBlocTousLesParis(analysis, match) {
   // Construire les lignes du tableau
   const rows = [];
 
-  // Récupérer les cotes depuis market_odds (Pinnacle/Betclic) ou ESPN
-  const getOdds = (type, side) => {
+  // Récupérer les cotes depuis la reco moteur en priorité, puis market_odds, puis ESPN
+  const getOdds = (type, side, rec = null) => {
+    if (rec?.odds_decimal != null) return rec.odds_decimal;
     if (marketOdds) {
       if (type === 'ML')   return side === 'HOME' ? marketOdds.home_ml_decimal   : marketOdds.away_ml_decimal;
       if (type === 'SPRD') return side === 'HOME' ? marketOdds.home_spread_decimal : marketOdds.away_spread_decimal;
@@ -518,14 +509,15 @@ function renderBlocTousLesParis(analysis, match) {
       if (type === 'UNDR') return marketOdds.under_decimal;
     }
     if (odds) {
-      if (type === 'ML')   return side === 'HOME' ? _americanToDecimal(odds.home_ml) : _americanToDecimal(odds.away_ml);
+      if (type === 'ML')   return side === 'HOME' ? americanToDecimal(odds.home_ml) : americanToDecimal(odds.away_ml);
     }
     return null;
   };
 
-  const getOddsSource = () => {
-    if (marketOdds?.best_book) return marketOdds.best_book;
-    if (marketOdds)            return 'Pinnacle';
+  const getOddsSource = (rec = null) => {
+    if (rec?.odds_source)       return rec.odds_source;
+    if (marketOdds?.best_book)  return marketOdds.best_book;
+    if (marketOdds)             return 'Pinnacle';
     return 'DraftKings';
   };
 
@@ -535,25 +527,27 @@ function renderBlocTousLesParis(analysis, match) {
   // Ligne helper
   const buildRow = (label, type, side, prob, oddsDec, rec, spreadLine, ouLine) => {
     if (!oddsDec) return null;
-    const impliedProb = Math.round((1 / oddsDec) * 100);
-    const edge = prob !== null ? prob - impliedProb : null;
-    const kellyEuros = rec?.kelly_stake > 0 ? Math.round(rec.kelly_stake * bankroll * 100) / 100 : null;
-    const isBest = betting?.best?.type === type && betting?.best?.side === side;
+    const impliedProb = rec?.implied_prob ?? Math.round((1 / oddsDec) * 100);
+    const modelProb   = rec?.motor_prob ?? prob;
+    const edge        = rec?.edge ?? (modelProb !== null ? modelProb - impliedProb : null);
+    const kellyEuros  = rec?.kelly_stake > 0 ? Math.round(rec.kelly_stake * bankroll * 100) / 100 : null;
+    const isBest      = betting?.best?.type === type && betting?.best?.side === side;
+    const oddsSource  = getOddsSource(rec);
 
-    let betData = `data-market="${type}" data-side="${side}" data-side-label="${label}" data-odds="${_decimalToAmerican(oddsDec) ?? 0}" data-edge="${edge ?? 0}" data-motor-prob="${prob ?? 0}" data-implied-prob="${impliedProb}" data-kelly="${rec?.kelly_stake ?? 0}" data-spread-line="${spreadLine ?? ''}" data-ou-line="${ouLine ?? ''}"`;
+    let betData = `data-market="${type}" data-side="${side}" data-side-label="${label}" data-odds="${rec?.odds_line ?? decimalToAmerican(oddsDec) ?? 0}" data-odds-decimal="${oddsDec}" data-odds-source="${oddsSource}" data-edge="${edge ?? 0}" data-motor-prob="${modelProb ?? 0}" data-implied-prob="${impliedProb}" data-kelly="${rec?.kelly_stake ?? 0}" data-spread-line="${spreadLine ?? ''}" data-ou-line="${ouLine ?? ''}"`;
 
     return `
       <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:9px 10px;background:${isBest ? 'rgba(34,197,94,0.06)' : 'var(--color-bg)'};border-radius:8px;border:1px solid ${isBest ? 'rgba(34,197,94,0.3)' : 'transparent'};margin-bottom:6px">
         <div style="display:flex;align-items:center;gap:7px;min-width:0">
-          ${_probPill(prob)}
+          ${_probPill(modelProb)}
           <div style="min-width:0">
             <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
-            <div style="font-size:10px;color:var(--color-muted)">${prob !== null ? prob + '% moteur' : '—'} · impl. ${impliedProb}%</div>
+            <div style="font-size:10px;color:var(--color-muted)">${modelProb !== null ? modelProb + '% moteur' : '—'} · impl. ${impliedProb}%</div>
           </div>
         </div>
         <div style="text-align:center;min-width:42px">
-          <div style="font-size:14px;font-weight:700;color:var(--color-signal)">${oddsDec}</div>
-          <div style="font-size:9px;color:var(--color-muted)">${getOddsSource()}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--color-signal)">${formatDecimal(oddsDec)}</div>
+          <div style="font-size:9px;color:var(--color-muted)">${oddsSource}</div>
         </div>
         <div style="text-align:center;min-width:40px">
           ${edge !== null ? `<div style="font-size:13px;font-weight:700;color:${_edgeColor(edge)}">${edge > 0 ? '+' : ''}${edge}%</div>` : '<div style="color:var(--color-muted);font-size:11px">—</div>'}
@@ -566,32 +560,38 @@ function renderBlocTousLesParis(analysis, match) {
   };
 
   // ML
-  const homeMLOdds = getOdds('ML', 'HOME');
-  const awayMLOdds = getOdds('ML', 'AWAY');
-  if (homeMLOdds) rows.push(buildRow(`${homeAbbr} vainqueur`, 'MONEYLINE', 'HOME', homeProb, homeMLOdds, findRec('MONEYLINE', 'HOME'), null, null));
-  if (awayMLOdds) rows.push(buildRow(`${awayAbbr} vainqueur`, 'MONEYLINE', 'AWAY', awayProb, awayMLOdds, findRec('MONEYLINE', 'AWAY'), null, null));
+  const homeMLRec  = findRec('MONEYLINE', 'HOME');
+  const awayMLRec  = findRec('MONEYLINE', 'AWAY');
+  const homeMLOdds = getOdds('ML', 'HOME', homeMLRec);
+  const awayMLOdds = getOdds('ML', 'AWAY', awayMLRec);
+  if (homeMLOdds) rows.push(buildRow(`${homeAbbr} vainqueur`, 'MONEYLINE', 'HOME', homeProb, homeMLOdds, homeMLRec, null, null));
+  if (awayMLOdds) rows.push(buildRow(`${awayAbbr} vainqueur`, 'MONEYLINE', 'AWAY', awayProb, awayMLOdds, awayMLRec, null, null));
 
   // Spread
   const spread = odds?.spread ?? marketOdds?.spread_line;
   if (spread != null) {
-    const homeSpreadOdds = getOdds('SPRD', 'HOME');
-    const awaySpreadOdds = getOdds('SPRD', 'AWAY');
+    const homeSpreadRec  = findRec('SPREAD', 'HOME');
+    const awaySpreadRec  = findRec('SPREAD', 'AWAY');
+    const homeSpreadOdds = getOdds('SPRD', 'HOME', homeSpreadRec);
+    const awaySpreadOdds = getOdds('SPRD', 'AWAY', awaySpreadRec);
     const spreadDisp = spread > 0 ? `+${spread}` : String(spread);
-    if (homeSpreadOdds) rows.push(buildRow(`${homeAbbr} ${spreadDisp} pts`, 'SPREAD', 'HOME', homeProb, homeSpreadOdds, findRec('SPREAD', 'HOME'), spread, null));
-    if (awaySpreadOdds) rows.push(buildRow(`${awayAbbr} ${spread > 0 ? '-' : '+'}${Math.abs(spread)} pts`, 'SPREAD', 'AWAY', awayProb, awaySpreadOdds, findRec('SPREAD', 'AWAY'), -spread, null));
+    if (homeSpreadOdds) rows.push(buildRow(`${homeAbbr} ${spreadDisp} pts`, 'SPREAD', 'HOME', homeProb, homeSpreadOdds, homeSpreadRec, spread, null));
+    if (awaySpreadOdds) rows.push(buildRow(`${awayAbbr} ${spread > 0 ? '-' : '+'}${Math.abs(spread)} pts`, 'SPREAD', 'AWAY', awayProb, awaySpreadOdds, awaySpreadRec, -spread, null));
   }
 
   // Over/Under
   const ou = odds?.over_under ?? marketOdds?.ou_line;
   if (ou != null) {
-    const overOdds  = getOdds('OVER', 'OVER');
-    const underOdds = getOdds('UNDR', 'UNDER');
+    const overRec   = findRec('OVER_UNDER', 'OVER');
+    const underRec  = findRec('OVER_UNDER', 'UNDER');
+    const overOdds  = getOdds('OVER', 'OVER', overRec);
+    const underOdds = getOdds('UNDR', 'UNDER', underRec);
     // Prob Over/Under approximée depuis le score prévu
     const projTotal = homeProb != null ? Math.round((analysis.predictive_score * 100 + (100 - analysis.predictive_score * 100)) / 100 * (ou * 1.05)) : null;
     const overProb  = overOdds  ? Math.round((1 / overOdds)  * 100) : null; // utiliser implied si pas de prob moteur
     const underProb = underOdds ? Math.round((1 / underOdds) * 100) : null;
-    if (overOdds)  rows.push(buildRow(`Plus de ${ou} pts`,  'OVER_UNDER', 'OVER',  null, overOdds,  findRec('OVER_UNDER', 'OVER'),  null, ou));
-    if (underOdds) rows.push(buildRow(`Moins de ${ou} pts`, 'OVER_UNDER', 'UNDER', null, underOdds, findRec('OVER_UNDER', 'UNDER'), null, ou));
+    if (overOdds)  rows.push(buildRow(`Plus de ${ou} pts`,  'OVER_UNDER', 'OVER',  null, overOdds,  overRec,  null, ou));
+    if (underOdds) rows.push(buildRow(`Moins de ${ou} pts`, 'OVER_UNDER', 'UNDER', null, underOdds, underRec, null, ou));
   }
 
   const validRows = rows.filter(Boolean);
@@ -967,7 +967,7 @@ function _checkBetterOddsAlert(bloc7, matchOdds, match, analysis) {
   if (!analysis?.betting_recommendations?.best) return;
   const best      = analysis.betting_recommendations.best;
   const isFlipped = matchOdds.home_team !== match.home_team?.name;
-  const draftKings = _americanToDecimal(best.odds_line);
+  const draftKings = best.odds_decimal ?? americanToDecimal(best.odds_line);
   const sideIsHome = best.side === 'HOME';
   let bestExternal = null, bestBook = null;
   for (const bk of (matchOdds.bookmakers ?? [])) {
@@ -994,7 +994,7 @@ function bindEvents(container, storeInstance, match, analysis) {
     const best      = analysis.betting_recommendations.best;
     const SIDE_MAP  = { HOME: match.home_team?.name, AWAY: match.away_team?.name, OVER: 'Over', UNDER: 'Under' };
     const sideLabel = SIDE_MAP[best.side] ?? best.side;
-    const odds      = _americanToDecimal(best.odds_line);
+    const odds      = best.odds_decimal ?? americanToDecimal(best.odds_line);
     const text = `🏀 ${match.home_team?.name} vs ${match.away_team?.name}\n✅ Pari : ${sideLabel} @ ${odds}\n📊 Avantage : +${best.edge}%\n🤖 Mani Bet Pro`;
     navigator.clipboard?.writeText(text).then(() => {
       const btn = container.querySelector('#share-btn');
@@ -1084,7 +1084,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
   const market      = btn.dataset.market;
   const side        = btn.dataset.side;
   const sideLabel   = btn.dataset.sideLabel;
-  const odds        = Number(btn.dataset.odds);
+  const odds        = btn.dataset.odds !== '' ? Number(btn.dataset.odds) : null;
   const edge        = Number(btn.dataset.edge);
   const motorProb   = Number(btn.dataset.motorProb);
   const impliedProb = Number(btn.dataset.impliedProb);
@@ -1095,7 +1095,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
   const state       = PaperEngine.load();
   const bankroll    = state.current_bankroll;
   const kellySugg   = kelly > 0 ? Math.round(kelly * bankroll * 100) / 100 : null;
-  const oddsDecimal = _americanToDecimal(odds);
+  const oddsDecimal = btn.dataset.oddsDecimal !== '' ? Number(btn.dataset.oddsDecimal) : americanToDecimal(odds);
   const marketLabels = { MONEYLINE: 'Vainqueur', SPREAD: 'Handicap', OVER_UNDER: 'Total pts' };
 
   const modal = document.createElement('div');
@@ -1149,7 +1149,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
   modal.querySelector('#modal-confirm')?.addEventListener('click', async () => {
     const stake    = parseFloat(modal.querySelector('#stake-input')?.value);
     const oddsReal = parseFloat(modal.querySelector('#odds-input')?.value) || oddsDecimal;
-    const oddsAm   = _decimalToAmerican(oddsReal) ?? odds;
+    const oddsAm   = decimalToAmerican(oddsReal) ?? odds;
     const note     = modal.querySelector('#note-input')?.value?.trim() ?? null;
 
     if (!stake || stake <= 0 || stake > bankroll) {
@@ -1170,7 +1170,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       match_id: match.id, date: match.date, sport: 'NBA',
       home: match.home_team?.name ?? '—', away: match.away_team?.name ?? '—',
       market, side, side_label: sideLabel,
-      odds_taken: oddsAm, odds_decimal: oddsReal, odds_source: null,
+      odds_taken: oddsAm, odds_decimal: oddsReal, odds_source: btn.dataset.oddsSource || null,
       spread_line: spreadLine, ou_line: ouLine,
       stake, kelly_stake: kelly, edge, motor_prob: motorProb, implied_prob: impliedProb,
       confidence_level: analysis?.confidence_level ?? null,
@@ -1182,7 +1182,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
 
     modal.remove();
     setTimeout(() => storeInstance.set({ paperTradingVersion: (storeInstance.get('paperTradingVersion') ?? 0) + 1 }), 150);
-    _showBetConfirmation(sideLabel, odds > 0 ? `+${odds}` : String(odds), stake);
+    _showBetConfirmation(sideLabel, oddsAm > 0 ? `+${oddsAm}` : String(oddsAm), stake);
   });
 }
 
