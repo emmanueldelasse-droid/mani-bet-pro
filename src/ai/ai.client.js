@@ -17,16 +17,7 @@ import { Logger }          from '../utils/utils.logger.js';
 const WORKER_URL = 'https://manibetpro.emmanueldelasse.workers.dev';
 const AI_ENDPOINT = `${WORKER_URL}/ai/messages`;
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 600;
 
-// Map tâche → prompt système
-const SYSTEM_PROMPTS = {
-  EXPLAIN:              AI_PROMPTS.SYSTEM_EXPLAIN,
-  AUDIT:                AI_PROMPTS.SYSTEM_AUDIT,
-  DETECT_INCONSISTENCY: AI_PROMPTS.SYSTEM_DETECT_INCONSISTENCY,
-  SCENARIO:             AI_PROMPTS.SYSTEM_SCENARIO,
-  SUMMARIZE:            AI_PROMPTS.SYSTEM_EXPLAIN,
-};
 
 export class AIClient {
 
@@ -52,19 +43,16 @@ export class AIClient {
       return null;
     }
 
-    const systemPrompt = SYSTEM_PROMPTS[task] ?? AI_PROMPTS.SYSTEM_EXPLAIN;
-    const userMessage  = AI_PROMPTS.buildUserMessage(task, context);
-
     try {
       const response = await fetch(AI_ENDPOINT, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         signal:  AbortSignal.timeout(30000),
         body:    JSON.stringify({
-          model:      MODEL,
-          max_tokens: MAX_TOKENS,
-          system:     systemPrompt,
-          messages:   [{ role: 'user', content: userMessage }],
+          task,
+          analysis_id: analysisOutput.analysis_id,
+          match_meta: matchMeta,
+          context,
         }),
       });
 
