@@ -1026,9 +1026,21 @@ function bindEvents(container, storeInstance, match, analysis) {
 
 // ── APPEL IA ─────────────────────────────────────────────────────────────
 
+// Cache mémoire session pour éviter les appels Claude répétés sur le même match
+// Clé : match.id + task — stable entre clics dans la même session
+const _aiSessionCache = new Map();
+
 async function triggerAIExplanation(container, analysis, match, task) {
   const responseEl = container.querySelector('#ai-response');
   if (!responseEl) return;
+
+  // Vérifier le cache session — évite appel Claude si déjà demandé ce soir
+  const _cacheKey = `${match?.id ?? 'unknown'}_${task}`;
+  if (_aiSessionCache.has(_cacheKey)) {
+    responseEl.innerHTML = _aiSessionCache.get(_cacheKey);
+    return;
+  }
+
   responseEl.innerHTML = '<span class="text-muted">Analyse en cours…</span>';
 
   const TASK_PROMPTS = {
@@ -1056,7 +1068,10 @@ async function triggerAIExplanation(container, analysis, match, task) {
     const text = data.content?.map(b => b.type === 'text' ? b.text : '').join('\n').trim();
     if (!text) throw new Error('Réponse vide');
     const clean = text.replace(/^#{1,4}\s.+$/gm, '').replace(/\*\*(.+?)\*\*/gs, '$1').replace(/\*(.+?)\*/gs, '$1').replace(/^[-•]\s/gm, '').trim();
-    responseEl.innerHTML = `<div style="line-height:1.8;font-size:13px">${escapeHtml(clean)}</div><div class="text-muted" style="font-size:10px;margin-top:var(--space-2)">Source : Claude Sonnet · Basé uniquement sur les données du moteur</div>`;
+    const htmlResult = `<div style="line-height:1.8;font-size:13px">${escapeHtml(clean)}</div><div class="text-muted" style="font-size:10px;margin-top:var(--space-2)">Source : Claude Sonnet · Basé uniquement sur les données du moteur</div>`;
+    responseEl.innerHTML = htmlResult;
+    // Stocker en cache session — même clic = 0 appel Claude
+    _aiSessionCache.set(_cacheKey, htmlResult);
   } catch (err) {
     Logger.error('AI_EXPLANATION_ERROR', { message: err.message });
     responseEl.innerHTML = `<div class="text-muted" style="font-size:12px">Erreur : ${escapeHtml(err.message)}</div>`;
