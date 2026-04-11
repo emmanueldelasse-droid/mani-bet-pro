@@ -284,6 +284,7 @@ export class DataOrchestrator {
       absences_confirmed: injuryReport !== null,
       advanced_stats:     advancedStats || null,
       market_odds:        null,
+      odds_markets:       null,
       home_back_to_back:  _isBackToBack(homeRecent, match.date || match.datetime),
       away_back_to_back:  _isBackToBack(awayRecent, match.date || match.datetime),
       home_rest_days:     _computeRestDays(homeRecent, match.date || match.datetime),
@@ -865,7 +866,10 @@ async function _analyzeMatches(matches, recentForms, injuryReport, oddsCompariso
           match.home_team && match.home_team.name,
           match.away_team && match.away_team.name
         );
-        if (matchOdds) rawData.market_odds = matchOdds;
+        if (matchOdds) {
+          rawData.market_odds = matchOdds;
+          rawData.odds_markets = matchOdds.odds_markets ?? null;
+        }
       }
 
       const analysis = EngineCore.compute('NBA', rawData);
