@@ -137,6 +137,7 @@ function renderShell(match, analysis, storeInstance) {
       </div>
 
       ${renderBlocProbas(analysis, match)}
+      ${renderBlocContexteMatch(match, storeInstance)}
       ${renderBlocTousLesParis(analysis, match)}
       ${renderBlocMarketAudit(analysis, match)}
       ${renderBlocPourquoi(analysis, match, storeInstance)}
@@ -326,6 +327,65 @@ function renderBlocParis(analysis, match) {
         <span class="text-muted" style="font-size:11px">${betting.recommendations.length} marché${betting.recommendations.length > 1 ? 's' : ''}</span>
       </div>
       <div>${rows}</div>
+    </div>`;
+}
+
+
+// ── BLOC CONTEXTE MATCH ──────────────────────────────────────────────────
+
+function renderBlocContexteMatch(match, storeInstance) {
+  const injReport = storeInstance?.get('injuryReport') ?? null;
+  const teamCtx   = injReport?.team_context ?? {};
+  const marketSig = injReport?.market_signal ?? null;
+  const homeName  = match?.home_team?.name ?? 'Domicile';
+  const awayName  = match?.away_team?.name ?? 'Extérieur';
+  const homeAbv   = match?.home_team?.abbreviation ?? null;
+  const awayAbv   = match?.away_team?.abbreviation ?? null;
+
+  const homeCtx = teamCtx?.[homeName] ?? teamCtx?.[homeAbv] ?? teamCtx?.home_note ?? null;
+  const awayCtx = teamCtx?.[awayName] ?? teamCtx?.[awayAbv] ?? teamCtx?.away_note ?? null;
+  const urgency = teamCtx?.urgency ?? null;
+  const keyInfo = teamCtx?.key_info ?? null;
+  const marketDetail = marketSig?.detail ?? null;
+
+  if (!homeCtx && !awayCtx && !urgency && !keyInfo && !marketDetail) return '';
+
+  const urgencyLabel = urgency === 'high'
+    ? 'Enjeu élevé'
+    : urgency === 'medium'
+      ? 'Enjeu modéré'
+      : urgency === 'low'
+        ? 'Enjeu faible'
+        : null;
+
+  return `
+    <div class="card match-detail__bloc">
+      <div class="bloc-header" style="margin-bottom:var(--space-3)">
+        <span class="bloc-header__title">Contexte du match</span>
+      </div>
+      <div style="display:grid;gap:10px;font-size:13px;line-height:1.65">
+        ${homeCtx ? `
+          <div style="padding:10px 12px;background:var(--color-bg);border-radius:8px;border-left:3px solid var(--color-signal)">
+            <div style="font-weight:600;margin-bottom:4px">${homeName} — contexte</div>
+            <div style="color:var(--color-muted)">${homeCtx}</div>
+          </div>` : ''}
+        ${awayCtx ? `
+          <div style="padding:10px 12px;background:var(--color-bg);border-radius:8px;border-left:3px solid var(--color-signal)">
+            <div style="font-weight:600;margin-bottom:4px">${awayName} — contexte</div>
+            <div style="color:var(--color-muted)">${awayCtx}</div>
+          </div>` : ''}
+        ${marketDetail ? `
+          <div style="padding:10px 12px;background:var(--color-bg);border-radius:8px;border-left:3px solid var(--color-warning)">
+            <div style="font-weight:600;margin-bottom:4px">Marché</div>
+            <div style="color:var(--color-muted)">${marketDetail}</div>
+          </div>` : ''}
+      </div>
+      ${(urgencyLabel || keyInfo) ? `
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          ${urgencyLabel ? `<span class="badge badge--inconclusive">${urgencyLabel}</span>` : ''}
+          ${keyInfo ? `<span style="font-size:12px;color:var(--color-muted)">• ${keyInfo}</span>` : ''}
+        </div>` : ''}
+      <div style="margin-top:10px;font-size:11px;color:var(--color-muted)">Données enrichies du contexte · sans impact sur le score moteur</div>
     </div>`;
 }
 
