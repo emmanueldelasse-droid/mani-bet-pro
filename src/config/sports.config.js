@@ -72,7 +72,7 @@ export const SPORTS_CONFIG = {
       win_pct_diff:     0.05,
       back_to_back:     0.03,
       rest_days_diff:   0.02,
-      // Somme = 1.00 — version plus match-day, plus sévère sur les absences.
+      // Somme = 0.24+0.18+0.16+0.10+0.20+0.02+0.05+0.03+0.02 = 1.00
     },
 
     ema_lambda: 0.85,
