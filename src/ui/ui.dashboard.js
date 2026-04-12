@@ -38,7 +38,7 @@ import { DataOrchestrator } from '../orchestration/data.orchestrator.js';
 import { EngineCore }       from '../engine/engine.core.js';
 import { LoadingUI }        from './ui.loading.js';
 import { Logger }           from '../utils/utils.logger.js';
-import { americanToDecimal, formatEdge, formatDecimal } from '../utils/utils.odds.js';
+import { americanToDecimal, formatEdge } from '../utils/utils.odds.js';
 
 // Injecter les styles dynamiques v4 (pulse, barre proba, countdown)
 function _injectStyles() {
@@ -119,39 +119,30 @@ function _injectStyles() {
  * @returns {number} timeoutId — pour nettoyage via clearTimeout
  */
 function _scheduleNextRefresh(container, storeInstance) {
-  const REFRESH_HOURS_PARIS = [23 * 60 + 30, 7 * 60]; // 23h30 et 07h00 en minutes
+  const REFRESH_WINDOWS_PARIS = [12 * 60, 23 * 60];
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('fr-CA', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const get = function(type) { return parts.find(function(p) { return p.type === type; })?.value; };
+  const currentMinutes = (parseInt(get('hour') || '0', 10) * 60) + parseInt(get('minute') || '0', 10);
 
-  const now       = new Date();
-  // Convertir en heure de Paris (UTC+2 en été, UTC+1 en hiver)
-  const utcOffset = now.getTimezoneOffset(); // en minutes, négatif pour Paris
-  const parisOffset = -120; // UTC+2 (CEST) — à ajuster si UTC+1 en hiver
-  const parisMinutes = (now.getUTCHours() * 60 + now.getUTCMinutes()) + (-parisOffset);
-  const currentMinutes = parisMinutes % (24 * 60);
-
-  // Trouver le prochain créneau
   let minDelay = Infinity;
-  for (const targetMinutes of REFRESH_HOURS_PARIS) {
+  REFRESH_WINDOWS_PARIS.forEach(function(targetMinutes) {
     let delay = targetMinutes - currentMinutes;
-    if (delay <= 0) delay += 24 * 60; // demain
+    if (delay <= 0) delay += 24 * 60;
     if (delay < minDelay) minDelay = delay;
-  }
+  });
 
   const delayMs = minDelay * 60 * 1000;
-  Logger.info('AUTO_REFRESH_SCHEDULED', {
-    next_in_min: minDelay,
-    next_at_paris: (() => {
-      const d = new Date(Date.now() + delayMs);
-      return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' });
-    })(),
-  });
+  Logger.info('AUTO_REFRESH_SCHEDULED', { next_in_min: minDelay });
 
   return setTimeout(async function() {
     Logger.info('AUTO_REFRESH_TRIGGERED', {});
-    // Invalider le cache pour forcer un rechargement complet
-    storeInstance.set({ dashboardCacheAt: 0 });
     const date = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
     await _loadAndDisplay(container, storeInstance, date);
-    // Planifier le prochain refresh
     _scheduleNextRefresh(container, storeInstance);
   }, delayMs);
 }
@@ -174,12 +165,13 @@ export async function render(container, storeInstance) {
   const refreshBtn = container.querySelector('#refresh-btn');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', async function() {
-      refreshBtn.textContent = '⟳ Actualisation...';
+      refreshBtn.textContent = '✓ Cache';
       refreshBtn.disabled = true;
-      storeInstance.set({ dashboardCacheAt: 0 });
       await _loadAndDisplay(container, storeInstance, selectedDate);
-      refreshBtn.textContent = '⟳ Actualiser';
-      refreshBtn.disabled = false;
+      setTimeout(function() {
+        refreshBtn.textContent = '⟳ Vérifier';
+        refreshBtn.disabled = false;
+      }, 600);
     });
   }
 
@@ -205,15 +197,13 @@ async function _loadAndDisplay(container, storeInstance, date) {
     const cachedMatches  = storeInstance.get('matches')  ?? {};
     const cachedDate     = storeInstance.get('dashboardFilters')?.selectedDate;
 
-    const cachedAt  = storeInstance.get('dashboardCacheAt') ?? 0;
-    const cacheAge  = Date.now() - cachedAt;
-    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    const shouldServeCache = DataOrchestrator.shouldServeCachedDashboard(date, storeInstance);
 
     if (
       cachedDate === date &&
       Object.keys(cachedAnalyses).length > 0 &&
       Object.keys(cachedMatches).length > 0 &&
-      cacheAge < CACHE_TTL
+      shouldServeCache
     ) {
       const matchList     = Object.values(cachedMatches).filter(m => m.sport === 'NBA');
       const analysisIndex = _buildAnalysisIndex(cachedAnalyses);
@@ -239,6 +229,7 @@ async function _loadAndDisplay(container, storeInstance, date) {
       const rejected   = insuffisant + rejete;
       _updateSummary(container, matchList.length, conclusive, rejected);
       _renderBestOpportunity(container, matchList, analysisIndex);
+      _renderSyncStatus(container, storeInstance);
       LoadingUI.hide();
       return;
     }
@@ -279,10 +270,31 @@ async function _loadAndDisplay(container, storeInstance, date) {
     const rejected   = insuffisant + rejete;
     _updateSummary(container, result.matches.length, conclusive, rejected);
     _renderBestOpportunity(container, result.matches, analysisIndex);
+    _renderSyncStatus(container, storeInstance);
 
   } catch (err) {
     Logger.error('DASHBOARD_RENDER_ERROR', { message: err.message });
-    _renderError(list);
+    storeInstance.set({
+      'refreshSync.status': 'error',
+      'refreshSync.detail': 'Dernière version conservée',
+    });
+    const cachedMatches = storeInstance.get('matches') ?? {};
+    const cachedAnalyses = storeInstance.get('analyses') ?? {};
+    const cachedDate = storeInstance.get('dashboardFilters')?.selectedDate;
+    if (cachedDate === date && Object.keys(cachedMatches).length > 0 && Object.keys(cachedAnalyses).length > 0) {
+      const matchList = Object.values(cachedMatches).filter(function(m) { return m.sport === 'NBA'; });
+      const analysisIndex = _buildAnalysisIndex(cachedAnalyses);
+      const ptState = _loadPaperState();
+      _renderMatchCards(list, matchList, storeInstance);
+      matchList.forEach(function(match) {
+        const analysis = analysisIndex[match.id];
+        if (analysis) _updateMatchCard(list, match.id, analysis, match, ptState);
+      });
+      _renderSyncStatus(container, storeInstance);
+    } else {
+      _renderError(list);
+      _renderSyncStatus(container, storeInstance);
+    }
   } finally {
     LoadingUI.hide();
   }
@@ -329,8 +341,9 @@ function _renderShell(selectedDate) {
           <div class="page-header__eyebrow">Mani Bet Pro</div>
           <div class="page-header__title">Dashboard</div>
           <div class="page-header__sub">${displayDate}</div>
+          <div id="sync-status" style="margin-top:6px;font-size:11px;color:var(--color-muted)">● Dernière version en cache affichée</div>
         </div>
-        <button id="refresh-btn" style="font-size:11px;padding:5px 10px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg);color:var(--color-muted);cursor:pointer;margin-top:4px;flex-shrink:0">⟳ Actualiser</button>
+        <button id="refresh-btn" style="font-size:11px;padding:5px 10px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg);color:var(--color-muted);cursor:pointer;margin-top:4px;flex-shrink:0">⟳ Vérifier</button>
       </div>
 
       <div class="date-selector filter-chips" id="date-selector">
@@ -705,11 +718,13 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
           : `Moins de ${rec.ou_line ?? rec.market_total ?? '—'} pts`;
 
       // Cote décimale
-      const oddsDecimal = rec.odds_decimal ?? americanToDecimal(rec.odds_line);
-      const oddsFormatted = formatDecimal(oddsDecimal);
+      const oddsDecimal = rec.odds_decimal ?? (rec.odds_line > 0
+        ? (rec.odds_line / 100 + 1)
+        : (1 - 100 / rec.odds_line));
+      const oddsFormatted = Number(oddsDecimal).toFixed(2);
 
       // Gain pour 100€
-      const gainPour100 = oddsDecimal ? Math.round((oddsDecimal - 1) * 100) : null;
+      const gainPour100 = Math.round((oddsDecimal - 1) * 100);
       const oddsTooltip = `Cote ${oddsFormatted} = gain de ${gainPour100}€ pour 100€ misés`;
 
       // Couleur edge
@@ -727,7 +742,7 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
         <span class="match-card__rec-type text-muted">${typeLabel}</span>
         <span class="match-card__rec-side">${sideLabel}${underdogNote}</span>
         <span class="match-card__rec-odds mono">${oddsFormatted}
-          <span style="font-size:9px;color:var(--color-muted);margin-left:2px">${rec.odds_source ?? '—'}</span>
+          <span style="font-size:9px;color:var(--color-muted);margin-left:2px">${rec.odds_source ?? ''}</span>
         </span>
         <span class="match-card__rec-edge" style="color:${edgeColor}">+${rec.edge}%</span>
       </div>`;
@@ -797,6 +812,22 @@ function _updateSummary(container, total, conclusive, rejected) {
   if (r) r.textContent = rejected;
 }
 
+
+function _renderSyncStatus(container, storeInstance) {
+  const el = container.querySelector('#sync-status');
+  if (!el) return;
+  const banner = DataOrchestrator.getRefreshBanner(storeInstance);
+  const color = banner.status === 'success'
+    ? 'var(--color-success)'
+    : banner.status === 'partial'
+      ? 'var(--color-warning)'
+      : banner.status === 'error'
+        ? 'var(--color-danger)'
+        : 'var(--color-muted)';
+  el.textContent = banner.text;
+  el.style.color = color;
+}
+
 // ── MEILLEURE OPPORTUNITÉ ─────────────────────────────────────────────────
 
 function _renderBestOpportunity(container, matches, analysisIndex) {
@@ -822,8 +853,8 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
     UNDER: `Moins de ${best.ou_line ?? best.market_total ?? '—'} pts`,
   };
   const sideLabel   = SIDE_MAP[best.side] ?? best.side;
-  const oddsDecimal = best.odds_decimal ?? americanToDecimal(best.odds_line);
-  const gainPour100 = oddsDecimal ? Math.round((oddsDecimal - 1) * 100) : null;
+  const oddsDecimal = americanToDecimal(best.odds_line) ?? '—';
+  const gainPour100 = oddsDecimal !== '—' ? Math.round((oddsDecimal - 1) * 100) : null;
 
   el.style.display = 'block';
   const bestCountdown = bestMatch.datetime ? _renderCountdown(bestMatch.datetime) : '';
@@ -846,7 +877,7 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
             ${bestMatch.home_team?.abbreviation} vs ${bestMatch.away_team?.abbreviation}
           </div>
           <div style="font-size:12px;color:var(--color-muted);margin-top:3px">
-            Parier sur <strong style="color:var(--color-text)">${sideLabel}</strong> · cote <strong style="color:var(--color-signal)">${formatDecimal(oddsDecimal)}</strong>${best.odds_source ? ` <span style="color:var(--color-muted)">· ${best.odds_source}</span>` : ''}${gainPour100 ? ` <span style="color:var(--color-muted)">(+${gainPour100}€ / 100€)</span>` : ''}
+            Parier sur <strong style="color:var(--color-text)">${sideLabel}</strong> · cote <strong style="color:var(--color-signal)">${oddsDecimal}</strong>${gainPour100 ? ` <span style="color:var(--color-muted)">(+${gainPour100}€ / 100€)</span>` : ''}
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
