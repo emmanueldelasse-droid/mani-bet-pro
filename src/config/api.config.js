@@ -6,7 +6,7 @@
  *
  * Sources :
  *   ESPN   → matchs + stats avancées + cotes (gratuit, sans clé)
- *   NBA PDF → injury reports officiels (via Worker + Claude Haiku)
+ *   NBA PDF → injury reports officiels (via Worker)
  *   BDL    → forme récente W/L (via Worker + clé BallDontLie)
  */
 
@@ -29,7 +29,7 @@ export const API_CONFIG = {
   TIMEOUTS: {
     DEFAULT:  8000,
     AI:      30000,
-    INJURIES: 45000,   // Plus long — extraction PDF via Claude
+    INJURIES: 45000,   // Plus long — extraction PDF
   },
 
   // TTL cache par type de donnée (en secondes)
@@ -39,7 +39,6 @@ export const API_CONFIG = {
     RECENT_FORM:    7200,   // 2h
     INJURIES:       1800,   // 30 min
     STANDINGS:     86400,   // 24h
-    AI_EXPLANATION:  86400,  // 24h — réponse IA mise en cache
     ODDS_COMPARISON:  7200,  // 2h — adaptatif côté Worker
     RESULTS:         86400,  // 24h — scores finaux immuables
   },
