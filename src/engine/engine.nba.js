@@ -72,9 +72,9 @@ const KELLY_MAX_PCT  = 0.05;
 
 // Modificateur star absente — v5.9
 const STAR_PPG_THRESHOLD = 20;   // seuil star (ppg saison)
-const STAR_FACTOR        = 1.2;  // amplificateur impact star (à calibrer post-50 paris)
-const STAR_MAX_REDUCTION = 0.20; // plafond réduction score (-20% max)
-const STAR_TEAM_PPG_FALLBACK = 115; // ppg équipe si non disponible
+const STAR_FACTOR        = 1.4;  // amplificateur impact star (renforcé match-day)
+const STAR_MAX_REDUCTION = 0.30; // plafond réduction score (-30% max)
+const STAR_TEAM_PPG_FALLBACK = 112; // ppg équipe si non disponible
 
 export class EngineNBA {
 
@@ -89,6 +89,8 @@ export class EngineNBA {
       .map(([k]) => k);
 
     let score = null, signals = [], volatility = null, scoreMethod = null;
+    let weightsUsed = { ...weights };
+    let scoreDebug = null;
 
     if (uncalibrated.length === Object.keys(weights).length) {
       scoreMethod = 'UNCALIBRATED';
@@ -99,28 +101,36 @@ export class EngineNBA {
       score       = computed.score;
       signals     = computed.signals;
       volatility  = computed.volatility;
-      scoreMethod = 'WEIGHTED_SUM';
+      weightsUsed = computed.weights_used ?? { ...weights };
+      scoreDebug  = computed.debug ?? null;
+      scoreMethod = computed.score_method ?? 'WEIGHTED_SUM';
     }
 
-    // v5.9 : Modificateur star absente — appliqué après _computeScore
-    // Indépendant des poids — agit directement sur le score brut.
-    // Exposé dans star_absence_modifier pour traçabilité.
     let starAbsenceModifier = null;
     if (score !== null) {
       starAbsenceModifier = this._computeStarAbsenceModifier(
         matchData?.home_injuries ?? null,
-        matchData?.away_injuries ?? null
+        matchData?.away_injuries ?? null,
+        matchData?.home_season_stats?.avg_pts ?? null,
+        matchData?.away_season_stats?.avg_pts ?? null,
       );
-      if (starAbsenceModifier !== null && starAbsenceModifier < 1.0) {
+      if (starAbsenceModifier !== null && starAbsenceModifier !== 1.0) {
         score = Math.max(0, Math.min(1, Math.round(score * starAbsenceModifier * 1000) / 1000));
         scoreMethod = 'WEIGHTED_SUM+STAR_MODIFIER';
       }
     }
 
-    // Recommandations paris — priorité aux marchés normalisés provider
-    const hasOdds = matchData?.odds != null || matchData?.market_odds != null || matchData?.odds_markets != null;
+    const marketDivergence = this._computeMarketDivergence(score, matchData);
+    const confidencePenalty = this._computeConfidencePenalty(
+      matchData?.home_injuries ?? null,
+      matchData?.away_injuries ?? null,
+      marketDivergence,
+    );
+
+    // Recommandations paris — utilise ESPN odds OU The Odds API (Pinnacle)
+    const hasOdds = matchData?.odds != null || matchData?.market_odds != null;
     const bettingRecs = (score !== null && hasOdds)
-      ? this._computeBettingRecommendations(score, matchData?.odds ?? {}, matchData, variables, signals)
+      ? this._computeBettingRecommendations(score, matchData?.odds ?? {}, matchData, variables, signals, marketDivergence)
       : null;
 
     Logger.debug('ENGINE_NBA_RESULT', {
@@ -139,7 +149,21 @@ export class EngineNBA {
       missing_critical:     missingCritical,
       uncalibrated_weights: uncalibrated,
       variables_used:       variables,
+      weights_used:         weightsUsed,
       star_absence_modifier: starAbsenceModifier,
+      market_divergence:    marketDivergence,
+      confidence_penalty:   confidencePenalty,
+      debug: {
+        ...(scoreDebug ?? {}),
+        absences_impact_value: variables.absences_impact?.value ?? null,
+        star_absence_modifier: starAbsenceModifier,
+        market_implied_home: marketDivergence?.market_implied_home ?? null,
+        market_implied_away: marketDivergence?.market_implied_away ?? null,
+        market_divergence_pts: marketDivergence?.divergence_pts ?? null,
+        market_divergence_flag: marketDivergence?.flag ?? null,
+        weights_used: weightsUsed,
+        confidence_penalty: confidencePenalty,
+      },
       betting_recommendations: bettingRecs,
       computed_at:          new Date().toISOString(),
     };
@@ -279,10 +303,11 @@ export class EngineNBA {
     const signals   = [];
 
     const normalized = this._normalizeVariables(variables);
+    const weightsUsed = this._buildEffectiveWeights(weights, variables.absences_impact?.value ?? null);
 
     for (const [varId, normValue] of Object.entries(normalized)) {
       if (normValue === null) continue;
-      const weight = weights[varId];
+      const weight = weightsUsed[varId];
       if (weight === null || weight === undefined || weight === 0) continue;
 
       const contribution = normValue * weight;
@@ -315,7 +340,7 @@ export class EngineNBA {
     // v5.8 : weight_coverage = fraction des poids effectivement utilisés.
     // Ex: 0.80 = 80% des poids disponibles ont une variable non-null.
     // Transmis à engine.core.js → UI peut afficher un warning si < seuil.
-    const totalDefinedWeight = Object.entries(weights)
+    const totalDefinedWeight = Object.entries(weightsUsed)
       .filter(([, w]) => w !== null && w !== undefined && w > 0)
       .reduce((s, [, w]) => s + w, 0);
     const weightCoverage = totalDefinedWeight > 0
@@ -329,6 +354,12 @@ export class EngineNBA {
       signals,
       volatility:      this._estimateVolatility(variables),
       weight_coverage: weightCoverage,
+      weights_used:    weightsUsed,
+      score_method:    'WEIGHTED_SUM',
+      debug: {
+        predictive_score_raw: raw,
+        predictive_score_final: score,
+      },
     };
   }
 
@@ -358,6 +389,24 @@ export class EngineNBA {
     if (value === null || value === undefined) return null;
     const clamped = Math.max(min, Math.min(max, value));
     return (clamped - (min + max) / 2) / ((max - min) / 2);
+  }
+
+  static _buildEffectiveWeights(weights, absencesImpact = null) {
+    const effective = { ...weights };
+    const abs = Math.abs(absencesImpact ?? 0);
+
+    if (abs >= 0.18) {
+      effective.net_rating_diff = Math.round((effective.net_rating_diff ?? 0) * 0.82 * 1000) / 1000;
+      effective.efg_diff        = Math.round((effective.efg_diff ?? 0) * 0.85 * 1000) / 1000;
+      effective.home_away_split = Math.round((effective.home_away_split ?? 0) * 0.85 * 1000) / 1000;
+    }
+    if (abs >= 0.28) {
+      effective.net_rating_diff = Math.round((effective.net_rating_diff ?? 0) * 0.75 * 1000) / 1000;
+      effective.efg_diff        = Math.round((effective.efg_diff ?? 0) * 0.80 * 1000) / 1000;
+      effective.home_away_split = Math.round((effective.home_away_split ?? 0) * 0.80 * 1000) / 1000;
+    }
+
+    return effective;
   }
 
   // ── CALCULS SPÉCIFIQUES ───────────────────────────────────────────────────
@@ -579,55 +628,102 @@ export class EngineNBA {
    * @param {Array|null} awayInjuries
    * @returns {number|null} modificateur [0.80, 1.20] ou null
    */
-  static _computeStarAbsenceModifier(homeInjuries, awayInjuries) {
-    // v5.9 : Out + Doubtful. v5.10 : Limited ajouté (retour blessure, minutes restreintes)
+  static _computeStarAbsenceModifier(homeInjuries, awayInjuries, homeTeamPpg = null, awayTeamPpg = null) {
     const STAR_STATUSES = new Set(['Out', 'Doubtful', 'Limited']);
-    const STATUS_WEIGHT = { 'Out': 1.0, 'Doubtful': 0.75, 'Limited': 0.4 };
+    const STATUS_WEIGHT = { 'Out': 1.0, 'Doubtful': 0.75, 'Limited': 0.45 };
 
-    /**
-     * Calcule la réduction de score due aux stars absentes d'une équipe.
-     * Retourne un delta positif = réduction (ex: 0.12 = -12% sur le score).
-     */
-    const computeTeamReduction = (injuries) => {
-      if (!Array.isArray(injuries) || injuries.length === 0) return 0;
+    const computeTeamReduction = (injuries, teamPpg) => {
+      if (!Array.isArray(injuries) || injuries.length === 0) return { reduction: 0, majorCount: 0 };
 
       let totalReduction = 0;
+      let majorCount = 0;
+      const denom = teamPpg && teamPpg > 0 ? teamPpg : STAR_TEAM_PPG_FALLBACK;
 
       for (const player of injuries) {
         if (!STAR_STATUSES.has(player.status)) continue;
-
         const ppg = player.ppg ?? null;
         if (ppg === null || ppg <= STAR_PPG_THRESHOLD) continue;
-
-        // ppg disponible via IA ou Tank01
-        const sw     = STATUS_WEIGHT[player.status] ?? 0.75;
-        const impact = (ppg / STAR_TEAM_PPG_FALLBACK) * sw * STAR_FACTOR;
+        majorCount += 1;
+        const sw = STATUS_WEIGHT[player.status] ?? 0.75;
+        const impact = (ppg / denom) * sw * STAR_FACTOR;
         totalReduction += impact;
       }
 
-      // Plafonner la réduction totale à STAR_MAX_REDUCTION
-      return Math.min(totalReduction, STAR_MAX_REDUCTION);
+      let multiplier = 1;
+      if (majorCount === 2) multiplier = 1.25;
+      if (majorCount >= 3) multiplier = 1.50;
+      totalReduction *= multiplier;
+
+      return {
+        reduction: Math.min(totalReduction, STAR_MAX_REDUCTION),
+        majorCount,
+      };
     };
 
-    const homeReduction = computeTeamReduction(homeInjuries);
-    const awayReduction = computeTeamReduction(awayInjuries);
+    const home = computeTeamReduction(homeInjuries, homeTeamPpg);
+    const away = computeTeamReduction(awayInjuries, awayTeamPpg);
 
-    // Aucune star absente — pas de modification
-    if (homeReduction === 0 && awayReduction === 0) return null;
+    if (home.reduction === 0 && away.reduction === 0) return null;
 
-    // Score = probabilité domicile
-    // Si dom affaibli → score baisse → modifier < 1
-    // Si ext affaibli → score monte → modifier > 1
-    // Formule : modifier = (1 - homeReduction) / (1 - awayReduction)
-    // Exemple SA vs POR avec Wemby Doubtful :
-    //   homeReduction = (24.8/115) × 0.75 × 1.2 = 0.194 → min(0.194, 0.20) = 0.194
-    //   awayReduction = 0
-    //   modifier = (1 - 0.194) / (1 - 0) = 0.806 → score SA : 0.89 × 0.806 = 0.717
+    const modifier = (1 - home.reduction) / (1 - away.reduction);
+    return Math.round(Math.max(0.70, Math.min(1.30, modifier)) * 1000) / 1000;
+  }
 
-    const modifier = (1 - homeReduction) / (1 - awayReduction);
+  static _computeConfidencePenalty(homeInjuries, awayInjuries, marketDivergence = null) {
+    const STATUS_WEIGHT = { 'Out': 1.0, 'Doubtful': 0.70, 'Questionable': 0.35, 'Day-To-Day': 0.30, 'GTD': 0.30, 'Limited': 0.45 };
+    const scoreSide = injuries => {
+      if (!Array.isArray(injuries)) return 0;
+      return injuries.reduce((sum, p) => {
+        const ppg = Number(p?.ppg ?? 0) || 0;
+        const statusWeight = STATUS_WEIGHT[p?.status] ?? 0;
+        const roleWeight = ppg >= 20 ? 1.0 : ppg >= 12 ? 0.6 : 0.25;
+        return sum + statusWeight * roleWeight;
+      }, 0);
+    };
 
-    // Clamp final entre 0.75 et 1.25 (sécurité)
-    return Math.round(Math.max(0.75, Math.min(1.25, modifier)) * 1000) / 1000;
+    let penalty = 0;
+    const homeScore = scoreSide(homeInjuries);
+    const awayScore = scoreSide(awayInjuries);
+    const uncertaintyScore = homeScore + awayScore;
+
+    if (uncertaintyScore >= 1.5) penalty += 0.05;
+    if (uncertaintyScore >= 2.5) penalty += 0.05;
+    if (marketDivergence?.flag === 'high') penalty += 0.08;
+    if (marketDivergence?.flag === 'critical') penalty += 0.15;
+
+    return {
+      score: Math.min(0.25, Math.round(penalty * 1000) / 1000),
+      uncertainty_score: Math.round(uncertaintyScore * 1000) / 1000,
+    };
+  }
+
+  static _computeMarketDivergence(score, matchData) {
+    if (score === null || score === undefined) return null;
+    const marketOdds = matchData?.market_odds ?? null;
+    const odds = matchData?.odds ?? null;
+
+    const decToProb = d => d && d > 1 ? 1 / d : null;
+    const amToProb = n => n != null ? americanToProb(Number(n)) : null;
+
+    const homeProb = marketOdds?.home_ml_decimal ? decToProb(marketOdds.home_ml_decimal) : amToProb(odds?.home_ml);
+    const awayProb = marketOdds?.away_ml_decimal ? decToProb(marketOdds.away_ml_decimal) : amToProb(odds?.away_ml);
+    if (homeProb == null || awayProb == null) return null;
+
+    const motorHome = score;
+    const motorAway = 1 - score;
+    const divergencePts = Math.round(Math.max(Math.abs(motorHome - homeProb), Math.abs(motorAway - awayProb)) * 100);
+
+    let flag = 'low';
+    if (divergencePts >= 28) flag = 'critical';
+    else if (divergencePts >= 20) flag = 'high';
+    else if (divergencePts >= 12) flag = 'medium';
+
+    return {
+      market_implied_home: Math.round(homeProb * 1000) / 1000,
+      market_implied_away: Math.round(awayProb * 1000) / 1000,
+      divergence_pts: divergencePts,
+      flag,
+    };
   }
 
   static _computeBackToBack(data) {
@@ -672,179 +768,193 @@ export class EngineNBA {
 
   // ── RECOMMANDATIONS PARIS ─────────────────────────────────────────────────
 
-  static _computeBettingRecommendations(score, odds, matchData, variables, signals = []) {
+  static _computeBettingRecommendations(score, odds, matchData, variables, signals = [], marketDivergence = null) {
     const recs = [];
     const marketOdds = matchData?.market_odds ?? null;
-    const markets = matchData?.odds_markets ?? marketOdds?.odds_markets ?? {
-      moneyline: marketOdds?.moneyline ?? null,
-      spread: marketOdds?.spread ?? null,
-      total: marketOdds?.total ?? null,
-    };
+    const isCriticalDivergence = marketDivergence?.flag === 'critical';
 
-    const moneylineMarket = (markets?.moneyline?.available)
-      ? markets.moneyline
-      : this._buildMoneylineMarketFromESPN(odds);
-    const spreadMarket = markets?.spread?.available ? markets.spread : null;
-    const totalMarket  = markets?.total?.available  ? markets.total  : null;
+    // Construire les cotes de référence.
+    // Priorité : Winamax (bookmaker principal) > Pinnacle > premier disponible.
+    // Winamax = cotes réelles disponibles pour parier.
+    // Pinnacle = fallback si Winamax absent (marché le plus efficient).
+    const pinnacle = marketOdds?.bookmakers?.find(b => b.key === 'winamax')
+                  ?? marketOdds?.bookmakers?.find(b => b.key === 'pinnacle')
+                  ?? marketOdds?.bookmakers?.[0]
+                  ?? null;
+
+    // Cotes décimales Pinnacle → américaines pour le calcul interne
+    const _decToAm = d => d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1));
+
+    const espnOdds = odds ?? {};
+    const normalizedOdds = {
+      home_ml:    espnOdds.home_ml    != null ? Number(espnOdds.home_ml)
+                : pinnacle?.home_ml   != null ? _decToAm(pinnacle.home_ml)
+                : null,
+      away_ml:    espnOdds.away_ml    != null ? Number(espnOdds.away_ml)
+                : pinnacle?.away_ml   != null ? _decToAm(pinnacle.away_ml)
+                : null,
+      spread:     espnOdds.spread     != null ? Number(espnOdds.spread)
+                : pinnacle?.spread_line != null ? Number(pinnacle.spread_line)
+                : null,
+      over_under: espnOdds.over_under != null ? Number(espnOdds.over_under)
+                : pinnacle?.total_line != null ? Number(pinnacle.total_line)
+                : null,
+    };
 
     const pHome = score;
     const pAway = 1 - score;
 
     // ── MONEYLINE ────────────────────────────────────────────────────────
-    if (moneylineMarket?.available && moneylineMarket.home_american !== null && moneylineMarket.away_american !== null) {
-      const impliedHome = americanToProb(moneylineMarket.home_american);
-      const impliedAway = americanToProb(moneylineMarket.away_american);
+    if (normalizedOdds.home_ml !== null && normalizedOdds.away_ml !== null) {
+      const impliedHome = americanToProb(normalizedOdds.home_ml);
+      const impliedAway = americanToProb(normalizedOdds.away_ml);
       const edgeHome    = pHome - impliedHome;
       const absEdge     = Math.abs(edgeHome);
 
-      const homeOdds = moneylineMarket.home_american;
-      const awayOdds = moneylineMarket.away_american;
-      const isExtreme = (edgeHome > 0 && homeOdds > 400) || (edgeHome < 0 && awayOdds > 400);
+      const isExtreme = (edgeHome > 0 && normalizedOdds.home_ml > 400) ||
+                        (edgeHome < 0 && normalizedOdds.away_ml > 400);
 
       if (absEdge >= EDGE_THRESHOLDS.MONEYLINE && !isExtreme) {
         const side        = edgeHome > 0 ? 'HOME' : 'AWAY';
+        const dkOdds      = side === 'HOME' ? normalizedOdds.home_ml : normalizedOdds.away_ml;
         const motorProb   = side === 'HOME' ? pHome : pAway;
-        const impliedProb = side === 'HOME' ? impliedHome : impliedAway;
-        const american    = side === 'HOME' ? homeOdds : awayOdds;
-        const decimal     = side === 'HOME' ? moneylineMarket.home_decimal : moneylineMarket.away_decimal;
-        const realEdge    = motorProb - impliedProb;
-        const isContrarian = (side === 'HOME' && score <= 0.5) || (side === 'AWAY' && score > 0.5);
+        const bestBook    = this._getBestBookOdds(marketOdds, side, 'h2h');
+        const bestOdds    = bestBook?.odds ?? dkOdds;
+        const bestImplied = americanToProb(bestOdds);
+        const realEdge    = motorProb - bestImplied;
+        const kelly       = this._computeKelly(motorProb, bestOdds);
 
-        recs.push(this._buildBetRecommendation({
-          type: 'MONEYLINE',
-          label: 'Vainqueur du match',
-          side,
-          book_key: moneylineMarket.book_key,
-          book_title: moneylineMarket.book_title,
-          american_odds: american,
-          decimal_odds: decimal,
-          model_prob: motorProb,
-          implied_prob: impliedProb,
-          edge: realEdge,
+        // is_contrarian : vrai quand on parie sur l'équipe défavorisée par le moteur
+        // Ex: score=0.56 (Boston favori) mais edge sur Charlotte → is_contrarian=true
+        const isContrarian = (side === 'HOME' && score <= 0.5) || (side === 'AWAY' && score > 0.5);
+        recs.push({
+          type: 'MONEYLINE', label: 'Vainqueur du match', side,
+          odds_line: bestOdds, odds_source: bestBook?.bookmaker ?? 'DraftKings', odds_dk: dkOdds,
+          motor_prob: Math.round(motorProb * 100), implied_prob: Math.round(bestImplied * 100),
+          edge: Math.round(Math.abs(realEdge) * 100),
           confidence: this._edgeToConfidence(Math.abs(realEdge)),
-          kelly_stake: this._computeKelly(motorProb, american),
+          has_value: true, kelly_stake: kelly,
           is_contrarian: isContrarian,
-          line: null,
-        }));
+        });
       }
     }
 
     // ── SPREAD ───────────────────────────────────────────────────────────
-    if (spreadMarket?.available && spreadMarket.line !== null) {
-      const spreadLine = Number(spreadMarket.line);
-      const NBA_SIGMA  = 12;
-      const marketMargin = -spreadLine;
+    // La probabilité de couvrir un spread n'est pas la même que la probabilité
+    // de gagner le match. Conversion via distribution normale NBA (σ ~12 pts).
+    // P(couvrir spread S) = P(marge victoire > S) = 1 - Φ((S - μ) / σ)
+    if (normalizedOdds.spread !== null) {
+      const spreadLine = normalizedOdds.spread; // négatif = favori domicile
+      const NBA_SIGMA  = 12; // écart-type historique des marges NBA
+
+      // Ancre principale : spread Pinnacle = meilleur prédicteur de marge
+      // Adjustment moteur : delta marginal depuis signaux clés (±8 pts max)
+      // v5.5 : net_rating_diff ajouté — meilleur prédicteur de marge disponible
+      const marketMargin   = -spreadLine;
       const _sig = (id) => (signals.find(s => s.variable === id)?.normalized ?? 0);
-      const adjustment = _sig('net_rating_diff') * 3.0
-                       + _sig('efg_diff') * 1.5
-                       + _sig('recent_form_ema') * 1.0
-                       + _sig('absences_impact') * 2.5;
+      const adjustment     = _sig("net_rating_diff") * 3.0
+                           + _sig("efg_diff")         * 1.5
+                           + _sig("recent_form_ema")  * 1.0
+                           + _sig("absences_impact")  * 2.5;
       const expectedMargin = marketMargin + Math.max(-8, Math.min(8, adjustment));
+
+      // P(domicile couvre spread) = P(marge > spreadLine)
+      // spread négatif = domicile favori, doit gagner de plus que |spread|
       const zHome = ((-spreadLine) - expectedMargin) / NBA_SIGMA;
       const pSpreadHome = 1 - this._normalCDF(zHome);
-      const pSpreadAway = 1 - pSpreadHome;
 
-      const impliedHome = decimalToProb(spreadMarket.home_decimal);
-      const impliedAway = decimalToProb(spreadMarket.away_decimal);
+      // Comparer à la probabilité implicite Pinnacle
+      const bestHome = this._getBestBookOdds(marketOdds, 'HOME', 'spreads');
+      const bestAway = this._getBestBookOdds(marketOdds, 'AWAY', 'spreads');
 
-      if (impliedHome !== null) {
-        const edgeHome = pSpreadHome - impliedHome;
-        if (edgeHome >= EDGE_THRESHOLDS.SPREAD) {
-          recs.push(this._buildBetRecommendation({
-            type: 'SPREAD',
-            label: 'Handicap (spread)',
-            side: 'HOME',
-            book_key: spreadMarket.book_key,
-            book_title: spreadMarket.book_title,
-            american_odds: spreadMarket.home_american,
-            decimal_odds: spreadMarket.home_decimal,
-            model_prob: pSpreadHome,
-            implied_prob: impliedHome,
-            edge: edgeHome,
-            confidence: this._edgeToConfidence(edgeHome),
-            kelly_stake: this._computeKelly(pSpreadHome, spreadMarket.home_american),
+      const checkSpreadSide = (motorProb, bestBook, side, sLine) => {
+        if (!bestBook) return;
+        const impliedProb = decimalToProb(bestBook.decimalOdds);
+        if (impliedProb === null) return;
+        const edge = motorProb - impliedProb;
+        if (edge >= EDGE_THRESHOLDS.SPREAD) {
+          recs.push({
+            type: 'SPREAD', label: 'Handicap (spread)', side,
+            odds_line: bestBook.odds, odds_decimal: bestBook.decimalOdds, odds_source: bestBook.bookmaker,
+            spread_line: sLine,
+            motor_prob: Math.round(motorProb * 100), implied_prob: Math.round(impliedProb * 100),
+            edge: Math.round(edge * 100), confidence: this._edgeToConfidence(edge),
+            has_value: true, kelly_stake: this._computeKelly(motorProb, bestBook.odds),
             is_contrarian: false,
-            line: spreadLine,
-          }));
+          });
         }
-      }
+      };
 
-      if (impliedAway !== null) {
-        const edgeAway = pSpreadAway - impliedAway;
-        if (edgeAway >= EDGE_THRESHOLDS.SPREAD) {
-          recs.push(this._buildBetRecommendation({
-            type: 'SPREAD',
-            label: 'Handicap (spread)',
-            side: 'AWAY',
-            book_key: spreadMarket.book_key,
-            book_title: spreadMarket.book_title,
-            american_odds: spreadMarket.away_american,
-            decimal_odds: spreadMarket.away_decimal,
-            model_prob: pSpreadAway,
-            implied_prob: impliedAway,
-            edge: edgeAway,
-            confidence: this._edgeToConfidence(edgeAway),
-            kelly_stake: this._computeKelly(pSpreadAway, spreadMarket.away_american),
-            is_contrarian: false,
-            line: -spreadLine,
-            spread_line_display: spreadLine,
-          }));
-        }
-      }
+      checkSpreadSide(pSpreadHome,       bestHome, 'HOME',  spreadLine);
+      checkSpreadSide(1 - pSpreadHome,   bestAway, 'AWAY', -spreadLine);
     }
 
     // ── OVER/UNDER ───────────────────────────────────────────────────────
-    if (totalMarket?.available && totalMarket.line !== null) {
+    // CORRECTION v5.1 : motor_prob et implied_prob sont des probabilités (0-100)
+    // et non des points. Les champs predicted_total et market_total portent
+    // les valeurs en points pour l'affichage UI.
+    if (normalizedOdds.over_under !== null) {
       const homeAvgPtsRaw = matchData?.home_season_stats?.avg_pts;
       const awayAvgPtsRaw = matchData?.away_season_stats?.avg_pts;
+      // Guard live ESPN : avg_pts < 60 ou > 140 = score partiel de match en cours
       const isLiveData = (homeAvgPtsRaw != null && (homeAvgPtsRaw < 60 || homeAvgPtsRaw > 140))
                       || (awayAvgPtsRaw != null && (awayAvgPtsRaw < 60 || awayAvgPtsRaw > 140));
       const homeAvgPts = isLiveData ? null : homeAvgPtsRaw;
       const awayAvgPts = isLiveData ? null : awayAvgPtsRaw;
 
       if (homeAvgPts != null && awayAvgPts != null) {
-        const ouLine = Number(totalMarket.line);
+        const ouLine = normalizedOdds.over_under;
+
+        // v5.5 : déduction blessures sur avg_pts avant projection.
+        // impact_score par équipe = fraction du scoring perdu (0=intact, 1=décimée).
+        // On déduit jusqu'à ~15% du scoring en cas d'équipe très affectée.
+        // absences_impact > 0 = domicile affaibli / < 0 = visiteur affaibli.
         const absImpact  = variables?.absences_impact?.value ?? 0;
+        // Conversion : absences_impact [-1,1] → pts perdus par équipe
+        // Domicile affaibli (absImpact > 0) → réduit homeAvgPts
+        // Visiteur affaibli (absImpact < 0) → réduit awayAvgPts
         const homeInjAdj = absImpact > 0 ? -homeAvgPts * absImpact * 0.12 : 0;
         const awayInjAdj = absImpact < 0 ? -awayAvgPts * Math.abs(absImpact) * 0.12 : 0;
+
+        // Ajustement pace si disponible
         const paceDiff = variables?.pace_diff?.value ?? null;
         const paceAdj  = paceDiff !== null ? paceDiff * 0.5 : 0;
 
         const projectedTotal = homeAvgPts + homeInjAdj + awayAvgPts + awayInjAdj + paceAdj;
         const diff           = projectedTotal - ouLine;
         const side           = diff > 0 ? 'OVER' : 'UNDER';
-        const motorProb      = 0.50 + 0.15 * (1 - Math.exp(-Math.abs(diff) / 12));
-        const decimalOdds    = side === 'OVER' ? totalMarket.over_decimal : totalMarket.under_decimal;
-        const impliedProb    = decimalToProb(decimalOdds);
-        const americanOdds   = side === 'OVER' ? totalMarket.over_american : totalMarket.under_american;
+        const bestOUBook     = this._getBestBookOdds(marketOdds, side, 'totals');
 
-        if (impliedProb !== null) {
-          const edge = motorProb - impliedProb;
-          if (edge >= EDGE_THRESHOLDS.OVER_UNDER) {
-            const adjParts = [];
-            if (paceDiff !== null) adjParts.push(`pace ${paceAdj > 0 ? '+' : ''}${paceAdj.toFixed(1)}`);
-            if (homeInjAdj !== 0) adjParts.push(`inj.dom ${homeInjAdj.toFixed(1)}`);
-            if (awayInjAdj !== 0) adjParts.push(`inj.ext ${awayInjAdj.toFixed(1)}`);
-            const adjNote = adjParts.length > 0 ? ` (${adjParts.join(', ')})` : '';
+        if (bestOUBook) {
+          // motorProb = probabilité estimée que l'OVER/UNDER se réalise (0-1)
+          // Sigmoid calibrée sur sigma NBA (~12 pts) — asymptote 65% max
+          // diff=5pts → ~56%, diff=10pts → ~60%, diff=15pts → ~63%
+          const motorProb   = 0.50 + 0.15 * (1 - Math.exp(-Math.abs(diff) / 12));
+          const impliedProb = decimalToProb(bestOUBook.decimalOdds);
+          if (impliedProb !== null) {
+            const edge = motorProb - impliedProb;
+            if (edge >= EDGE_THRESHOLDS.OVER_UNDER) {
+              // Construire la note avec les ajustements actifs
+              const adjParts = [];
+              if (paceDiff !== null) adjParts.push(`pace ${paceAdj > 0 ? '+' : ''}${paceAdj.toFixed(1)}`);
+              if (homeInjAdj !== 0) adjParts.push(`inj.dom ${homeInjAdj.toFixed(1)}`);
+              if (awayInjAdj !== 0) adjParts.push(`inj.ext ${awayInjAdj.toFixed(1)}`);
+              const adjNote = adjParts.length > 0 ? ` (${adjParts.join(', ')})` : '';
 
-            recs.push(this._buildBetRecommendation({
-              type: 'OVER_UNDER',
-              label: 'Total de points',
-              side,
-              book_key: totalMarket.book_key,
-              book_title: totalMarket.book_title,
-              american_odds: americanOdds,
-              decimal_odds: decimalOdds,
-              model_prob: motorProb,
-              implied_prob: impliedProb,
-              edge,
-              confidence: this._edgeToConfidence(edge),
-              kelly_stake: this._computeKelly(motorProb, americanOdds),
-              line: ouLine,
-              note: `Projection ${Math.round(projectedTotal)} pts${adjNote} · ligne ${ouLine}`,
-              predicted_total: Math.round(projectedTotal),
-              market_total: ouLine,
-            }));
+              recs.push({
+                type: 'OVER_UNDER', label: 'Total de points', side,
+                odds_line: bestOUBook.odds, odds_decimal: bestOUBook.decimalOdds, odds_source: bestOUBook.bookmaker,
+                ou_line: ouLine,
+                motor_prob:      Math.round(motorProb * 100),
+                implied_prob:    Math.round(impliedProb * 100),
+                predicted_total: Math.round(projectedTotal),
+                market_total:    ouLine,
+                edge: Math.round(edge * 100), confidence: this._edgeToConfidence(edge),
+                has_value: true,
+                note: `Projection ${Math.round(projectedTotal)} pts${adjNote} · ligne ${ouLine}`,
+                kelly_stake: this._computeKelly(motorProb, bestOUBook.odds),
+              });
+            }
           }
         }
       }
@@ -852,64 +962,13 @@ export class EngineNBA {
 
     recs.sort((a, b) => b.edge - a.edge);
     const validRecs = recs.filter(r => r.has_value);
-    return { recommendations: validRecs, best: validRecs[0] ?? null, computed_at: new Date().toISOString() };
-  }
-
-  static _buildMoneylineMarketFromESPN(odds = {}) {
-    const homeAmerican = odds?.home_ml != null ? Number(odds.home_ml) : null;
-    const awayAmerican = odds?.away_ml != null ? Number(odds.away_ml) : null;
-    if (homeAmerican === null || awayAmerican === null) return null;
     return {
-      available: true,
-      market_type: 'moneyline',
-      book_key: 'espn',
-      book_title: odds?.source ?? 'ESPN',
-      home_american: homeAmerican,
-      away_american: awayAmerican,
-      home_decimal: this._americanToDecimal(homeAmerican),
-      away_decimal: this._americanToDecimal(awayAmerican),
+      recommendations: validRecs,
+      best: isCriticalDivergence ? null : (validRecs[0] ?? null),
+      computed_at: new Date().toISOString(),
+      market_divergence_flag: marketDivergence?.flag ?? 'low',
+      market_divergence_pts: marketDivergence?.divergence_pts ?? null,
     };
-  }
-
-  static _americanToDecimal(americanOdds) {
-    const a = Number(americanOdds);
-    if (!Number.isFinite(a) || a === 0) return null;
-    return a > 0 ? Math.round((1 + a / 100) * 1000) / 1000 : Math.round((1 + 100 / Math.abs(a)) * 1000) / 1000;
-  }
-
-  static _buildBetRecommendation({
-    type, label, side, book_key = null, book_title = null, american_odds = null, decimal_odds = null,
-    model_prob, implied_prob, edge, confidence, kelly_stake = null, is_contrarian = false,
-    line = null, note = null, predicted_total = null, market_total = null, spread_line_display = null,
-  }) {
-    const recommendation = {
-      type,
-      label,
-      side,
-      odds_line: american_odds,
-      odds_decimal: decimal_odds,
-      odds_source: book_title ?? book_key ?? 'Unknown',
-      odds_book_key: book_key,
-      motor_prob: Math.round(model_prob * 100),
-      implied_prob: Math.round(implied_prob * 100),
-      edge: Math.round(edge * 100),
-      confidence,
-      has_value: true,
-      kelly_stake,
-      is_contrarian,
-      market_line: line,
-      note: note ?? null,
-    };
-
-    if (type === 'SPREAD') {
-      recommendation.spread_line = spread_line_display ?? line;
-    }
-    if (type === 'OVER_UNDER') {
-      recommendation.ou_line = line;
-      recommendation.predicted_total = predicted_total;
-      recommendation.market_total = market_total;
-    }
-    return recommendation;
   }
 
   static _computeKelly(p, americanOdds) {

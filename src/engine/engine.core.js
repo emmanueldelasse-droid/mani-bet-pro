@@ -113,7 +113,8 @@ export class EngineCore {
     const confidenceLevel = this._computeConfidenceLevel(
       cappedScore,
       robustness.score,
-      dataQuality.score
+      dataQuality.score,
+      engineResult.confidence_penalty?.score ?? 0,
     );
 
     const noOdds  = !rawData?.odds && !rawData?.market_odds;
@@ -162,6 +163,9 @@ export class EngineCore {
       weight_coverage:         engineResult.weight_coverage ?? null,
       score_method:            engineResult.score_method ?? null,
       star_absence_modifier:   engineResult.star_absence_modifier ?? null,
+      market_divergence:       engineResult.market_divergence ?? null,
+      confidence_penalty:      engineResult.confidence_penalty ?? null,
+      debug:                   engineResult.debug ?? null,
       betting_recommendations: engineResult.betting_recommendations ?? null,
       // v2.3 : distingue "pas d'edge" de "pas de cotes disponibles"
       no_odds_available: !rawData?.odds && !rawData?.market_odds,
