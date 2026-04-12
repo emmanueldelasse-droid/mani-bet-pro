@@ -54,6 +54,7 @@ const INITIAL_STATE = {
   // ── Dashboard snapshot / synchronisation ───────────────────────────────
   teamDetails: {},
   injuryReport: null,
+  recentForms: {},
   dashboardCacheAt: null,
   refreshSync: {
     status: 'muted',
@@ -212,6 +213,7 @@ class Store {
       'analyses',
       'teamDetails',
       'injuryReport',
+      'recentForms',
       'dashboardCacheAt',
       'refreshSync',
     ];

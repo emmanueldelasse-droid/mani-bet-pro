@@ -103,6 +103,7 @@ function _persistState() {
       analyses: state.analyses,
       teamDetails: state.teamDetails,
       injuryReport: state.injuryReport,
+      recentForms: state.recentForms,
       dashboardCacheAt: state.dashboardCacheAt,
       refreshSync: state.refreshSync,
       ui: {
@@ -186,6 +187,7 @@ async function init() {
     'analyses',
     'teamDetails',
     'injuryReport',
+    'recentForms',
     'dashboardCacheAt',
     'refreshSync',
     'history',

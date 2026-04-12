@@ -206,17 +206,21 @@ export class DataOrchestrator {
       // FIX 3 : _loadAIInjuries bloquant — moteur attend Claude avant de calculer
       // Claude retourne injuries+PPG+contexte en 8-12s (cache KV 6h après)
       // Fallback ESPN transparent si Claude timeout ou indisponible
+      const existingRecentForms = store.get('recentForms') ?? {};
       const [injuryReport, aiInjuries, recentForms, oddsComparison, advancedStats] = await Promise.all([
         _loadInjuries(date),              // ESPN fallback (statuts basiques)
         _loadAIInjuries(matches, date, store, options),
-        _loadRecentForms(teamIds, season),
+        _loadRecentForms(teamIds, season, existingRecentForms),
         _loadOddsComparison(),
         _loadAdvancedStats(),
       ]);
 
       // Merger ESPN + Claude → injuryReport enrichi avec vrais PPG
       const mergedInjuryReport = _mergeInjuryReports(injuryReport, aiInjuries);
-      store.set({ injuryReport: mergedInjuryReport });
+      store.set({
+        injuryReport: mergedInjuryReport,
+        recentForms,
+      });
 
       // Pré-charger teamDetail pour tous les matchs (non bloquant)
       _preloadTeamDetails(matches).then(function(teamDetails) {
@@ -729,17 +733,39 @@ function _mergeInjuryReports(espnReport, aiData) {
   });
 }
 
-async function _loadRecentForms(teamIds, season) {
+async function _loadRecentForms(teamIds, season, existingForms = {}) {
   const forms = {};
   const BATCH_SIZE  = 6;
   const BATCH_DELAY = 200;
+  const FRESH_TTL_MS = 2 * 60 * 60 * 1000;
 
-  for (let i = 0; i < teamIds.length; i += BATCH_SIZE) {
-    const batch = teamIds.slice(i, i + BATCH_SIZE);
+  const idsToFetch = [];
+
+  teamIds.forEach(function(bdlId) {
+    const cached = existingForms[bdlId];
+    const sameSeason = String(cached?.season ?? '') === String(season);
+    const fetchedAt = cached?.fetched_at ? new Date(cached.fetched_at).getTime() : 0;
+    const isFresh = fetchedAt && (Date.now() - fetchedAt) < FRESH_TTL_MS;
+    const hasMatches = Array.isArray(cached?.matches) && cached.matches.length > 0;
+
+    if (sameSeason && isFresh && hasMatches) {
+      forms[bdlId] = cached;
+    } else {
+      idsToFetch.push(bdlId);
+    }
+  });
+
+  if (idsToFetch.length === 0) {
+    Logger.info('RECENT_FORMS_REUSED', { teams: Object.keys(forms).length, fetched: 0 });
+    return forms;
+  }
+
+  for (let i = 0; i < idsToFetch.length; i += BATCH_SIZE) {
+    const batch = idsToFetch.slice(i, i + BATCH_SIZE);
 
     LoadingUI.update(
-      'Forme récente (' + Math.min(i + BATCH_SIZE, teamIds.length) + '/' + teamIds.length + ')...',
-      20 + Math.round((i / teamIds.length) * 40)
+      'Forme récente (' + Math.min(i + BATCH_SIZE, idsToFetch.length) + '/' + idsToFetch.length + ')...',
+      20 + Math.round((i / Math.max(idsToFetch.length, 1)) * 40)
     );
 
     await Promise.allSettled(
@@ -751,10 +777,16 @@ async function _loadRecentForms(teamIds, season) {
       })
     );
 
-    if (i + BATCH_SIZE < teamIds.length) {
+    if (i + BATCH_SIZE < idsToFetch.length) {
       await new Promise(function(r) { setTimeout(r, BATCH_DELAY); });
     }
   }
+
+  Logger.info('RECENT_FORMS_REUSED', {
+    teams: Object.keys(forms).length,
+    reused: teamIds.length - idsToFetch.length,
+    fetched: idsToFetch.length,
+  });
 
   return forms;
 }
