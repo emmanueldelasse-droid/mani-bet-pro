@@ -78,28 +78,49 @@ import { LoadingUI }        from '../ui/ui.loading.js';
 import { API_CONFIG }       from '../config/api.config.js';
 
 
-const HEAVY_REFRESH_HOURS_PARIS = [12, 23];
 
-function _getParisNowParts() {
+const HEAVY_REFRESH_HOURS_PARIS = [12, 23];
+const HEAVY_REFRESH_WINDOW_MINUTES = 15;
+
+function _getParisNowInfo() {
   try {
     const now = new Date();
-    const parts = new Intl.DateTimeFormat('fr-FR', {
+    const parts = new Intl.DateTimeFormat('fr-CA', {
       timeZone: 'Europe/Paris',
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
     }).formatToParts(now);
+
     const out = {};
     parts.forEach(function(part) {
       if (part.type !== 'literal') out[part.type] = part.value;
     });
+
+    const year = out.year;
+    const month = out.month;
+    const day = out.day;
+    const hour = parseInt(out.hour || '0', 10);
+    const minute = parseInt(out.minute || '0', 10);
+
     return {
-      date: out.year + '-' + out.month + '-' + out.day,
-      hour: parseInt(out.hour || '0', 10),
+      date: year + '-' + month + '-' + day,
+      hour: hour,
+      minute: minute,
+      minutes: (hour * 60) + minute,
+      timeLabel: String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0'),
     };
   } catch (err) {
     const now = new Date();
     return {
       date: now.toISOString().slice(0, 10),
       hour: now.getHours(),
+      minute: now.getMinutes(),
+      minutes: (now.getHours() * 60) + now.getMinutes(),
+      timeLabel: String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0'),
     };
   }
 }
@@ -109,30 +130,47 @@ function _normalizeDateKey(date) {
 }
 
 function _getActiveRefreshWindow(date) {
-  const paris = _getParisNowParts();
+  const paris = _getParisNowInfo();
   const normalizedDate = _normalizeDateKey(date);
-  if (normalizedDate !== paris.date) return null;
-  if (HEAVY_REFRESH_HOURS_PARIS.indexOf(paris.hour) === -1) return null;
-  return normalizedDate + '@' + String(paris.hour).padStart(2, '0');
+
+  if (normalizedDate !== paris.date) {
+    return { isToday: false, windowKey: null, timeLabel: paris.timeLabel };
+  }
+
+  const inWindow = HEAVY_REFRESH_HOURS_PARIS.find(function(hour) {
+    return paris.hour === hour && paris.minute < HEAVY_REFRESH_WINDOW_MINUTES;
+  });
+
+  if (typeof inWindow !== 'number') {
+    return { isToday: true, windowKey: null, timeLabel: paris.timeLabel };
+  }
+
+  return {
+    isToday: true,
+    windowKey: normalizedDate + '@' + String(inWindow).padStart(2, '0'),
+    timeLabel: paris.timeLabel,
+  };
 }
 
 function _canRunHeavyRefresh(date, store) {
-  const activeWindow = _getActiveRefreshWindow(date);
-  if (!activeWindow) return false;
+  const refreshWindow = _getActiveRefreshWindow(date);
+  if (!refreshWindow.windowKey) return false;
   const refreshMeta = (store && store.get && store.get('refreshMeta')) || {};
-  return refreshMeta.lastHeavyWindow !== activeWindow;
+  return refreshMeta.lastHeavyWindow !== refreshWindow.windowKey;
 }
 
 function _markHeavyRefreshDone(date, store, extra) {
   if (!store || !store.set) return;
-  const paris = _getParisNowParts();
+  const paris = _getParisNowInfo();
+  const refreshWindow = _getActiveRefreshWindow(date);
   store.set({
     refreshMeta: Object.assign({}, (store.get && store.get('refreshMeta')) || {}, extra || {}, {
-      lastHeavyWindow: _getActiveRefreshWindow(date),
-      lastHeavyRefreshAt: paris.date + 'T' + String(paris.hour).padStart(2, '0') + ':00',
+      lastHeavyWindow: refreshWindow.windowKey,
+      lastHeavyRefreshAt: paris.date + 'T' + paris.timeLabel,
     }),
   });
 }
+
 
 // Mapping nom équipe ESPN vers ID BallDontLie (officiel NBA 1-30)
 const TEAM_NAME_TO_BDL_ID = {
@@ -328,6 +366,44 @@ export class DataOrchestrator {
       return null;
     }
   }
+static shouldServeCachedDashboard(date, store) {
+  const cachedAnalyses = store.get('analyses') ?? {};
+  const cachedMatches = store.get('matches') ?? {};
+  const cachedDate = store.get('dashboardFilters')?.selectedDate ?? null;
+  const hasCache = cachedDate === date &&
+    Object.keys(cachedAnalyses).length > 0 &&
+    Object.keys(cachedMatches).length > 0;
+
+  if (!hasCache) return false;
+
+  const refreshWindow = _getActiveRefreshWindow(date);
+  const refreshMeta = store.get('refreshMeta') ?? {};
+
+  if (!refreshWindow.isToday) return true;
+  if (!refreshWindow.windowKey) return true;
+
+  return refreshMeta.lastHeavyWindow === refreshWindow.windowKey;
+}
+
+static getRefreshBanner(store) {
+  const refreshMeta = store.get('refreshMeta') ?? {};
+  const lastAt = refreshMeta.lastHeavyRefreshAt
+    ? String(refreshMeta.lastHeavyRefreshAt).slice(11, 16)
+    : '—';
+
+  if (refreshMeta.status === 'success') {
+    return { status: 'success', text: '● Données synchronisées · ' + lastAt };
+  }
+  if (refreshMeta.status === 'partial') {
+    return { status: 'partial', text: '● Mise à jour partielle · blessures en cache' };
+  }
+  if (refreshMeta.status === 'error') {
+    return { status: 'error', text: '● Refresh échoué · dernière version conservée' };
+  }
+  return { status: 'muted', text: '● Dernière version en cache affichée' };
+}
+
+
 
   /**
    * Construit les données brutes pour le moteur NBA.
