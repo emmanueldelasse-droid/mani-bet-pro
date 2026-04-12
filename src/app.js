@@ -22,11 +22,9 @@ import { router }        from './ui/ui.router.js';
 import { ProviderCache } from './providers/provider.cache.js';
 import { PaperSettler }  from './paper/paper.settler.js';
 import { PaperEngine }   from './paper/paper.engine.js';
-import { Logger }          from './utils/utils.logger.js';
-import { APP_CONFIG }      from './config/sports.config.js';
+import { Logger }        from './utils/utils.logger.js';
+import { APP_CONFIG }    from './config/sports.config.js';
 import { initThemeToggle } from './ui/ui.theme-toggle.js';
-
-// ── THEME ─────────────────────────────────────────────────────────────────
 
 // ── SETTLER POLLING ───────────────────────────────────────────────────────
 

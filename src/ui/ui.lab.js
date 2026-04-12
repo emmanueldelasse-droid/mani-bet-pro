@@ -1,9 +1,8 @@
 export async function render(container) {
   container.innerHTML = `
-    <section class="card" style="padding:16px">
-      <div class="section-title">Laboratoire</div>
-      <div class="text-muted" style="margin-top:8px">Cette vue n'est pas encore branchée. Le reste de l'application continue de fonctionner normalement.</div>
-    </section>
-  `;
+    <div class="card" style="padding:20px">
+      <div style="font-size:18px;font-weight:700;margin-bottom:8px">Laboratoire</div>
+      <div class="text-muted" style="font-size:13px;line-height:1.7">Espace réservé. Rien d'essentiel n'est chargé ici.</div>
+    </div>`;
   return { destroy() {} };
 }

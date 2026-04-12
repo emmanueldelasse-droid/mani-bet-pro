@@ -201,8 +201,8 @@ class Store {
 
     const PERSISTABLE_KEYS = [
       'ui.displayMode',
-      'selectedSport',
       'history',
+      'selectedSport',
       'dashboardFilters',
       'matches',
       'analyses',

@@ -914,55 +914,47 @@ function renderBlocSources(analysis) {
     </div>`;
 }
 
-// ── BLOC SYNTHÈSE ─────────────────────────────────────────────────────────
+// ── BLOC IA ───────────────────────────────────────────────────────────────
 
 function renderBlocIA(analysis, match) {
-  const summary = _buildLocalSummary(analysis, match);
-
+  const summary = _buildLocalAIStyleSummary(analysis, match);
   return `
     <div class="card match-detail__bloc">
       <div class="bloc-header" style="margin-bottom:var(--space-3)">
-        <span class="bloc-header__title">Synthèse</span>
+        <span class="bloc-header__title">Lecture simple</span>
       </div>
-      <div class="text-muted" style="font-size:13px;line-height:1.8">
-        ${escapeHtml(summary)}
-      </div>
-      <div class="text-muted" style="font-size:10px;margin-top:var(--space-2)">
-        Basé uniquement sur les données du moteur. Aucun appel Claude dans cette vue.
+      <div id="ai-content">
+        <div id="ai-response" style="font-size:13px;line-height:1.8">${summary}</div>
+        <div class="text-muted" style="font-size:10px;margin-top:var(--space-2)">Source : moteur local uniquement · Claude non utilisé ici</div>
       </div>
     </div>`;
 }
 
-function _buildLocalSummary(analysis, match) {
-  if (!analysis) return 'Analyse non disponible.';
+function _buildLocalAIStyleSummary(analysis, match) {
+  if (!analysis) return '<div class="text-muted">Analyse non disponible.</div>';
 
-  const home = match?.home_team?.name ?? 'Domicile';
-  const away = match?.away_team?.name ?? 'Extérieur';
-  const score = analysis.predictive_score !== null && analysis.predictive_score !== undefined
-    ? Math.round(Number(analysis.predictive_score) * 100)
-    : null;
-  const confidence = analysis.confidence_level ?? 'indisponible';
-  const best = analysis.betting_recommendations?.best ?? null;
-  const signals = (analysis.key_signals ?? []).slice(0, 2).map(function(s) {
+  const home = match.home_team?.name ?? 'Domicile';
+  const away = match.away_team?.name ?? 'Extérieur';
+  const predictive = analysis.predictive_score != null ? Math.round(analysis.predictive_score * 100) : null;
+  const robustness = analysis.robustness_score != null ? Math.round(analysis.robustness_score * 100) : null;
+  const quality = analysis.data_quality_score != null ? Math.round(analysis.data_quality_score * 100) : null;
+  const keySignals = (analysis.key_signals ?? []).slice(0, 2).map(function(s) {
     return _simplifyLabel(s.label, s.variable);
   }).filter(Boolean);
+  const best = analysis.betting_recommendations?.best ?? null;
 
-  let firstLine = 'Le moteur ne dégage pas encore de lecture claire sur ce match.';
-  if (score !== null) {
-    if (score > 55) firstLine = `${home} ressort devant dans la lecture actuelle du moteur (${score}%).`;
-    else if (score < 45) firstLine = `${away} ressort devant dans la lecture actuelle du moteur (${100 - score}%).`;
-    else firstLine = 'Le match reste plutôt équilibré dans la lecture actuelle du moteur.';
+  let line1 = 'Match équilibré ou lecture insuffisante.';
+  if (predictive != null) {
+    if (predictive > 52) line1 = `${home} ressort légèrement devant (${predictive}%).`;
+    else if (predictive < 48) line1 = `${away} ressort légèrement devant (${100 - predictive}%).`;
+    else line1 = 'Le moteur voit un match serré.';
   }
 
-  const signalLine = signals.length
-    ? `Les signaux qui comptent le plus ici sont : ${signals.join(' et ')}.`
-    : 'Aucun signal fort n'a été remonté comme vraiment dominant.';
+  const line2 = keySignals.length ? `Signal principal : ${keySignals.join(' · ')}.` : 'Aucun signal majeur clairement exploitable.';
+  const line3 = best ? `Valeur détectée : ${best.label ?? best.side} avec un edge de ${best.edge ?? '—'}%.` : 'Pas de valeur claire détectée pour parier maintenant.';
+  const line4 = `Robustesse ${robustness ?? '—'}% · qualité des données ${quality ?? '—'}%.`;
 
-  const betLine = best
-    ? `Le meilleur pari détecté pour l'instant est ${best.side} avec un edge de +${best.edge}%.`
-    : 'Aucun pari n'a assez de valeur pour être recommandé proprement.';
-
-  return `${firstLine} ${signalLine} Niveau de confiance : ${confidence}. ${betLine}`.trim();
+  return `<div>${escapeHtml(line1)}</div><div style="margin-top:8px">${escapeHtml(line2)}</div><div style="margin-top:8px">${escapeHtml(line3)}</div><div style="margin-top:8px">${escapeHtml(line4)}</div>`;
 }
 
 // ── COTES MULTI-BOOKS ────────────────────────────────────────────────────
@@ -1072,9 +1064,8 @@ function bindEvents(container, storeInstance, match, analysis) {
   container.querySelectorAll('.paper-bet-btn').forEach(btn => {
     btn.addEventListener('click', () => _openBetModal(btn, match, analysis, storeInstance));
   });
-}
 
-// ── PAS D'APPEL CLAUDE DANS CETTE VUE ────────────────────────────────────
+}
 
 // ── MODAL PAPER TRADING ──────────────────────────────────────────────────
 
@@ -1238,23 +1229,16 @@ async function _loadAndRenderTeamDetail(container, match, storeInstance) {
     const teamDetails = storeInstance?.get('teamDetails') ?? {};
     let teamDetail = teamDetails[match.id] ?? null;
 
-    // Sinon fetch direct
-    if (!teamDetail) {
-      const homeAbv = _getTeamAbvFromName(match.home_team?.name);
-      const awayAbv = _getTeamAbvFromName(match.away_team?.name);
-      if (homeAbv && awayAbv) {
-        const resp = await fetch(
-          WORKER_URL + '/nba/team-detail?home=' + encodeURIComponent(homeAbv) + '&away=' + encodeURIComponent(awayAbv),
-          { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) }
-        );
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data?.home) teamDetail = data;
-        }
-      }
-    }
-
     const injReport = storeInstance?.get('injuryReport') ?? null;
+    if (!teamDetail) {
+      detailEl.innerHTML = `
+        <div class="card match-detail__bloc" style="text-align:center;padding:22px 16px">
+          <div style="font-size:13px;color:var(--color-muted);line-height:1.7">
+            Les stats avancées d'équipe sont chargées pendant la synchronisation de 12h, 23h ou via le refresh manuel du dashboard.
+          </div>
+        </div>`;
+      return;
+    }
     detailEl.innerHTML = renderBlocTeamDetail(match, teamDetail, injReport);
 
   } catch (err) {

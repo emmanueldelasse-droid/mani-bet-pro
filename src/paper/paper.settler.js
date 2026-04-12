@@ -1,9 +1,5 @@
 /**
  * MANI BET PRO — paper.settler.js v3.2
- *
- * Règle simple :
- *   - on clôture un pari seulement si la ligne utile a été stockée au placement
- *   - plus de faux fallback sur result.odds, car /nba/results ne renvoie pas ces cotes
  */
 
 import { PaperEngine } from './paper.engine.js';
@@ -13,16 +9,13 @@ import { Logger }      from '../utils/utils.logger.js';
 const WORKER = API_CONFIG.WORKER_BASE_URL;
 
 export class PaperSettler {
-
   static async settle(store) {
-    const state       = await PaperEngine.loadAsync();
-    const pendingBets = state.bets.filter(b => b.result === 'PENDING');
-
+    const state = await PaperEngine.loadAsync();
+    const pendingBets = state.bets.filter(function(bet) { return bet.result === 'PENDING'; });
     if (pendingBets.length === 0) return;
 
-    // Grouper par date
     const byDate = {};
-    pendingBets.forEach(bet => {
+    pendingBets.forEach(function(bet) {
       const date = _normalizeDate(bet.date);
       if (!date) return;
       if (!byDate[date]) byDate[date] = [];
@@ -32,10 +25,6 @@ export class PaperSettler {
     let settled = 0;
 
     for (const [date, bets] of Object.entries(byDate)) {
-      // Pour le polling temps réel, on inclut aussi les paris du jour
-      // Le filtre is_final dans ESPN garantit que seuls les matchs terminés sont clôturés
-      // if (date >= _getTodayDate()) continue; // SUPPRIMÉ v3.1
-
       try {
         const results = await _fetchResults(date);
         if (!results?.results?.length) continue;
@@ -47,22 +36,17 @@ export class PaperSettler {
           const outcome = _determineOutcome(bet, result);
           if (!outcome) continue;
 
-          // v3.1 : passer les scores finaux pour affichage dans ui.history.js
           const homeScore = result.home_team?.score ?? null;
           const awayScore = result.away_team?.score ?? null;
           const betHomeIsHome = result.home_team?.name === bet.home;
+
           await PaperEngine.settleBet(bet.bet_id, outcome, null, {
             home_score: betHomeIsHome ? homeScore : awayScore,
             away_score: betHomeIsHome ? awayScore : homeScore,
           });
-          settled++;
 
-          Logger.info('PAPER_AUTO_SETTLED', {
-            bet_id:  bet.bet_id,
-            outcome,
-            market:  bet.market,
-            match:   `${bet.home} vs ${bet.away}`,
-          });
+          settled++;
+          Logger.info('PAPER_AUTO_SETTLED', { bet_id: bet.bet_id, outcome, market: bet.market });
         }
       } catch (err) {
         Logger.warn('PAPER_SETTLER_ERROR', { date, message: err.message });
@@ -76,14 +60,10 @@ export class PaperSettler {
   }
 }
 
-// ── FONCTIONS PRIVÉES ─────────────────────────────────────────────────────
-
 async function _fetchResults(date) {
   try {
     const dateESPN = date.replace(/-/g, '');
-    const response = await fetch(`${WORKER}/nba/results?date=${dateESPN}`, {
-      headers: { 'Accept': 'application/json' },
-    });
+    const response = await fetch(`${WORKER}/nba/results?date=${dateESPN}`, { headers: { Accept: 'application/json' } });
     if (!response.ok) return null;
     return await response.json();
   } catch {
@@ -92,62 +72,36 @@ async function _fetchResults(date) {
 }
 
 function _matchBetToResult(bet, results) {
-  return results.find(r =>
-    (r.home_team?.name === bet.home && r.away_team?.name === bet.away) ||
-    (r.home_team?.name === bet.away && r.away_team?.name === bet.home)
-  ) ?? null;
+  return results.find(function(r) {
+    return (r.home_team?.name === bet.home && r.away_team?.name === bet.away) ||
+      (r.home_team?.name === bet.away && r.away_team?.name === bet.home);
+  }) ?? null;
 }
 
-/**
- * Détermine le résultat d'un pari depuis le score final ESPN.
- *
- * Si la ligne n'existe pas sur le pari, on le laisse en PENDING.
- * Cela évite une clôture fausse.
- */
 function _determineOutcome(bet, result) {
   const homeScore = result.home_team?.score ?? 0;
   const awayScore = result.away_team?.score ?? 0;
-  const total     = homeScore + awayScore;
-
+  const total = homeScore + awayScore;
   const betHomeIsResultHome = result.home_team?.name === bet.home;
 
   switch (bet.market) {
-
     case 'MONEYLINE': {
       const betOnHome = bet.side === 'HOME';
-      const homeWon   = homeScore > awayScore;
-
-      if (betHomeIsResultHome) {
-        return betOnHome ? (homeWon ? 'WIN' : 'LOSS') : (homeWon ? 'LOSS' : 'WIN');
-      } else {
-        return betOnHome ? (homeWon ? 'LOSS' : 'WIN') : (homeWon ? 'WIN' : 'LOSS');
-      }
+      const homeWon = homeScore > awayScore;
+      if (betHomeIsResultHome) return betOnHome ? (homeWon ? 'WIN' : 'LOSS') : (homeWon ? 'LOSS' : 'WIN');
+      return betOnHome ? (homeWon ? 'LOSS' : 'WIN') : (homeWon ? 'WIN' : 'LOSS');
     }
 
     case 'SPREAD': {
-      // Lire spread_line depuis le pari, ou fallback ESPN DraftKings
-      let spreadLine = bet.spread_line !== null && bet.spread_line !== undefined
-        ? Number(bet.spread_line)
-        : null;
-
+      const spreadLine = bet.spread_line != null ? Number(bet.spread_line) : null;
       if (spreadLine === null) {
-        Logger.warn('PAPER_SETTLER_SPREAD_NO_LINE', {
-          bet_id: bet.bet_id,
-          match:  `${bet.home} vs ${bet.away}`,
-          note:   'spread_line absent — clôture manuelle requise',
-        });
+        Logger.warn('PAPER_SETTLER_SPREAD_NO_LINE', { bet_id: bet.bet_id, note: 'clôture manuelle requise' });
         return null;
       }
-
       const betOnHome = bet.side === 'HOME';
-
-      let scoreDiff;
-      if (betHomeIsResultHome) {
-        scoreDiff = betOnHome ? homeScore - awayScore : awayScore - homeScore;
-      } else {
-        scoreDiff = betOnHome ? awayScore - homeScore : homeScore - awayScore;
-      }
-
+      const scoreDiff = betHomeIsResultHome
+        ? (betOnHome ? homeScore - awayScore : awayScore - homeScore)
+        : (betOnHome ? awayScore - homeScore : homeScore - awayScore);
       const covered = scoreDiff + spreadLine;
       if (covered > 0) return 'WIN';
       if (covered < 0) return 'LOSS';
@@ -155,22 +109,12 @@ function _determineOutcome(bet, result) {
     }
 
     case 'OVER_UNDER': {
-      // Priorité : ou_line stocké au placement.
-      // odds_line = cote américaine (-110) — NE PAS utiliser comme ligne de total.
-      let line = bet.ou_line !== null && bet.ou_line !== undefined
-        ? Number(bet.ou_line)
-        : null;
-
+      const line = bet.ou_line != null ? Number(bet.ou_line) : null;
       if (line === null) {
-        Logger.warn('PAPER_SETTLER_OU_NO_LINE', {
-          bet_id: bet.bet_id,
-          match:  `${bet.home} vs ${bet.away}`,
-          note:   'ou_line absent — clôture manuelle requise',
-        });
+        Logger.warn('PAPER_SETTLER_OU_NO_LINE', { bet_id: bet.bet_id, note: 'clôture manuelle requise' });
         return null;
       }
-
-      if (total > line) return bet.side === 'OVER'  ? 'WIN' : 'LOSS';
+      if (total > line) return bet.side === 'OVER' ? 'WIN' : 'LOSS';
       if (total < line) return bet.side === 'UNDER' ? 'WIN' : 'LOSS';
       return 'PUSH';
     }
@@ -182,12 +126,6 @@ function _determineOutcome(bet, result) {
 
 function _normalizeDate(date) {
   if (!date) return null;
-  if (date.length === 8) {
-    return `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
-  }
+  if (date.length === 8) return `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
   return date;
-}
-
-function _getTodayDate() {
-  return new Date().toISOString().slice(0, 10);
 }

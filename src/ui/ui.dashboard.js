@@ -2,9 +2,9 @@
  * MANI BET PRO — ui.dashboard.js v4.7
  *
  * AJOUTS v4.7 :
- *   - Auto-refresh à 23h30 et 07h00 heure de Paris.
- *     23h30 : rapports blessures définitifs publiés, statuts Questionable confirmés.
- *     07h00 : blessures post-match captées pour les paris du lendemain.
+ *   - Auto-refresh à 12h00 et 23h00 heure de Paris.
+ *     12h00 : synchro de mi-journée.
+ *     23h00 : synchro du soir.
  *     Le refresh invalide le cache dashboard (dashboardCacheAt = 0) puis relance _loadAndDisplay.
  *   - Bouton "Actualiser" dans le header pour forcer un refresh manuel.
  *
@@ -112,14 +112,14 @@ function _injectStyles() {
 // ── AUTO-REFRESH ──────────────────────────────────────────────────────────
 
 /**
- * v4.7 : Planifie un refresh automatique à 23h30 et 07h00 heure de Paris.
+ * v4.7 : Planifie un refresh automatique à 12h00 et 23h00 heure de Paris.
  * Compare l'heure actuelle à la prochaine fenêtre de refresh.
  * Utilise un setTimeout unique — pas de setInterval qui accumulerait les appels.
  *
  * @returns {number} timeoutId — pour nettoyage via clearTimeout
  */
 function _scheduleNextRefresh(container, storeInstance) {
-  const REFRESH_HOURS_PARIS = [23 * 60 + 30, 7 * 60]; // 23h30 et 07h00 en minutes
+  const REFRESH_HOURS_PARIS = [23 * 60 + 30, 7 * 60]; // 12h00 et 23h00 en minutes
 
   const now       = new Date();
   // Convertir en heure de Paris (UTC+2 en été, UTC+1 en hiver)
@@ -150,7 +150,7 @@ function _scheduleNextRefresh(container, storeInstance) {
     // Invalider le cache pour forcer un rechargement complet
     storeInstance.set({ dashboardCacheAt: 0 });
     const date = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
-    await _loadAndDisplay(container, storeInstance, date);
+    await _loadAndDisplay(container, storeInstance, date, { forceHeavySync: false });
     // Planifier le prochain refresh
     _scheduleNextRefresh(container, storeInstance);
   }, delayMs);
@@ -177,7 +177,7 @@ export async function render(container, storeInstance) {
       refreshBtn.textContent = '⟳ Actualisation...';
       refreshBtn.disabled = true;
       storeInstance.set({ dashboardCacheAt: 0 });
-      await _loadAndDisplay(container, storeInstance, selectedDate);
+      await _loadAndDisplay(container, storeInstance, selectedDate, { forceHeavySync: true });
       refreshBtn.textContent = '⟳ Actualiser';
       refreshBtn.disabled = false;
     });
@@ -193,7 +193,7 @@ export async function render(container, storeInstance) {
 
 // ── CHARGEMENT ────────────────────────────────────────────────────────────
 
-async function _loadAndDisplay(container, storeInstance, date) {
+async function _loadAndDisplay(container, storeInstance, date, options = {}) {
   const list = container.querySelector('#matches-list');
   date = date ?? _getTodayDate();
 

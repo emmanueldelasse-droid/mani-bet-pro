@@ -1,8 +1,16 @@
 /**
- * MANI BET PRO — ui.theme-toggle.js v2
- *
- * Bouton de thème unique pour toute l'application.
+ * MANI BET PRO — ui.theme-toggle.js
  */
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.body.classList.add('theme-light');
+    document.body.setAttribute('data-theme', 'light');
+  } else {
+    document.body.classList.remove('theme-light');
+    document.body.removeAttribute('data-theme');
+  }
+}
 
 export function initThemeToggle() {
   const saved = localStorage.getItem('mbp_theme') ?? 'dark';
@@ -16,27 +24,17 @@ export function initThemeToggle() {
     document.body.appendChild(btn);
   }
 
-  btn.textContent = saved === 'light' ? '🌙' : '☀️';
+  const syncIcon = function(theme) {
+    btn.textContent = theme === 'light' ? '🌙' : '☀️';
+  };
+
+  syncIcon(saved);
+
   btn.onclick = function() {
     const current = document.body.classList.contains('theme-light') ? 'light' : 'dark';
     const next = current === 'light' ? 'dark' : 'light';
     applyTheme(next);
     localStorage.setItem('mbp_theme', next);
-    btn.textContent = next === 'light' ? '🌙' : '☀️';
+    syncIcon(next);
   };
-}
-
-export function applyTheme(theme) {
-  const html = document.documentElement;
-
-  if (theme === 'light') {
-    document.body.classList.add('theme-light');
-    document.body.setAttribute('data-theme', 'light');
-    html.setAttribute('data-theme', 'light');
-    return;
-  }
-
-  document.body.classList.remove('theme-light');
-  document.body.setAttribute('data-theme', 'dark');
-  html.setAttribute('data-theme', 'dark');
 }
