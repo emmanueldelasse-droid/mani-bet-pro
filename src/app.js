@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — app.js v3.2
+ * MANI BET PRO — app.js v3.3
  *
  * CORRECTIONS v3.2 :
  *   - _pollerActive flag : évite les intervals multiples
@@ -128,10 +128,17 @@ function _persistState() {
     localStorage.setItem('mbp_state', JSON.stringify({
       ...current,
       dashboardFilters: state.dashboardFilters,
+      matches: state.matches,
+      analyses: state.analyses,
+      teamDetails: state.teamDetails,
+      injuryReport: state.injuryReport,
+      dashboardCacheAt: state.dashboardCacheAt,
+      refreshSync: state.refreshSync,
       ui: {
         ...(current.ui ?? {}),
         displayMode: state.ui?.displayMode,
       },
+      history: state.history,
     }));
   } catch (err) {
     Logger.warn('STORAGE_PERSIST_FAIL', { message: err.message });
@@ -193,8 +200,27 @@ async function init() {
     Logger.debug('APP_STATE_LOADED', {});
   }
 
-  // 3. Persister à chaque changement de route
-  store.subscribe('currentRoute', () => _persistState());
+  // 3. Persistance ciblée + debounce léger
+  let persistTimer = null;
+  const schedulePersist = function() {
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(function() { _persistState(); }, 120);
+  };
+
+  [
+    'currentRoute',
+    'dashboardFilters',
+    'matches',
+    'analyses',
+    'teamDetails',
+    'injuryReport',
+    'dashboardCacheAt',
+    'refreshSync',
+    'history',
+    'ui.displayMode',
+  ].forEach(function(key) {
+    store.subscribe(key, schedulePersist);
+  });
 
   // 4. Persister avant fermeture
   window.addEventListener('beforeunload', () => _persistState());
