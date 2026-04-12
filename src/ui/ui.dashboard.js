@@ -2,9 +2,9 @@
  * MANI BET PRO — ui.dashboard.js v4.7
  *
  * AJOUTS v4.7 :
- *   - Auto-refresh à 12h00 et 23h00 heure de Paris.
- *     12h00 : synchro de mi-journée.
- *     23h00 : synchro du soir.
+ *   - Auto-refresh à 23h30 et 07h00 heure de Paris.
+ *     23h30 : rapports blessures définitifs publiés, statuts Questionable confirmés.
+ *     07h00 : blessures post-match captées pour les paris du lendemain.
  *     Le refresh invalide le cache dashboard (dashboardCacheAt = 0) puis relance _loadAndDisplay.
  *   - Bouton "Actualiser" dans le header pour forcer un refresh manuel.
  *
@@ -112,14 +112,14 @@ function _injectStyles() {
 // ── AUTO-REFRESH ──────────────────────────────────────────────────────────
 
 /**
- * v4.7 : Planifie un refresh automatique à 12h00 et 23h00 heure de Paris.
+ * v4.7 : Planifie un refresh automatique à 23h30 et 07h00 heure de Paris.
  * Compare l'heure actuelle à la prochaine fenêtre de refresh.
  * Utilise un setTimeout unique — pas de setInterval qui accumulerait les appels.
  *
  * @returns {number} timeoutId — pour nettoyage via clearTimeout
  */
 function _scheduleNextRefresh(container, storeInstance) {
-  const REFRESH_HOURS_PARIS = [23 * 60 + 30, 7 * 60]; // 12h00 et 23h00 en minutes
+  const REFRESH_HOURS_PARIS = [12 * 60, 23 * 60]; // 12h00 et 23h00 en minutes
 
   const now       = new Date();
   // Convertir en heure de Paris (UTC+2 en été, UTC+1 en hiver)
@@ -150,7 +150,7 @@ function _scheduleNextRefresh(container, storeInstance) {
     // Invalider le cache pour forcer un rechargement complet
     storeInstance.set({ dashboardCacheAt: 0 });
     const date = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
-    await _loadAndDisplay(container, storeInstance, date, { forceHeavySync: false });
+    await _loadAndDisplay(container, storeInstance, date);
     // Planifier le prochain refresh
     _scheduleNextRefresh(container, storeInstance);
   }, delayMs);
@@ -177,7 +177,7 @@ export async function render(container, storeInstance) {
       refreshBtn.textContent = '⟳ Actualisation...';
       refreshBtn.disabled = true;
       storeInstance.set({ dashboardCacheAt: 0 });
-      await _loadAndDisplay(container, storeInstance, selectedDate, { forceHeavySync: true });
+      await _loadAndDisplay(container, storeInstance, selectedDate, { manualRefresh: true });
       refreshBtn.textContent = '⟳ Actualiser';
       refreshBtn.disabled = false;
     });
@@ -244,7 +244,7 @@ async function _loadAndDisplay(container, storeInstance, date, options = {}) {
     }
 
     // ── Pas de cache — charger depuis l'API ──
-    const result = await DataOrchestrator.loadAndAnalyze(date, storeInstance);
+    const result = await DataOrchestrator.loadAndAnalyze(date, storeInstance, options);
 
     if (!result?.matches?.length) {
       _renderEmptyState(list);
@@ -286,6 +286,34 @@ async function _loadAndDisplay(container, storeInstance, date, options = {}) {
   } finally {
     LoadingUI.hide();
   }
+}
+
+
+function _analysisTimestamp(analysis) {
+  if (!analysis) return 0;
+  const raw = analysis.updated_at ?? analysis.computed_at ?? analysis.saved_at ?? null;
+  const ts = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function _resolveLatestAnalysisForMatch(analyses, matchId, preferredAnalysisId = null) {
+  if (!analyses || !matchId) return null;
+
+  if (preferredAnalysisId && analyses[preferredAnalysisId]?.match_id === matchId) {
+    return analyses[preferredAnalysisId];
+  }
+
+  let best = null;
+  let bestTs = -1;
+  for (const analysis of Object.values(analyses)) {
+    if (!analysis || analysis.match_id !== matchId) continue;
+    const ts = _analysisTimestamp(analysis);
+    if (!best || ts > bestTs || (ts === bestTs && String(analysis.analysis_id ?? '') > String(best.analysis_id ?? ''))) {
+      best = analysis;
+      bestTs = ts;
+    }
+  }
+  return best;
 }
 
 // ── INDEX DES ANALYSES ────────────────────────────────────────────────────

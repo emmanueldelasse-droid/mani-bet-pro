@@ -18,7 +18,7 @@
  *   - _loadAIInjuries() : refactorisé pour le pipeline v6.27.
  *     Appelle /nba/roster-injuries (Tank01 roster complet, cache 3h) au lieu
  *     de N appels /nba/ai-injuries individuels par match.
- *     Appelle /nba/ai-injuries une seule fois pour tous les matchs du soir (cache 6h KV + cache memoire session).
+ *     Appelle /nba/ai-context une seule fois pour tous les matchs du soir (cache 6h KV + cache memoire session).
  *     0 appel Claude par match — budget réduit de ~7 appels/soir à ~1 appel/soir.
  *   - _mergeInjuryReports() : adapté pour le format roster Tank01 v6.27.
  *     Source 'tank01_roster' reconnue et fusionnée correctement.
@@ -193,9 +193,8 @@ export class DataOrchestrator {
         store.upsert('matches', match.id, Object.assign({}, match, { sport: 'NBA' }));
       });
 
-      const syncPlan = _buildSyncPlan(date, store, options);
-      store.set({ refreshSync: syncPlan.refreshSync });
-      LoadingUI.update(syncPlan.loadingText, 20);
+      // ÉTAPE 2 : Injuries + BDL + Odds + Stats avancées en parallèle
+      LoadingUI.update('Blessures + forme récente + cotes + Net Rating...', 20);
 
       const season  = _getCurrentNBASeason();
       const teamIds = _extractTeamIds(matches);
@@ -203,27 +202,26 @@ export class DataOrchestrator {
       // Extraire les abréviations Tank01 pour team-detail (1 appel par match)
       // On ne charge que le premier match pour les splits/top10 — chaque match-detail
       // appelle _loadTeamDetail individuellement via le store
-      const cachedInjuryReport = store.get('injuryReport') ?? null;
-      const cachedTeamDetails = store.get('teamDetails') ?? {};
-
+      // Étape 2a : ESPN + Tank01 + Odds + Stats — bloquant (données critiques moteur)
+      // FIX 3 : _loadAIInjuries bloquant — moteur attend Claude avant de calculer
+      // Claude retourne injuries+PPG+contexte en 8-12s (cache KV 6h après)
+      // Fallback ESPN transparent si Claude timeout ou indisponible
       const [injuryReport, aiInjuries, recentForms, oddsComparison, advancedStats] = await Promise.all([
-        _loadInjuries(date),
-        syncPlan.allowClaudeSync ? _loadAIInjuries(matches, date) : Promise.resolve(null),
+        _loadInjuries(date),              // ESPN fallback (statuts basiques)
+        _loadAIInjuries(matches, date, store, options), // Claude injuries : 12h / 23h / manuel
         _loadRecentForms(teamIds, season),
         _loadOddsComparison(),
-        syncPlan.allowTankSync ? _loadAdvancedStats() : Promise.resolve(null),
+        _loadAdvancedStats(),
       ]);
 
-      const mergedInjuryReport = _mergeInjuryReports(injuryReport, aiInjuries) || cachedInjuryReport || injuryReport;
+      // Merger ESPN + Claude → injuryReport enrichi avec vrais PPG
+      const mergedInjuryReport = _mergeInjuryReports(injuryReport, aiInjuries);
       store.set({ injuryReport: mergedInjuryReport });
 
-      if (syncPlan.allowTankSync) {
-        _preloadTeamDetails(matches).then(function(teamDetails) {
-          store.set({ teamDetails, refreshSync: _markSyncSuccess(syncPlan.refreshSync) });
-        }).catch(function() {});
-      } else if (Object.keys(cachedTeamDetails).length > 0) {
-        store.set({ teamDetails: cachedTeamDetails });
-      }
+      // Pré-charger teamDetail pour tous les matchs (non bloquant)
+      _preloadTeamDetails(matches).then(function(teamDetails) {
+        store.set({ teamDetails });
+      }).catch(function() {});
 
       // ÉTAPE 3 : Analyser tous les matchs
       LoadingUI.update('Analyse en cours...', 70);
@@ -408,80 +406,248 @@ function _getTeamAbv(espnName) {
 
 
 /**
- * Claude ne sert plus qu'aux injuries.
- * Appels uniquement à 12h, 23h ou en manuel.
+ * v3.9 : Pipeline injuries v6.27 — Tank01 roster + Claude contexte global.
+ *
+ * Avant v3.9 : N appels /nba/ai-injuries par match (1 Claude/match).
+ * Après v3.9 :
+ *   1. /nba/roster-injuries → roster complet NBA avec ppg + designation (cache 3h).
+ *   2. /nba/ai-context → contexte motivationnel global pour tous les matchs (cache 6h KV, 1 Claude/soir max).
+ *   3. Fusionne en format { by_team, team_context, market_signal } identique à v3.8.
+ *
+ * Retourne null si aucune donnée disponible (fallback transparent).
+ *
+ * @param {Array}  matches - matchs du jour
+ * @param {string} date    - YYYY-MM-DD
+ * @returns {Promise<object|null>} { by_team, team_context, market_signal } ou null
  */
-async function _loadAIInjuries(matches, date) {
+
+var _aiBatchMemCache = {};
+var _aiBatchInFlight = null;
+
+function _getParisDateHour() {
+  const now = new Date();
+  const date = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(now);
+  const hour = Number(new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Paris', hour: '2-digit', hour12: false
+  }).format(now));
+  return { date, hour };
+}
+
+function _buildAISyncPolicy(date, store, options = {}) {
+  const manualRefresh = options.manualRefresh === true;
+  const syncState = store?.get('refreshSync') || {};
+
+  if (manualRefresh) {
+    return {
+      allowed: true,
+      mode: 'manual',
+      windowKey: 'manual|' + String(date || ''),
+      reason: 'manual',
+    };
+  }
+
+  const paris = _getParisDateHour();
+  if (!date || date !== paris.date) {
+    return { allowed: false, mode: 'cache_only', windowKey: null, reason: 'not_today_paris' };
+  }
+
+  let slot = null;
+  if (paris.hour >= 23) slot = '23h';
+  else if (paris.hour >= 12) slot = '12h';
+  else return { allowed: false, mode: 'cache_only', windowKey: null, reason: 'before_first_window' };
+
+  const windowKey = paris.date + '|' + slot;
+  if (syncState.lastWindowKey === windowKey) {
+    return { allowed: false, mode: 'cache_only', windowKey, reason: 'already_synced' };
+  }
+  if (syncState.inFlightKey === windowKey) {
+    return { allowed: false, mode: 'cache_only', windowKey, reason: 'already_running' };
+  }
+
+  return { allowed: true, mode: 'auto', windowKey, reason: 'window_due' };
+}
+
+function _setRefreshSync(store, patch = {}) {
+  if (!store) return;
+  const current = store.get('refreshSync') || {};
+  store.set({
+    refreshSync: Object.assign({}, current, patch),
+  });
+}
+
+function _gamesParamFromMatches(matches) {
+  return matches.map(function(m) {
+    const homeAbv = _getTeamAbv(m.home_team && m.home_team.name);
+    const awayAbv = _getTeamAbv(m.away_team && m.away_team.name);
+    return (homeAbv && awayAbv) ? awayAbv + '@' + homeAbv : null;
+  }).filter(Boolean).join(',');
+}
+
+function _normalizeAIBatchPayload(payload) {
+  const sourceData = payload?.data;
+  if (!sourceData) return null;
+
+  const rows = Array.isArray(sourceData)
+    ? sourceData
+    : Object.values(sourceData);
+
+  const aiByTeam = {};
+  rows.forEach(function(row) {
+    if (!row || !row.game) return;
+    const parts = String(row.game).split('@');
+    const awayAbv = parts[0] && parts[0].toUpperCase();
+    const homeAbv = parts[1] && parts[1].toUpperCase();
+    const homeEspn = ABV_TO_ESPN_NAME[homeAbv] || null;
+    const awayEspn = ABV_TO_ESPN_NAME[awayAbv] || null;
+
+    const pushPlayers = function(list, espnName, abv) {
+      if (!espnName || !Array.isArray(list)) return;
+      if (!aiByTeam[espnName]) aiByTeam[espnName] = [];
+      list.forEach(function(p) {
+        if (!p || !p.name) return;
+        aiByTeam[espnName].push({
+          name: p.name,
+          team: abv,
+          status: p.status || 'Out',
+          ppg: p.ppg ?? null,
+          source: p.source || payload.source || 'claude_web_search',
+          note: p.reason || p.note || null,
+        });
+      });
+    };
+
+    pushPlayers(row.injuries_home || row.home || [], homeEspn, homeAbv);
+    pushPlayers(row.injuries_away || row.away || [], awayEspn, awayAbv);
+  });
+
+  const totalPlayers = Object.values(aiByTeam).reduce(function(sum, arr) { return sum + arr.length; }, 0);
+  if (totalPlayers <= 0) return null;
+
+  return {
+    by_team: aiByTeam,
+    team_context: {},
+    market_signal: null,
+    _meta: {
+      teams: Object.keys(aiByTeam).length,
+      players: totalPlayers,
+      source: payload.source || 'claude_web_search',
+    },
+  };
+}
+
+async function _fetchAIInjuriesBatch(dateForWorker, gamesParam) {
+  if (!gamesParam) return null;
+  const cacheKey = dateForWorker + '|' + gamesParam;
+  if (_aiBatchMemCache[cacheKey]) {
+    Logger.info('AI_BATCH_MEM_HIT', { date: dateForWorker });
+    return _aiBatchMemCache[cacheKey];
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(function() { controller.abort(); }, 35000);
+  try {
+    const response = await fetch(
+      API_CONFIG.WORKER_BASE_URL + '/nba/ai-injuries-batch' +
+      '?date=' + dateForWorker +
+      '&games=' + encodeURIComponent(gamesParam),
+      { signal: controller.signal, headers: { 'Accept': 'application/json' } }
+    );
+    clearTimeout(timer);
+
+    if (response.status === 404) {
+      Logger.warn('AI_BATCH_ROUTE_MISSING', { status: 404 });
+      return null;
+    }
+    if (response.status === 429) {
+      Logger.warn('AI_BATCH_HTTP_ERROR', { status: 429 });
+      return null;
+    }
+    if (!response.ok) {
+      Logger.warn('AI_BATCH_HTTP_ERROR', { status: response.status });
+      return null;
+    }
+
+    const payload = await response.json();
+    if (!payload?.available || !payload?.data) {
+      Logger.info('AI_BATCH_UNAVAILABLE', { note: payload?.note || null, source: payload?.source || null });
+      return null;
+    }
+
+    _aiBatchMemCache[cacheKey] = payload;
+    return payload;
+  } catch (err) {
+    clearTimeout(timer);
+    Logger.warn('AI_BATCH_FAILED', { message: err.message });
+    return null;
+  }
+}
+
+async function _loadAIInjuries(matches, date, store, options = {}) {
   if (!matches || !matches.length) return null;
 
   const dateForWorker = date ? date.replace(/-/g, '') : '';
   if (!dateForWorker || dateForWorker.length !== 8) return null;
 
-  const byTeam = {};
-  const BATCH_SIZE = 3;
-
-  for (let i = 0; i < matches.length; i += BATCH_SIZE) {
-    const batch = matches.slice(i, i + BATCH_SIZE);
-
-    await Promise.allSettled(batch.map(async function(match) {
-      const homeAbv = _getTeamAbv(match.home_team && match.home_team.name);
-      const awayAbv = _getTeamAbv(match.away_team && match.away_team.name);
-      if (!homeAbv || !awayAbv) return;
-
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(function() { controller.abort(); }, 30000);
-        const response = await fetch(
-          API_CONFIG.WORKER_BASE_URL + '/nba/ai-injuries' +
-          '?date=' + dateForWorker +
-          '&home=' + encodeURIComponent(homeAbv) +
-          '&away=' + encodeURIComponent(awayAbv),
-          { signal: controller.signal, headers: { 'Accept': 'application/json' } }
-        );
-        clearTimeout(timer);
-        if (!response.ok) {
-          Logger.warn('AI_INJURIES_HTTP_ERROR', { status: response.status, home: homeAbv, away: awayAbv });
-          return;
-        }
-
-        const data = await response.json();
-        if (!data?.available || !data?.data) return;
-
-        const players = []
-          .concat(data.data.players_out ?? [])
-          .concat(data.data.players_doubtful ?? [])
-          .concat(data.data.players_dtd_confirmed_out ?? [])
-          .concat(data.data.players_limited ?? []);
-
-        players.forEach(function(player) {
-          const teamName = ABV_TO_ESPN_NAME[player.team] || null;
-          if (!teamName || !player?.name) return;
-          if (!byTeam[teamName]) byTeam[teamName] = [];
-          byTeam[teamName].push({
-            name: player.name,
-            team: player.team,
-            status: player.status || 'Out',
-            ppg: player.ppg ?? null,
-            source: player.source || 'claude_web_search',
-            note: player.note ?? null,
-          });
-        });
-      } catch (err) {
-        Logger.warn('AI_INJURIES_FAILED', { message: err.message, home: homeAbv, away: awayAbv });
-      }
-    }));
+  const policy = _buildAISyncPolicy(date, store, options);
+  if (!policy.allowed) {
+    Logger.info('AI_INJURIES_SKIP', { reason: policy.reason, window: policy.windowKey });
+    _setRefreshSync(store, {
+      status: 'cache_only',
+      detail: policy.reason,
+      mode: policy.mode,
+    });
+    return null;
   }
 
-  const totalPlayers = Object.values(byTeam).reduce(function(sum, arr) { return sum + arr.length; }, 0);
-  Logger.info('AI_INJURIES_LOADED', { teams: Object.keys(byTeam).length, players: totalPlayers });
+  const gamesParam = _gamesParamFromMatches(matches);
+  if (!gamesParam) return null;
 
-  return totalPlayers > 0 ? {
-    by_team: byTeam,
-    team_context: {},
-    market_signal: null,
-  } : null;
+  if (_aiBatchInFlight && _aiBatchInFlight.key === policy.windowKey) {
+    return await _aiBatchInFlight.promise;
+  }
+
+  _setRefreshSync(store, {
+    status: 'syncing',
+    detail: policy.mode === 'manual' ? 'actualisation manuelle injuries' : 'fenêtre ' + policy.windowKey,
+    inFlightKey: policy.windowKey,
+    mode: policy.mode,
+  });
+
+  const promise = (async function() {
+    const payload = await _fetchAIInjuriesBatch(dateForWorker, gamesParam);
+    const normalized = _normalizeAIBatchPayload(payload);
+
+    if (!normalized) {
+      _setRefreshSync(store, {
+        status: 'cache_only',
+        detail: 'aucune donnée Claude chargée',
+        inFlightKey: null,
+        lastWindowKey: policy.mode === 'auto' ? policy.windowKey : (store.get('refreshSync') || {}).lastWindowKey,
+      });
+      return null;
+    }
+
+    Logger.info('AI_INJURIES_LOADED', normalized._meta);
+    _setRefreshSync(store, {
+      status: 'success',
+      detail: policy.mode === 'manual' ? 'injuries Claude mises à jour (manuel)' : 'injuries Claude synchronisées',
+      lastSuccessAt: new Date().toISOString(),
+      lastWindowKey: policy.windowKey,
+      lastManualAt: policy.mode === 'manual' ? new Date().toISOString() : (store.get('refreshSync') || {}).lastManualAt,
+      inFlightKey: null,
+      mode: policy.mode,
+    });
+    return normalized;
+  })().finally(function() {
+    _aiBatchInFlight = null;
+  });
+
+  _aiBatchInFlight = { key: policy.windowKey, promise };
+  return await promise;
 }
-
 
 /**
  * v3.7 : Fusionne le rapport ESPN+Tank01 avec les données IA.
@@ -884,80 +1050,6 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
     return { matches: [], analyses: {} };
   }
 };
-
-
-function _buildSyncPlan(date, store, options) {
-  const manual = options?.forceHeavySync === true;
-  const parisNow = _getParisNow();
-  const parisDate = _formatParisDate(parisNow);
-  const selectedDate = _normalizeDate(date || parisDate);
-  const sameDay = selectedDate === parisDate;
-  const hour = parisNow.getHours();
-  const inWindow = sameDay && (hour === 12 || hour === 23);
-  const windowKey = sameDay && inWindow ? `${parisDate}_${String(hour).padStart(2, '0')}` : null;
-  const lastWindowKey = store.get('refreshSync.lastWindowKey') ?? null;
-  const alreadySyncedWindow = !!windowKey && windowKey === lastWindowKey;
-  const allowHeavy = manual || (inWindow && !alreadySyncedWindow);
-
-  let status = 'cache_only';
-  let detail = 'Lecture du cache hors fenêtre 12h/23h.';
-  let loadingText = 'Cache actif — pas d'appel lourd.';
-
-  if (manual) {
-    status = 'manual';
-    detail = 'Refresh manuel exceptionnel autorisé.';
-    loadingText = 'Refresh manuel — Claude injuries + Tank01...';
-  } else if (allowHeavy) {
-    status = 'auto_window';
-    detail = `Fenêtre automatique ${String(hour).padStart(2, '0')}h en cours.`;
-    loadingText = 'Synchronisation 12h/23h — Claude injuries + Tank01...';
-  } else if (alreadySyncedWindow) {
-    detail = 'Fenêtre déjà synchronisée, cache réutilisé.';
-    loadingText = 'Cache actif — fenêtre déjà traitée.';
-  }
-
-  return {
-    allowClaudeSync: allowHeavy,
-    allowTankSync: allowHeavy,
-    loadingText,
-    refreshSync: {
-      status,
-      detail,
-      lastSuccessAt: store.get('refreshSync.lastSuccessAt') ?? null,
-      lastWindowKey: allowHeavy && !manual ? windowKey : lastWindowKey,
-    },
-  };
-}
-
-function _markSyncSuccess(syncState) {
-  return {
-    ...(syncState ?? {}),
-    lastSuccessAt: new Date().toISOString(),
-    detail: syncState?.status === 'manual' ? 'Refresh manuel terminé.' : 'Synchronisation automatique terminée.',
-  };
-}
-
-function _getParisNow() {
-  const parts = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Europe/Paris',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date()).reduce(function(acc, part) {
-    if (part.type !== 'literal') acc[part.type] = part.value;
-    return acc;
-  }, {});
-
-  return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`);
-}
-
-function _formatParisDate(parisDate) {
-  return `${parisDate.getFullYear()}-${String(parisDate.getMonth() + 1).padStart(2, '0')}-${String(parisDate.getDate()).padStart(2, '0')}`;
-}
 
 function _computeRestDays(recentForm, matchDate) {
   if (!recentForm || !recentForm.matches || !recentForm.matches.length || !matchDate) return null;

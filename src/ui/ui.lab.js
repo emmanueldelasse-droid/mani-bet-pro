@@ -1,8 +1,10 @@
 export async function render(container) {
   container.innerHTML = `
-    <div class="card" style="padding:20px">
-      <div style="font-size:18px;font-weight:700;margin-bottom:8px">Laboratoire</div>
-      <div class="text-muted" style="font-size:13px;line-height:1.7">Espace réservé. Rien d'essentiel n'est chargé ici.</div>
-    </div>`;
+    <div class="view-placeholder">
+      <div class="view-placeholder__icon">⬡</div>
+      <div class="view-placeholder__title">Laboratoire</div>
+      <div class="view-placeholder__sub">Vue de laboratoire en attente. Rien d'important ne casse ici.</div>
+    </div>
+  `;
   return { destroy() {} };
 }

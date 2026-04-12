@@ -54,10 +54,13 @@ const INITIAL_STATE = {
   injuryReport: null,
   dashboardCacheAt: null,
   refreshSync: {
-    status: 'muted',
+    status: 'idle',
     detail: '',
     lastSuccessAt: null,
     lastWindowKey: null,
+    lastManualAt: null,
+    inFlightKey: null,
+    mode: null,
   },
 
   // ── Providers ───────────────────────────────────────────────────────────
@@ -202,7 +205,6 @@ class Store {
     const PERSISTABLE_KEYS = [
       'ui.displayMode',
       'history',
-      'selectedSport',
       'dashboardFilters',
       'matches',
       'analyses',
