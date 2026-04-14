@@ -495,16 +495,22 @@ function renderBlocTousLesParis(analysis, match) {
   const spread = odds?.spread ?? marketOdds?.spread_line;
   if (spread != null) {
     const homeSprdOdds = getOdds('SPRD', 'HOME'), awaySprdOdds = getOdds('SPRD', 'AWAY');
-    const spreadDisp = spread > 0 ? `+${spread}` : String(spread);
-    if (homeSprdOdds) rows.push(buildRow(`${homeAbbr} ${spreadDisp} pts`, 'SPREAD', 'HOME', homeProb, homeSprdOdds, findRec('SPREAD', 'HOME'), spread, null));
-    if (awaySprdOdds) rows.push(buildRow(`${awayAbbr} ${spread > 0 ? '-' : '+'}${Math.abs(spread)} pts`, 'SPREAD', 'AWAY', awayProb, awaySprdOdds, findRec('SPREAD', 'AWAY'), -spread, null));
+    const spreadDisp   = spread > 0 ? `+${spread}` : String(spread);
+    const recSprdHome  = findRec('SPREAD', 'HOME');
+    const recSprdAway  = findRec('SPREAD', 'AWAY');
+    // Utiliser motor_prob depuis les recs du moteur (toujours calculé maintenant)
+    if (homeSprdOdds) rows.push(buildRow(`${homeAbbr} ${spreadDisp} pts`,               'SPREAD', 'HOME', recSprdHome?.motor_prob ?? homeProb, homeSprdOdds, recSprdHome, spread,  null));
+    if (awaySprdOdds) rows.push(buildRow(`${awayAbbr} ${spread > 0 ? '-' : '+'}${Math.abs(spread)} pts`, 'SPREAD', 'AWAY', recSprdAway?.motor_prob ?? awayProb, awaySprdOdds, recSprdAway, -spread, null));
   }
 
   const ou = odds?.over_under ?? marketOdds?.ou_line;
   if (ou != null) {
-    const overOdds = getOdds('OVER', 'OVER'), underOdds = getOdds('UNDR', 'UNDER');
-    if (overOdds)  rows.push(buildRow(`Plus de ${ou} pts`,  'OVER_UNDER', 'OVER',  null, overOdds,  findRec('OVER_UNDER', 'OVER'),  null, ou));
-    if (underOdds) rows.push(buildRow(`Moins de ${ou} pts`, 'OVER_UNDER', 'UNDER', null, underOdds, findRec('OVER_UNDER', 'UNDER'), null, ou));
+    const overOdds   = getOdds('OVER', 'OVER'), underOdds = getOdds('UNDR', 'UNDER');
+    const recOver    = findRec('OVER_UNDER', 'OVER');
+    const recUnder   = findRec('OVER_UNDER', 'UNDER');
+    // motor_prob depuis les recs moteur — toujours calculé depuis v5.14
+    if (overOdds)  rows.push(buildRow(`Plus de ${ou} pts`,  'OVER_UNDER', 'OVER',  recOver?.motor_prob  ?? null, overOdds,  recOver,  null, ou));
+    if (underOdds) rows.push(buildRow(`Moins de ${ou} pts`, 'OVER_UNDER', 'UNDER', recUnder?.motor_prob ?? null, underOdds, recUnder, null, ou));
   }
 
   const validRows = rows.filter(Boolean);
