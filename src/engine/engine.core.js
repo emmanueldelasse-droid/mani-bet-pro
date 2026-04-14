@@ -1,5 +1,13 @@
 /**
- * MANI BET PRO — engine.core.js v2.5
+ * MANI BET PRO — engine.core.js v2.6
+ *
+ * CORRECTION v2.6 :
+ *   - _computeConfidenceLevel() accepte désormais un 4ème paramètre penaltyScore (défaut 0).
+ *     Depuis v2, l'appel passait engineResult.confidence_penalty?.score en 4ème argument,
+ *     mais la définition n'acceptait que 3 paramètres → pénalité silencieusement ignorée.
+ *     La pénalité (0–0.25, blessures incertaines + divergence marché) n'affectait donc
+ *     jamais le niveau de confiance final — des matchs à données douteuses restaient HIGH.
+ *     Fix : effectiveRobustness = Math.max(0, robustness − penaltyScore).
  *
  * AJOUTS v2.5 :
  *   - score_method et star_absence_modifier exposés depuis engineResult.
@@ -285,8 +293,15 @@ export class EngineCore {
 
   /**
    * Seuils non calibrés — placeholders à ajuster après 50+ paris.
+   *
+   * CORRECTION v2 :
+   *   penaltyScore était passé en 4ème argument depuis engine.core v2 mais la
+   *   signature n'acceptait que 3 paramètres → pénalité silencieusement ignorée.
+   *   La pénalité (0–0.25) issue de _computeConfidencePenalty (blessures incertaines,
+   *   divergence marché élevée) n'affectait donc jamais le niveau de confiance final.
+   *   Désormais : robustesse effective = robustness − penaltyScore (plancher 0).
    */
-  static _computeConfidenceLevel(predictive, robustness, dataQuality) {
+  static _computeConfidenceLevel(predictive, robustness, dataQuality, penaltyScore = 0) {
     if (predictive === null || robustness === null || dataQuality === null) {
       return 'INCONCLUSIVE';
     }
@@ -294,7 +309,9 @@ export class EngineCore {
     const HIGH_THRESHOLD   = 0.75;  // Non calibré
     const MEDIUM_THRESHOLD = 0.50;  // Non calibré
 
-    const minScore = Math.min(robustness, dataQuality);
+    // Appliquer la pénalité sur la robustesse (plancher 0)
+    const effectiveRobustness = Math.max(0, robustness - penaltyScore);
+    const minScore = Math.min(effectiveRobustness, dataQuality);
 
     if (minScore >= HIGH_THRESHOLD)   return 'HIGH';
     if (minScore >= MEDIUM_THRESHOLD) return 'MEDIUM';
