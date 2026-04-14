@@ -1,5 +1,13 @@
 /**
- * MANI BET PRO — app.js v3.3
+ * MANI BET PRO — app.js v3.4
+ *
+ * CORRECTIONS v3.4 :
+ *   - _startSettlerPolling() appelle poll() immédiatement avant de lancer l'interval.
+ *     En v3.3, PaperSettler.settle() était appelé séparément (ligne ~224) puis
+ *     _startSettlerPolling() lançait un 2ème appel via setInterval — deux fetches
+ *     simultanés au boot. L'appel séparé est supprimé.
+ *   - store.js v2.2 : subscriber 'history' dédié supprimé (race condition avec
+ *     _persistState()). app.js reste seul responsable du cycle persist/restore.
  *
  * CORRECTIONS v3.2 :
  *   - _pollerActive flag : évite les intervals multiples
@@ -73,6 +81,10 @@ function _startSettlerPolling(store) {
     }
   };
 
+  // Déclencher immédiatement au démarrage (couvre paris des jours passés + jour actuel),
+  // puis toutes les 5 minutes. Évite le double appel settler qui existait en v3.3
+  // (PaperSettler.settle() séparé + premier cycle polling = 2 fetches simultanés au boot).
+  poll();
   _pollerIntervalId = setInterval(poll, POLL_INTERVAL_MS);
   Logger.info('SETTLER_POLL_START', { interval_min: 5 });
 }
@@ -220,13 +232,12 @@ async function init() {
   // 7. Thème
   initThemeToggle();
 
-  // 8. Clôture immédiate au démarrage (paris des jours passés + jour actuel)
-  PaperSettler.settle(store).catch(() => {});
-
-  // 9. Polling toutes les 5 minutes pour clôture en temps réel
+  // 8. Settler + polling — premier cycle immédiat au boot, puis toutes les 5 min.
+  //    (Le settle() immédiat séparé de v3.3 est supprimé — _startSettlerPolling
+  //     appelle poll() directement avant de lancer l'interval.)
   _startSettlerPolling(store);
 
-  // 10. Redémarrer le polling si de nouveaux paris sont placés après arrêt
+  // 9. Redémarrer le polling si de nouveaux paris sont placés après arrêt
   store.subscribe('paperTradingVersion', () => _startSettlerPolling(store));
 
   Logger.info('APP_INIT_DONE', { version: APP_CONFIG.VERSION });
