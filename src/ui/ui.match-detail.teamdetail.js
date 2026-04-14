@@ -178,18 +178,24 @@ function _renderTDStats(match, teamDetail) {
 // ── SECTION 2 : TOP 10 SCOREURS ───────────────────────────────────────────────
 
 function _renderTDTop10(match, teamDetail, injReport) {
-  const homeAbv = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv = match?.away_team?.abbreviation ?? 'EXT';
-  const uid     = 'top10_' + (match?.id ?? Date.now());
+  const homeAbv  = match?.home_team?.abbreviation ?? 'DOM';
+  const awayAbv  = match?.away_team?.abbreviation ?? 'EXT';
+  const homeName = match?.home_team?.name ?? '';
+  const awayName = match?.away_team?.name ?? '';
+  const uid      = 'top10_' + (match?.id ?? Date.now());
 
-  const absentNames = new Set();
-  if (injReport?.by_team) {
-    Object.values(injReport.by_team).forEach(players =>
-      players.forEach(p => { if (p?.name) absentNames.add(p.name.toLowerCase()); })
-    );
-  }
+  // Construire un Set d'absents PAR ÉQUIPE — évite de badger un joueur absent
+  // dans l'onglet de l'équipe adverse (bug : absentNames global toutes équipes confondues)
+  const buildAbsentSet = (teamName) => {
+    const set = new Set();
+    const players = injReport?.by_team?.[teamName] ?? [];
+    players.forEach(p => { if (p?.name) set.add(p.name.toLowerCase()); });
+    return set;
+  };
+  const homeAbsentNames = buildAbsentSet(homeName);
+  const awayAbsentNames = buildAbsentSet(awayName);
 
-  const renderTable = (players) => {
+  const renderTable = (players, absentNames) => {
     if (!players?.length) return `<div style="font-size:12px;color:var(--color-muted);padding:8px">Données indisponibles</div>`;
     return `
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -245,8 +251,8 @@ function _renderTDTop10(match, teamDetail, injReport) {
           document.getElementById('${uid}_btnH').style.background='var(--color-bg)';document.getElementById('${uid}_btnH').style.color='var(--color-muted)';
         " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:var(--color-bg);color:var(--color-muted)">${awayAbv}</button>
       </div>
-      <div id="${uid}_H" style="display:block;overflow-x:auto">${renderTable(teamDetail?.home?.top10scorers)}</div>
-      <div id="${uid}_A" style="display:none;overflow-x:auto">${renderTable(teamDetail?.away?.top10scorers)}</div>
+      <div id="${uid}_H" style="display:block;overflow-x:auto">${renderTable(teamDetail?.home?.top10scorers, homeAbsentNames)}</div>
+      <div id="${uid}_A" style="display:none;overflow-x:auto">${renderTable(teamDetail?.away?.top10scorers, awayAbsentNames)}</div>
     </div>`;
 }
 
