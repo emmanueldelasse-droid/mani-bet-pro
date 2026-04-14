@@ -1,5 +1,15 @@
 /**
- * MANI BET PRO — data.orchestrator.js v3.11
+ * MANI BET PRO — data.orchestrator.js v3.12
+ *
+ * REFACTOR v3.12 :
+ *   - Suppression de TEAM_NAME_TO_BDL_ID (30 entrées) et ABV_TO_ESPN_NAME (30 entrées).
+ *     Ces deux objets étaient dupliqués ici alors que sports.config.js est la source
+ *     de vérité des configs NBA. Une relocalisation d'équipe nécessitait 2 mises à jour.
+ *     Remplacés par les helpers importés depuis sports.config.js :
+ *       getNBABdlIdFromEspn()  ← was TEAM_NAME_TO_BDL_ID[name]
+ *       getNBAAbvFromEspn()    ← was _getTeamAbv() (loop O(n) → O(1))
+ *       getNBAEspnFromAbv()    ← was ABV_TO_ESPN_NAME[abv]
+ *     _getBDLId() et _getTeamAbv() conservés comme wrappers pour compatibilité interne.
  *
  * CORRECTION v3.11 :
  *   - _computeRestDays() : guard sur diff < 0 (données BDL incohérentes → null).
@@ -83,74 +93,16 @@ import { EngineTennis }    from '../engine/engine.tennis.js';
 import { Logger }           from '../utils/utils.logger.js';
 import { LoadingUI }        from '../ui/ui.loading.js';
 import { API_CONFIG }       from '../config/api.config.js';
+import {
+  NBA_TEAM_BY_ESPN,
+  getNBAAbvFromEspn,
+  getNBAEspnFromAbv,
+  getNBABdlIdFromEspn,
+} from '../config/sports.config.js';
 
-// Mapping nom équipe ESPN vers ID BallDontLie (officiel NBA 1-30)
-const TEAM_NAME_TO_BDL_ID = {
-  'Atlanta Hawks':           '1',
-  'Boston Celtics':          '2',
-  'Brooklyn Nets':           '3',
-  'Charlotte Hornets':       '4',
-  'Chicago Bulls':           '5',
-  'Cleveland Cavaliers':     '6',
-  'Dallas Mavericks':        '7',
-  'Denver Nuggets':          '8',
-  'Detroit Pistons':         '9',
-  'Golden State Warriors':   '10',
-  'Houston Rockets':         '11',
-  'Indiana Pacers':          '12',
-  'LA Clippers':             '13',
-  'Los Angeles Lakers':      '14',
-  'Memphis Grizzlies':       '15',
-  'Miami Heat':              '16',
-  'Milwaukee Bucks':         '17',
-  'Minnesota Timberwolves':  '18',
-  'New Orleans Pelicans':    '19',
-  'New York Knicks':         '20',
-  'Oklahoma City Thunder':   '21',
-  'Orlando Magic':           '22',
-  'Philadelphia 76ers':      '23',
-  'Phoenix Suns':            '24',
-  'Portland Trail Blazers':  '25',
-  'Sacramento Kings':        '26',
-  'San Antonio Spurs':       '27',
-  'Toronto Raptors':         '28',
-  'Utah Jazz':               '29',
-  'Washington Wizards':      '30',
-};
-
-// Mapping Tank01 teamAbv → nom ESPN complet
-const ABV_TO_ESPN_NAME = {
-  'ATL': 'Atlanta Hawks',
-  'BOS': 'Boston Celtics',
-  'BKN': 'Brooklyn Nets',
-  'CHA': 'Charlotte Hornets',
-  'CHI': 'Chicago Bulls',
-  'CLE': 'Cleveland Cavaliers',
-  'DAL': 'Dallas Mavericks',
-  'DEN': 'Denver Nuggets',
-  'DET': 'Detroit Pistons',
-  'GS':  'Golden State Warriors',
-  'HOU': 'Houston Rockets',
-  'IND': 'Indiana Pacers',
-  'LAC': 'LA Clippers',
-  'LAL': 'Los Angeles Lakers',
-  'MEM': 'Memphis Grizzlies',
-  'MIA': 'Miami Heat',
-  'MIL': 'Milwaukee Bucks',
-  'MIN': 'Minnesota Timberwolves',
-  'NO':  'New Orleans Pelicans',
-  'NY':  'New York Knicks',
-  'OKC': 'Oklahoma City Thunder',
-  'ORL': 'Orlando Magic',
-  'PHI': 'Philadelphia 76ers',
-  'PHO': 'Phoenix Suns',
-  'POR': 'Portland Trail Blazers',
-  'SAC': 'Sacramento Kings',
-  'SA':  'San Antonio Spurs',
-  'TOR': 'Toronto Raptors',
-  'UTA': 'Utah Jazz',
-  'WAS': 'Washington Wizards',
-};
+// Mappings équipes supprimés (v3.12) — centralisés dans sports.config.js (NBA_TEAMS).
+// Utiliser getNBABdlIdFromEspn(), getNBAAbvFromEspn(), getNBAEspnFromAbv() à la place.
+// Anciens objets : TEAM_NAME_TO_BDL_ID et ABV_TO_ESPN_NAME.
 
 export class DataOrchestrator {
 
@@ -306,7 +258,7 @@ export class DataOrchestrator {
 // ── FONCTIONS PRIVÉES ─────────────────────────────────────────────────────────
 
 function _getBDLId(teamName) {
-  return teamName ? (TEAM_NAME_TO_BDL_ID[teamName] || null) : null;
+  return getNBABdlIdFromEspn(teamName);
 }
 
 function _extractTeamIds(matches) {
@@ -401,14 +353,10 @@ async function _loadInjuries(date) {
 
 /**
  * Retourne l'abréviation Tank01 d'une équipe depuis son nom ESPN complet.
- * Inverse de ABV_TO_ESPN_NAME.
+ * Délègue à getNBAAbvFromEspn() (sports.config.js) — source de vérité unique.
  */
 function _getTeamAbv(espnName) {
-  if (!espnName) return null;
-  for (var abv in ABV_TO_ESPN_NAME) {
-    if (ABV_TO_ESPN_NAME[abv] === espnName) return abv;
-  }
-  return null;
+  return getNBAAbvFromEspn(espnName);
 }
 
 
@@ -573,7 +521,7 @@ function _mergeBatchAiPlayers(target, players, homeAbv, awayAbv) {
   players.forEach(function(p) {
     if (!p || !p.name) return;
     const teamAbv = String(p.team || '').toUpperCase() || null;
-    const espnTeamName = ABV_TO_ESPN_NAME[teamAbv] || ABV_TO_ESPN_NAME[homeAbv] || ABV_TO_ESPN_NAME[awayAbv];
+    const espnTeamName = getNBAEspnFromAbv(teamAbv) || getNBAEspnFromAbv(homeAbv) || getNBAEspnFromAbv(awayAbv);
     if (!espnTeamName) return;
     if (!target[espnTeamName]) target[espnTeamName] = [];
     const exists = target[espnTeamName].some(function(existing) { return existing.name === p.name; });
@@ -813,7 +761,7 @@ async function _loadAdvancedStats() {
     // Convertir teamAbv → nom ESPN complet pour compatibilité moteur
     const byName = {};
     for (const [abv, stats] of Object.entries(data.teams)) {
-      const name = ABV_TO_ESPN_NAME[abv];
+      const name = getNBAEspnFromAbv(abv);
       if (name) {
         byName[name] = {
           net_rating:       stats.net_rating_approx,
@@ -861,7 +809,13 @@ async function _analyzeMatches(matches, recentForms, injuryReport, oddsCompariso
           match.home_team && match.home_team.name,
           match.away_team && match.away_team.name
         );
-        if (matchOdds) rawData.market_odds = matchOdds;
+        if (matchOdds) {
+          rawData.market_odds = matchOdds;
+          // Stocker aussi dans le match du store pour que l'UI y ait accès
+          // (rawData n'est utilisé que par le moteur, match.market_odds est lu par l'UI)
+          store.upsert('matches', match.id, Object.assign({}, match, { market_odds: matchOdds }));
+          match.market_odds = matchOdds; // mise à jour locale pour la suite de la boucle
+        }
       }
 
       const analysis = EngineCore.compute('NBA', rawData);
