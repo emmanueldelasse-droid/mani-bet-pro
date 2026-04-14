@@ -344,24 +344,54 @@ function _renderTDH2H_OU(match, teamDetail) {
 
   const h2hHtml = h2h.length
     ? h2h.slice(0, 5).map(g => {
-        const dateStr = g.date ? `${g.date.slice(4,6)}/${g.date.slice(6,8)}` : '';
+        const dateStr  = g.date ? `${g.date.slice(4,6)}/${g.date.slice(6,8)}` : '';
+        const won      = g.result === 'W';
+        const color    = won ? '#22c55e' : '#ef4444';
+        const isHome   = g.homeAway === 'home';
+        const venue    = isHome ? '🏠' : '✈️';
+        // Score affiché comme : DOM XXX - YYY EXT
+        // L'équipe "home" dans ce contexte = l'équipe qu'on analyse (home_team du match affiché)
+        const teamPts  = g.teamPts ?? '—';
+        const oppPts   = g.oppPts  ?? '—';
+        // En H2H, g.result = résultat pour homeAbv (l'équipe domicile du match affiché)
+        const winnerAbv = won ? homeAbv : (g.opponent ?? awayAbv);
+
         return `
-          <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;background:var(--color-bg);margin-bottom:4px">
-            ${_resultBadge(g.result)}
-            <span style="font-size:10px;color:var(--color-muted);width:30px">${dateStr}</span>
-            <span style="font-size:10px">${g.homeAway === 'home' ? '🏠' : '✈️'}</span>
-            <span style="font-size:11px;color:var(--color-muted);margin-left:auto">${g.score ?? '—'}</span>
+          <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px;align-items:center;padding:6px 8px;border-radius:6px;background:var(--color-bg);margin-bottom:4px;border-left:3px solid ${color}">
+            <div style="display:flex;align-items:center;gap:4px">
+              <span style="font-size:9px;font-weight:700;color:${color};width:14px">${won ? 'V' : 'D'}</span>
+              <span style="font-size:10px;color:var(--color-muted)">${dateStr}</span>
+              <span style="font-size:10px">${venue}</span>
+            </div>
+            <div style="font-size:11px;font-weight:600;text-align:center">
+              <span style="color:${won ? 'var(--color-success)' : 'var(--color-muted)'}">${homeAbv}</span>
+              <span style="color:var(--color-muted);margin:0 4px">·</span>
+              <span style="font-weight:700">${teamPts} – ${oppPts}</span>
+              <span style="color:var(--color-muted);margin:0 4px">·</span>
+              <span style="color:${won ? 'var(--color-muted)' : 'var(--color-danger)'}">${g.opponent ?? awayAbv}</span>
+            </div>
+            <div style="font-size:9px;color:${color};font-weight:700;text-align:right;min-width:28px">
+              ${won ? `+${teamPts - oppPts}` : `${teamPts - oppPts}`}
+            </div>
           </div>`;
       }).join('')
     : `<div style="font-size:11px;color:var(--color-muted)">Pas de confrontation cette saison</div>`;
+
+  // Bilan H2H rapide
+  const h2hWins   = h2h.filter(g => g.result === 'W').length;
+  const h2hTotal  = Math.min(h2h.length, 5);
+  const h2hBilan  = h2hTotal > 0
+    ? `<div style="font-size:11px;color:var(--color-muted);margin-bottom:8px">${homeAbv} : <strong style="color:var(--color-text)">${h2hWins}V / ${h2hTotal - h2hWins}D</strong> cette saison</div>`
+    : '';
 
   return `
     <div class="card match-detail__bloc">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
-          <div class="bloc-header" style="margin-bottom:var(--space-3)">
+          <div class="bloc-header" style="margin-bottom:var(--space-2)">
             <span class="bloc-header__title">🔁 H2H saison</span>
           </div>
+          ${h2hBilan}
           ${h2hHtml}
         </div>
         <div>

@@ -400,22 +400,6 @@ function _renderShell(selectedDate) {
             <button class="chip" data-decision="INSUFFISANT">Insuffisant</button>
           </div>
         </div>
-        <div class="filter-row">
-          <span class="filter-label">Edge min.</span>
-          <div class="filter-chips" id="filter-edge">
-            <button class="chip chip--active" data-edge="0">Tous</button>
-            <button class="chip" data-edge="5">5%+</button>
-            <button class="chip" data-edge="8">8%+</button>
-            <button class="chip" data-edge="12">12%+</button>
-          </div>
-        </div>
-        <div class="filter-row">
-          <span class="filter-label">Paris</span>
-          <div class="filter-chips" id="filter-bets">
-            <button class="chip chip--active" data-bets="ALL">Tous</button>
-            <button class="chip" data-bets="OPEN"><span class="mbp-bet-dot"></span>En cours</button>
-          </div>
-        </div>
       </div>
 
       <div id="best-opportunity" style="display:none"></div>
@@ -834,13 +818,28 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
   const el = container.querySelector('#best-opportunity');
   if (!el) return;
 
-  let bestMatch = null, bestAnalysis = null, bestEdge = 0;
+  let bestMatch = null, bestAnalysis = null, bestEdge = 0, bestScore = 0;
 
   matches.forEach(m => {
     const a = analysisIndex[m.id];
     if (!a?.betting_recommendations?.best) return;
-    const edge = a.betting_recommendations.best.edge ?? 0;
-    if (edge > bestEdge) { bestEdge = edge; bestMatch = m; bestAnalysis = a; }
+    const best = a.betting_recommendations.best;
+    const edge = best.edge ?? 0;
+    if (edge < 5) return;
+
+    // Score composite : edge pondéré par qualité données + pénalité divergence forte
+    const quality    = a.data_quality_score ?? 0.5;
+    const divergence = a.market_divergence?.flag ?? 'low';
+    const divPenalty = divergence === 'critical' ? 0.5
+                     : divergence === 'high'     ? 0.3
+                     : 0;
+    // Favoriser les marchés O/U et Spread plutôt que ML avec grand écart
+    const mlPenalty  = best.type === 'MONEYLINE' && Math.abs(edge) > 10 ? 0.2 : 0;
+    const score = edge * quality * (1 - divPenalty) * (1 - mlPenalty);
+
+    if (score > bestScore) {
+      bestScore = score; bestEdge = edge; bestMatch = m; bestAnalysis = a;
+    }
   });
 
   if (!bestMatch || bestEdge < 5) { el.style.display = 'none'; return; }
