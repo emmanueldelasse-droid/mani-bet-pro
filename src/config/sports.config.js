@@ -84,49 +84,62 @@ export const SPORTS_CONFIG = {
     },
 
     /**
-     * Ponderations Play-In / Play-Off — v5.14
+     * Ponderations Play-In / Play-Off — v6.0
      * Actives automatiquement mi-avril → mi-juin via getNBAPhase().
      *
-     * Différences vs default_weights :
-     *   recent_form_ema  ↑ 0.16 → 0.28  forme récente >> bilan saison en playoff
-     *   home_away_split  ↑ 0.10 → 0.16  avantage terrain plus marqué (~65% domicile)
-     *   absences_impact  ↑ 0.20 → 0.22  rotations courtes, stars plus critiques
-     *   net_rating_diff  ↓ 0.24 → 0.18  défenses s'adaptent, moins prédictif
-     *   efg_diff         ↓ 0.18 → 0.10  défenses s'adaptent au tir adverse
-     *   win_pct_diff     ↓ 0.05 → 0.01  bilan saison quasi inutile en playoff
-     *   defensive_diff   ↑ 0.02 → 0.03
-     *   back_to_back     ↓ 0.03 → 0.01  pas de B2B en playoff (1 match tous les 2j min)
-     *   rest_days_diff   ↑ 0.02 → 0.01
-     * Somme = 0.18+0.10+0.28+0.16+0.22+0.03+0.01+0.01+0.01 = 1.00
+     * Logique playoff vs saison régulière :
+     *   absences_impact  ↑ 0.20 → 0.30  rotations courtes (~8 joueurs), star = irremplaçable
+     *                                    STAR_FACTOR 1.55→2.0, STAR_MAX_REDUCTION 0.45→0.55
+     *   recent_form_ema  ↑ 0.16 → 0.24  EMA resserrée λ=0.92 (vs 0.85), fenêtre efficace ~5 matchs
+     *   defensive_diff   ↑ 0.02 → 0.12  défense prime en playoffs (adaptation tactique match/match)
+     *   home_away_split  = 0.10 → 0.14  ~65% victoires domicile en playoff (vs ~59% saison)
+     *   net_rating_diff  ↓ 0.24 → 0.08  stats saison régulière = peu prédictives en série
+     *   efg_diff         ↓ 0.18 → 0.04  défenses s'adaptent spécifiquement au tir adverse
+     *   rest_days_diff   ↑ 0.02 → 0.06  repos entre séries = avantage réel
+     *   win_pct_diff     ↓ 0.05 → 0.02  bilan saison quasi inutile en série
+     *   back_to_back     → 0.00         inexistant en playoffs (1 match / 2j minimum)
+     * Somme = 0.30+0.24+0.14+0.12+0.08+0.06+0.04+0.02+0.00 = 1.00
      *
-     * STATUT : hypotheses d'expert — à calibrer après 30+ paris playoff.
+     * Vérifications effectuées :
+     *   series_lead_factor : NON calculable (h2h = saison régulière, pas série en cours)
+     *   coaching_adjustment : NON calculable (variance indisponible en temps réel)
+     *   seuil star : maintenu 20ppg (18-20ppg = 2nd option, impact marginal)
+     *   score_cap : 0.90 → 0.80 (séries serrées, pas de mismatch >80%)
+     *   ema_lambda playoff : 0.85 → 0.92 (matchs récents >> anciens)
+     *   require_absences_confirmed : true en playoffs
+     * STATUT : hypothèses d'expert raisonnées — calibration après 50+ paris playoff.
      */
     playoff_weights: {
-      net_rating_diff:  0.18,
-      efg_diff:         0.10,
-      recent_form_ema:  0.28,
-      home_away_split:  0.16,
-      absences_impact:  0.22,
-      defensive_diff:   0.03,
-      win_pct_diff:     0.01,
-      back_to_back:     0.01,
-      rest_days_diff:   0.01,
+      absences_impact:  0.30,
+      recent_form_ema:  0.24,
+      home_away_split:  0.14,
+      defensive_diff:   0.12,
+      net_rating_diff:  0.08,
+      rest_days_diff:   0.06,
+      efg_diff:         0.04,
+      win_pct_diff:     0.02,
+      back_to_back:     0.00,
+      // Somme = 0.30+0.24+0.14+0.12+0.08+0.06+0.04+0.02+0.00 = 1.00
     },
 
-    ema_lambda: 0.85,
+    // EMA lambda par phase — 0.85 saison régulière, 0.92 playoffs
+    ema_lambda:         0.85,
+    ema_lambda_playoff: 0.92,
 
     /**
-     * Plafond score moteur — v4.
-     * 90% = maximum empirique raisonnable en NBA.
-     * Applique APRES calcul brut pour ne pas biaiser robustesse et Kelly.
+     * Plafond score moteur par phase.
+     * Saison : 0.90 — Playoffs : 0.80 (séries toujours serrées).
+     * Appliqué APRÈS calcul brut pour ne pas biaiser robustesse et Kelly.
      */
-    score_cap: 0.90,
+    score_cap:         0.90,
+    score_cap_playoff: 0.80,
 
     rejection_thresholds: {
       min_robustness:             null,
       min_data_quality:           null,
       min_games_sample:           10,
       require_absences_confirmed: false,
+      require_absences_confirmed_playoff: true,
     },
 
     sensitivity_steps: [-0.20, -0.10, 0.10, 0.20],
@@ -380,10 +393,16 @@ export function getNBAPhase(date = new Date()) {
  * @returns {object} weights
  */
 export function getNBAWeights(date = new Date()) {
-  const phase = getNBAPhase(date);
-  const config = SPORTS_CONFIG.NBA;
-  const weights = (phase === 'playin' || phase === 'playoff')
-    ? config.playoff_weights
-    : config.default_weights;
-  return { weights, phase };
+  const phase     = getNBAPhase(date);
+  const config    = SPORTS_CONFIG.NBA;
+  const isPlayoff = phase === 'playin' || phase === 'playoff';
+
+  const weights    = isPlayoff ? config.playoff_weights    : config.default_weights;
+  const scoreCap   = isPlayoff ? config.score_cap_playoff  : config.score_cap;
+  const emaLambda  = isPlayoff ? config.ema_lambda_playoff : config.ema_lambda;
+  const requireAbs = isPlayoff
+    ? (config.rejection_thresholds.require_absences_confirmed_playoff ?? false)
+    : (config.rejection_thresholds.require_absences_confirmed ?? false);
+
+  return { weights, phase, score_cap: scoreCap, ema_lambda: emaLambda, require_absences_confirmed: requireAbs };
 }
