@@ -184,18 +184,26 @@ function _renderTDTop10(match, teamDetail, injReport) {
   const awayName = match?.away_team?.name ?? '';
   const uid      = 'top10_' + (match?.id ?? Date.now());
 
-  // Construire un Set d'absents PAR ÉQUIPE — évite de badger un joueur absent
-  // dans l'onglet de l'équipe adverse (bug : absentNames global toutes équipes confondues)
-  const buildAbsentSet = (teamName) => {
-    const set = new Set();
+  // Construire une Map nom→statut PAR ÉQUIPE — affiche le bon badge (OUT/DTD/etc.)
+  // au lieu d'un générique OUT pour tous les joueurs listés dans les absences.
+  const buildAbsentMap = (teamName) => {
+    const map = new Map();
     const players = injReport?.by_team?.[teamName] ?? [];
-    players.forEach(p => { if (p?.name) set.add(p.name.toLowerCase()); });
-    return set;
+    players.forEach(p => { if (p?.name) map.set(p.name.toLowerCase(), p.status ?? 'Out'); });
+    return map;
   };
-  const homeAbsentNames = buildAbsentSet(homeName);
-  const awayAbsentNames = buildAbsentSet(awayName);
+  const homeAbsentMap = buildAbsentMap(homeName);
+  const awayAbsentMap = buildAbsentMap(awayName);
 
-  const renderTable = (players, absentNames) => {
+  const STATUS_BADGE = {
+    'Out':          { label: 'OUT',  color: '#ef4444' },
+    'Doubtful':     { label: 'DOUT', color: '#f97316' },
+    'Day-To-Day':   { label: 'DTD',  color: '#eab308' },
+    'Questionable': { label: '?',    color: '#eab308' },
+    'Limited':      { label: 'LIM',  color: '#a78bfa' },
+  };
+
+  const renderTable = (players, absentMap) => {
     if (!players?.length) return `<div style="font-size:12px;color:var(--color-muted);padding:8px">Données indisponibles</div>`;
     return `
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -212,13 +220,15 @@ function _renderTDTop10(match, teamDetail, injReport) {
         </thead>
         <tbody>
           ${players.map((p, i) => {
-            const absent = absentNames.has((p.name ?? '').toLowerCase());
-            const star   = p.pts >= 20;
-            const bg     = absent ? 'rgba(239,68,68,0.06)' : i % 2 === 0 ? '' : 'var(--color-bg)';
+            const status  = absentMap.get((p.name ?? '').toLowerCase()) ?? null;
+            const absent  = status !== null;
+            const badge   = absent ? (STATUS_BADGE[status] ?? { label: status, color: '#ef4444' }) : null;
+            const star    = p.pts >= 20;
+            const bg      = absent ? 'rgba(239,68,68,0.06)' : i % 2 === 0 ? '' : 'var(--color-bg)';
             return `
               <tr style="background:${bg};border-bottom:1px solid var(--color-border);${absent ? 'opacity:0.65' : ''}">
-                <td style="padding:6px 6px;color:${absent ? '#ef4444' : 'var(--color-text)'};white-space:nowrap;overflow:hidden;max-width:110px;text-overflow:ellipsis">
-                  ${star ? '⭐ ' : ''}${p.name ?? '—'}${absent ? ' <span style="font-size:9px;color:#ef4444;font-weight:700">OUT</span>' : ''}
+                <td style="padding:6px 6px;color:${absent ? badge.color : 'var(--color-text)'};white-space:nowrap;overflow:hidden;max-width:110px;text-overflow:ellipsis">
+                  ${star ? '⭐ ' : ''}${p.name ?? '—'}${absent ? ` <span style="font-size:9px;color:${badge.color};font-weight:700">${badge.label}</span>` : ''}
                 </td>
                 <td style="padding:6px 4px;text-align:center;font-weight:600">${p.pts?.toFixed(1) ?? '—'}</td>
                 <td style="padding:6px 4px;text-align:center">${p.last5pts !== null && p.last5pts !== undefined ? p.last5pts.toFixed(1) + ' ' + _trendArrow(p.pts, p.last5pts) : '—'}</td>
@@ -251,8 +261,8 @@ function _renderTDTop10(match, teamDetail, injReport) {
           document.getElementById('${uid}_btnH').style.background='var(--color-bg)';document.getElementById('${uid}_btnH').style.color='var(--color-muted)';
         " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:var(--color-bg);color:var(--color-muted)">${awayAbv}</button>
       </div>
-      <div id="${uid}_H" style="display:block;overflow-x:auto">${renderTable(teamDetail?.home?.top10scorers, homeAbsentNames)}</div>
-      <div id="${uid}_A" style="display:none;overflow-x:auto">${renderTable(teamDetail?.away?.top10scorers, awayAbsentNames)}</div>
+      <div id="${uid}_H" style="display:block;overflow-x:auto">${renderTable(teamDetail?.home?.top10scorers, homeAbsentMap)}</div>
+      <div id="${uid}_A" style="display:none;overflow-x:auto">${renderTable(teamDetail?.away?.top10scorers, awayAbsentMap)}</div>
     </div>`;
 }
 
