@@ -1,43 +1,16 @@
 /**
- * MANI BET PRO — ui.match-detail.js v3.8
+ * MANI BET PRO — ui.match-detail.js v3.9
  *
- * AJOUTS v3.8 :
- *   - renderBlocTeamDetail : 5 nouvelles sections depuis /nba/team-detail (worker v6.31).
- *       1. Stats équipes côte à côte enrichies (PPG, OPPG, Net Rating, Win%, score last5,
- *          repos/back-to-back, forme dom/ext, momentum).
- *       2. Top 10 scoreurs par équipe (onglets) — PPG saison + PPG last5 avec tendance ↑↓.
- *          Badge ⭐ si PPG ≥ 20, badge OUT si joueur absent dans pipeline injuries.
- *       3. 10 derniers matchs avec score exact (ex: W 118-109 @ BOS).
- *       4. H2H cette saison + tendance O/U visuelle (barre over/under sur les 10 derniers).
- *       5. Joueurs absents triés par PPG décroissant avec badge couleur et source.
- *   - Skeleton loader pendant le fetch teamDetail (non bloquant).
- *   - renderBlocStats et renderBlocAbsences conservés pour fallback si teamDetail indisponible.
+ * REFACTOR v3.9 :
+ *   Découpe en 3 sous-modules pour améliorer la maintenabilité :
+ *     ui.match-detail.helpers.js    — utils partagés (conversions cotes, labels, timestamps)
+ *     ui.match-detail.teamdetail.js — bloc Team Detail complet (5 sections)
+ *   Ce fichier conserve : render(), shell, probas, paris, pourquoi, fiabilité,
+ *   sources, IA, stats, absences, events, paper trading modal.
+ *   Interface publique inchangée : export async function render().
+ *   ESPN_TO_TANK01_ABV supprimé — remplacé par getNBAAbvFromEspn() (sports.config.js v6.4).
  *
- * AJOUTS v3.7 :
- *   - renderBlocTousLesParis : tableau complet de tous les marchés avec pastille
- *     de probabilité colorée (4 niveaux), cote, edge coloré, mise Kelly.
- *     Remplace renderBlocParis pour une vue exhaustive.
- *   - renderBlocStats : stats équipes côte à côte + 10 derniers matchs W/L
- *     + tendance Over/Under + forme domicile/extérieur récente.
- *   - renderBlocAbsences : liste consolidée des joueurs absents avec ppg,
- *     statut et contexte IA (team_context, market_signal).
- *   - renderBlocPourquoi remplacé par analyse décision chiffrée.
- *
- * AJOUTS v3.6 :
- *   - renderBlocPourquoi : affiche team_context (forme récente, enjeu) et market_signal (mouvement ligne) depuis données IA.
- *
- * AJOUTS v3.5 :
- *   - renderBlocPourquoi : détails précis par signal en français simple.
- *     Noms des joueurs blessés, chiffres nets, pourcentages lisibles.
- *
- * AJOUTS v3.1 :
- *   - top_signal sauvegardé dans le payload PaperEngine.placeBet()
- *     → affiché dans ui.history.js sur chaque ligne de pari
- *   - match_time sauvegardé pour affichage heure dans ui.history.js
- *
- * REFONTE v3 :
- *   Nouvel ordre logique : Équipes → Paris → Pourquoi → Fiabilité → Sources
- *   Vocabulaire simplifié. Tableau perturbation supprimé.
+ * Historique v3.8 et antérieur → voir git log.
  */
 
 import { router }      from './ui.router.js';
@@ -45,69 +18,23 @@ import { EngineCore }  from '../engine/engine.core.js';
 import { PaperEngine } from '../paper/paper.engine.js';
 import { ProviderNBA } from '../providers/provider.nba.js';
 import { Logger }      from '../utils/utils.logger.js';
+import {
+  americanToDecimal   as _americanToDecimal,
+  decimalToAmerican   as _decimalToAmerican,
+  simplifyLabel       as _simplifyLabel,
+  escapeHtml,
+  formatMatchTime,
+  formatRejection,
+  resolveLatestAnalysisForMatch as _resolveLatestAnalysisForMatch,
+  SIGNAL_LABELS,
+  WORKER_URL,
+} from './ui.match-detail.helpers.js';
+import {
+  loadAndRenderTeamDetail    as _loadAndRenderTeamDetail,
+  renderBlocTeamDetailSkeleton,
+} from './ui.match-detail.teamdetail.js';
 
-function _americanToDecimal(american) {
-  if (!american) return null;
-  const n = Number(american);
-  if (n > 0) return Math.round((n / 100 + 1) * 100) / 100;
-  return Math.round((100 / Math.abs(n) + 1) * 100) / 100;
-}
-
-function _decimalToAmerican(decimal) {
-  if (!decimal || decimal <= 1) return null;
-  if (decimal >= 2) return Math.round((decimal - 1) * 100);
-  return Math.round(-100 / (decimal - 1));
-}
-
-const WORKER_URL = 'https://manibetpro.emmanueldelasse.workers.dev';
-
-const SIGNAL_LABELS = {
-  'recent_form_ema':   'Forme récente',
-  'home_away_split':   'Avantage domicile',
-  'efg_diff':          'Efficacité au tir',
-  'net_rating_diff':   'Niveau général (Net Rating)',
-  'win_pct_diff':      'Bilan victoires/défaites',
-  'absences_impact':   'Blessures',
-  'ts_diff':           'Efficacité offensive',
-  'avg_pts_diff':      'Points marqués',
-  'defensive_diff':    'Défense adverse',
-  'back_to_back':      'Matchs consécutifs',
-  'rest_days_diff':    'Jours de repos',
-};
-
-
-function _analysisTimestamp(analysis) {
-  if (!analysis) return 0;
-  const raw = analysis.updated_at ?? analysis.computed_at ?? analysis.saved_at ?? null;
-  const ts = raw ? Date.parse(raw) : NaN;
-  return Number.isFinite(ts) ? ts : 0;
-}
-
-function _resolveLatestAnalysisForMatch(analyses, matchId, preferredAnalysisId = null) {
-  if (!analyses || !matchId) return null;
-
-  if (preferredAnalysisId && analyses[preferredAnalysisId]?.match_id === matchId) {
-    return analyses[preferredAnalysisId];
-  }
-
-  let best = null;
-  let bestTs = -1;
-  for (const analysis of Object.values(analyses)) {
-    if (!analysis || analysis.match_id !== matchId) continue;
-    const ts = _analysisTimestamp(analysis);
-    if (!best || ts > bestTs || (ts === bestTs && String(analysis.analysis_id ?? '') > String(best.analysis_id ?? ''))) {
-      best = analysis;
-      bestTs = ts;
-    }
-  }
-  return best;
-}
-
-function _simplifyLabel(label, variable) {
-  return SIGNAL_LABELS[variable] ?? label ?? variable;
-}
-
-// ── RENDER ────────────────────────────────────────────────────────────────
+// ── POINT D'ENTRÉE PUBLIC ─────────────────────────────────────────────────────
 
 export async function render(container, storeInstance) {
   const matchId = storeInstance.get('activeMatchId');
@@ -116,21 +43,19 @@ export async function render(container, storeInstance) {
   const match = storeInstance.get('matches')?.[matchId];
   if (!match) { renderNoMatch(container); return { destroy() {} }; }
 
-  const analyses = storeInstance.get('analyses') ?? {};
+  const analyses           = storeInstance.get('analyses') ?? {};
   const preferredAnalysisId = storeInstance.get('activeAnalysisId');
-  const analysis = _resolveLatestAnalysisForMatch(analyses, matchId, preferredAnalysisId);
+  const analysis            = _resolveLatestAnalysisForMatch(analyses, matchId, preferredAnalysisId);
 
   container.innerHTML = renderShell(match, analysis, storeInstance);
   bindEvents(container, storeInstance, match, analysis);
   _loadAndRenderMultiBookOdds(container, match, analysis);
-
-  // Charger teamDetail de façon asynchrone — non bloquant
   _loadAndRenderTeamDetail(container, match, storeInstance);
 
   return { destroy() {} };
 }
 
-// ── SHELL ─────────────────────────────────────────────────────────────────
+// ── SHELL ─────────────────────────────────────────────────────────────────────
 
 function renderShell(match, analysis, storeInstance) {
   return `
@@ -175,7 +100,7 @@ function renderShell(match, analysis, storeInstance) {
   `;
 }
 
-// ── COTES ESPN ────────────────────────────────────────────────────────────
+// ── COTES ESPN ────────────────────────────────────────────────────────────────
 
 function renderOddsBar(odds) {
   const spread = odds.spread != null ? (odds.spread > 0 ? `+${odds.spread}` : String(odds.spread)) : '—';
@@ -192,7 +117,7 @@ function renderOddsBar(odds) {
     </div>`;
 }
 
-// ── BLOC PROBAS ───────────────────────────────────────────────────────────
+// ── BLOC PROBAS ───────────────────────────────────────────────────────────────
 
 function renderBlocProbas(analysis, match) {
   if (!analysis || analysis.predictive_score === null) {
@@ -211,10 +136,10 @@ function renderBlocProbas(analysis, match) {
   const qual  = analysis.data_quality_score ?? 0;
 
   let decisionLabel, decisionColor;
-  if (!best || edge < 5)                       { decisionLabel = 'Passer';           decisionColor = 'var(--color-muted)'; }
-  else if (edge >= 10 && qual >= 0.80)         { decisionLabel = 'Parier';           decisionColor = 'var(--color-success)'; }
-  else if (edge >= 7)                          { decisionLabel = 'Pari intéressant'; decisionColor = 'var(--color-warning)'; }
-  else                                         { decisionLabel = 'Passer';           decisionColor = 'var(--color-muted)'; }
+  if (!best || edge < 5)               { decisionLabel = 'Passer';           decisionColor = 'var(--color-muted)'; }
+  else if (edge >= 10 && qual >= 0.80) { decisionLabel = 'Parier';           decisionColor = 'var(--color-success)'; }
+  else if (edge >= 7)                  { decisionLabel = 'Pari intéressant'; decisionColor = 'var(--color-warning)'; }
+  else                                 { decisionLabel = 'Passer';           decisionColor = 'var(--color-muted)'; }
 
   return `
     <div class="card match-detail__bloc">
@@ -243,9 +168,9 @@ function renderBlocProbas(analysis, match) {
     </div>`;
 }
 
-// ── BLOC PARIS ────────────────────────────────────────────────────────────
+// ── BLOC PARIS (résumé) ───────────────────────────────────────────────────────
 
-function renderBlocParis(analysis, match) {
+export function renderBlocParis(analysis, match) {
   const betting = analysis?.betting_recommendations;
   const odds    = match?.odds;
 
@@ -273,7 +198,7 @@ function renderBlocParis(analysis, match) {
     const marketLabel = r.type === 'MONEYLINE' ? 'Vainqueur du match' : r.type === 'SPREAD' ? 'Handicap' : 'Total de points';
 
     let sideDisplay = sideLabel;
-    if (r.type === 'SPREAD')      sideDisplay = `${sideLabel} ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts`;
+    if (r.type === 'SPREAD')          sideDisplay = `${sideLabel} ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts`;
     else if (r.type === 'OVER_UNDER') sideDisplay = r.side === 'OVER' ? `Plus de ${r.ou_line ?? '—'} pts` : `Moins de ${r.ou_line ?? '—'} pts`;
 
     const motorProb = r.side === 'HOME' ? Math.round(analysis.predictive_score * 100)
@@ -282,15 +207,16 @@ function renderBlocParis(analysis, match) {
 
     let whyText = '';
     if (r.type === 'MONEYLINE') {
-      if (r.is_contrarian) {
-        // Pari sur l'outsider : le moteur favorise l'adversaire mais la cote est sous-évaluée
-        whyText = `Bien que le moteur favorise l'adversaire, la cote ${oddsDecimal} sur ${sideLabel} est sous-évaluée par le marché. Le moteur estime ${motorProb}% de chances — la cote implicite du bookmaker est inférieure, d'où un avantage de +${r.edge}%.`;
-      } else {
-        whyText = `Le moteur estime ${motorProb}% de chances pour ${sideLabel}. La cote ${oddsDecimal} chez ${r.odds_source ?? 'le bookmaker'} offre un avantage de +${r.edge}%.`;
-      }
+      whyText = r.is_contrarian
+        ? `Bien que le moteur favorise l'adversaire, la cote ${oddsDecimal} sur ${sideLabel} est sous-évaluée par le marché. Le moteur estime ${motorProb}% de chances — la cote implicite du bookmaker est inférieure, d'où un avantage de +${r.edge}%.`
+        : `Le moteur estime ${motorProb}% de chances pour ${sideLabel}. La cote ${oddsDecimal} chez ${r.odds_source ?? 'le bookmaker'} offre un avantage de +${r.edge}%.`;
+    } else if (r.type === 'SPREAD') {
+      whyText = `Le moteur pense que ${sideLabel} peut gagner avec ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts d'écart. La cote de ${oddsDecimal} sous-estime cette probabilité.`;
+    } else if (r.type === 'OVER_UNDER') {
+      whyText = r.side === 'OVER'
+        ? `Le moteur projette un match à points élevés. La ligne de ${r.ou_line} pts semble trop basse.`
+        : `Le moteur projette un match serré et défensif. La ligne de ${r.ou_line} pts semble trop haute.`;
     }
-    else if (r.type === 'SPREAD')    whyText = `Le moteur pense que ${sideLabel} peut gagner avec ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts d'écart. La cote de ${oddsDecimal} sous-estime cette probabilité.`;
-    else if (r.type === 'OVER_UNDER') whyText = r.side === 'OVER' ? `Le moteur projette un match à points élevés. La ligne de ${r.ou_line} pts semble trop basse.` : `Le moteur projette un match serré et défensif. La ligne de ${r.ou_line} pts semble trop haute.`;
 
     return `
       <div style="background:var(--color-bg);border-radius:10px;padding:14px;margin-bottom:10px;border:1px solid ${isBest ? 'var(--color-success)' : 'var(--color-border)'}">
@@ -314,16 +240,10 @@ function renderBlocParis(analysis, match) {
         </div>
         <div style="font-size:12px;color:var(--color-muted);line-height:1.6;padding:8px 10px;background:var(--color-card);border-radius:6px;margin-bottom:10px">${whyText}</div>
         <button class="btn btn--primary paper-bet-btn" style="width:100%;padding:10px;font-size:13px;font-weight:600"
-          data-market="${r.type}"
-          data-side="${r.side}"
-          data-side-label="${sideDisplay}"
-          data-odds="${r.odds_line}"
-          data-edge="${r.edge}"
-          data-motor-prob="${r.motor_prob}"
-          data-implied-prob="${r.implied_prob}"
-          data-kelly="${r.kelly_stake ?? 0}"
-          data-spread-line="${r.spread_line ?? ''}"
-          data-ou-line="${r.ou_line ?? ''}"
+          data-market="${r.type}" data-side="${r.side}" data-side-label="${sideDisplay}"
+          data-odds="${r.odds_line}" data-edge="${r.edge}" data-motor-prob="${r.motor_prob}"
+          data-implied-prob="${r.implied_prob}" data-kelly="${r.kelly_stake ?? 0}"
+          data-spread-line="${r.spread_line ?? ''}" data-ou-line="${r.ou_line ?? ''}"
         >📋 Enregistrer ce pari</button>
       </div>`;
   }).join('');
@@ -338,23 +258,18 @@ function renderBlocParis(analysis, match) {
     </div>`;
 }
 
-// ── BLOC POURQUOI ─────────────────────────────────────────────────────────
+// ── BLOC POURQUOI ─────────────────────────────────────────────────────────────
 
-/**
- * v3.5 : Détails précis par signal en français simple.
- * Chaque signal affiche une explication concrète avec chiffres.
- */
 function renderBlocPourquoi(analysis, match, storeInstance) {
-  const signals     = (analysis?.key_signals ?? []).slice(0, 3);
-  const homeName    = match?.home_team?.name ?? 'Domicile';
-  const awayName    = match?.away_team?.name ?? 'Extérieur';
-  const vars        = analysis?.variables_used ?? {};
-  // team_context et market_signal depuis le rapport injuries enrichi IA (stocké dans le store)
-  const injReport   = storeInstance?.get('injuryReport') ?? null;
-  const teamCtx     = injReport?.team_context ?? null;
-  const marketSig   = injReport?.market_signal ?? null;
-  const homeCtx     = teamCtx?.[homeName] ?? null;
-  const awayCtx     = teamCtx?.[awayName] ?? null;
+  const signals   = (analysis?.key_signals ?? []).slice(0, 3);
+  const homeName  = match?.home_team?.name ?? 'Domicile';
+  const awayName  = match?.away_team?.name ?? 'Extérieur';
+  const vars      = analysis?.variables_used ?? {};
+  const injReport = storeInstance?.get('injuryReport') ?? null;
+  const teamCtx   = injReport?.team_context ?? null;
+  const marketSig = injReport?.market_signal ?? null;
+  const homeCtx   = teamCtx?.[homeName] ?? null;
+  const awayCtx   = teamCtx?.[awayName] ?? null;
 
   return `
     <div class="card match-detail__bloc">
@@ -395,9 +310,6 @@ function renderBlocPourquoi(analysis, match, storeInstance) {
     </div>`;
 }
 
-/**
- * Génère un texte explicatif précis et en français simple pour chaque signal.
- */
 function _getSignalDetail(signal, vars, match, isHome, homeName, awayName) {
   const favTeam = isHome ? homeName : awayName;
   const othTeam = isHome ? awayName : homeName;
@@ -405,25 +317,16 @@ function _getSignalDetail(signal, vars, match, isHome, homeName, awayName) {
   const val     = v?.value ?? null;
 
   switch (signal.variable) {
-
     case 'net_rating_diff': {
-      // Ex : "CLE marque en moyenne 4 pts de plus qu'elle n'en encaisse. ATL seulement 2 pts."
       if (val === null) return null;
-      const favRating = Math.abs(val) > 0 ? (isHome ? val : -val) : val;
-      const othRating = -favRating + val * 0;
-      // Approximation : val = home - away, donc home = away + val
-      // On affiche juste l'écart
       const ecart = Math.abs(val).toFixed(1);
       if (Math.abs(val) < 1) return `Les deux équipes sont au même niveau cette saison.`;
       return `${favTeam} est meilleure de <strong>${ecart} points</strong> par match en moyenne que ${othTeam} cette saison.`;
     }
-
     case 'efg_diff': {
       if (val === null) return null;
-      const pct = Math.abs(val * 100).toFixed(1);
-      return `${favTeam} tire plus efficacement que ${othTeam} — un écart de <strong>${pct}%</strong> d'efficacité au tir.`;
+      return `${favTeam} tire plus efficacement que ${othTeam} — un écart de <strong>${Math.abs(val * 100).toFixed(1)}%</strong> d'efficacité au tir.`;
     }
-
     case 'recent_form_ema': {
       if (val === null) return null;
       const absVal = Math.abs(val);
@@ -431,7 +334,6 @@ function _getSignalDetail(signal, vars, match, isHome, homeName, awayName) {
       if (absVal > 0.2) return `${favTeam} est en bonne forme sur ses derniers matchs.`;
       return `${favTeam} a un léger avantage de forme récente sur ${othTeam}.`;
     }
-
     case 'home_away_split': {
       const raw = v?.raw;
       if (!raw) return `${favTeam} performe mieux dans son contexte (dom./ext.) que ${othTeam}.`;
@@ -442,103 +344,50 @@ function _getSignalDetail(signal, vars, match, isHome, homeName, awayName) {
       }
       return `${favTeam} performe mieux dans son contexte (dom./ext.) que ${othTeam}.`;
     }
-
     case 'absences_impact': {
-      const raw = v?.raw;
+      const raw    = v?.raw;
       if (!raw) return null;
-      // Récupérer les joueurs absents depuis les injuries du match
-      const homeInj = match?.home_injuries ?? [];
-      const awayInj = match?.away_injuries ?? [];
-      const affectedInj = isHome ? awayInj : homeInj; // l'équipe défavorisée
+      const affectedInj = isHome ? (match?.away_injuries ?? []) : (match?.home_injuries ?? []);
       const stars = affectedInj
-        .filter(p => p.status === 'Out' || p.status === 'Doubtful')
-        .filter(p => p.ppg != null && p.ppg > 10 || p.source === 'espn_confirmed_by_ai' || p.source === 'ai_only' || p.source === 'tank01_via_ai')
+        .filter(p => (p.status === 'Out' || p.status === 'Doubtful') && (p.ppg != null && p.ppg > 10))
         .slice(0, 3)
         .map(p => {
           const statut = p.status === 'Out' ? 'absent' : 'incertain';
           return p.ppg ? `${p.name} (${statut}, ${p.ppg} pts/match)` : `${p.name} (${statut})`;
         });
-      if (stars.length > 0) {
-        return `${othTeam} est affaibli — <strong>${stars.join(', ')}</strong>.`;
-      }
-      const homeOut = raw.home_out ?? 0;
-      const awayOut = raw.away_out ?? 0;
-      const moreOut = isHome ? awayOut : homeOut;
+      if (stars.length > 0) return `${othTeam} est affaibli — <strong>${stars.join(', ')}</strong>.`;
+      const moreOut = isHome ? (raw.away_out ?? 0) : (raw.home_out ?? 0);
       if (moreOut > 0) return `${othTeam} a <strong>${moreOut} joueur${moreOut > 1 ? 's' : ''} absent${moreOut > 1 ? 's' : ''}</strong> ce soir.`;
       return `${favTeam} a moins de joueurs absents que ${othTeam}.`;
     }
-
-    case 'win_pct_diff': {
-      if (val === null) return null;
-      const pct = Math.abs(val * 100).toFixed(0);
-      return `${favTeam} a un meilleur bilan victoires/défaites que ${othTeam} — <strong>${pct}%</strong> d'écart.`;
-    }
-
-    case 'back_to_back': {
-      return `${othTeam} joue son deuxième match en deux jours — fatigue accumulée.`;
-    }
-
-    case 'rest_days_diff': {
-      if (val === null) return null;
-      const jours = Math.abs(Math.round(val));
-      return `${favTeam} a eu <strong>${jours} jour${jours > 1 ? 's' : ''} de repos</strong> de plus que ${othTeam}.`;
-    }
-
-    case 'defensive_diff': {
-      if (val === null) return null;
-      return `${favTeam} encaisse moins de points par match que ${othTeam} — meilleure défense.`;
-    }
-
-    default:
-      return null;
+    case 'win_pct_diff':   return val !== null ? `${favTeam} a un meilleur bilan victoires/défaites que ${othTeam} — <strong>${Math.abs(val * 100).toFixed(0)}%</strong> d'écart.` : null;
+    case 'back_to_back':   return `${othTeam} joue son deuxième match en deux jours — fatigue accumulée.`;
+    case 'rest_days_diff': { if (val === null) return null; const j = Math.abs(Math.round(val)); return `${favTeam} a eu <strong>${j} jour${j > 1 ? 's' : ''} de repos</strong> de plus que ${othTeam}.`; }
+    case 'defensive_diff': return val !== null ? `${favTeam} encaisse moins de points par match que ${othTeam} — meilleure défense.` : null;
+    default: return null;
   }
 }
 
+// ── BLOC TOUS LES PARIS ───────────────────────────────────────────────────────
 
-// ── BLOC TOUS LES PARIS ───────────────────────────────────────────────────
-
-/**
- * v3.7 : Tableau exhaustif de tous les marchés disponibles.
- * Pastille ronde colorée par niveau de probabilité moteur :
- *   < 50% → rouge, 50-60% → orange, 60-75% → vert clair, > 75% → vert foncé
- * Edge coloré : > 8% vert, 4-8% orange, < 4% ou négatif rouge/gris.
- */
 function renderBlocTousLesParis(analysis, match) {
   const homeProb   = analysis?.predictive_score != null ? Math.round(analysis.predictive_score * 100) : null;
   const awayProb   = homeProb != null ? 100 - homeProb : null;
-  const homeName   = match?.home_team?.name ?? 'DOM';
-  const awayName   = match?.away_team?.name ?? 'EXT';
   const homeAbbr   = match?.home_team?.abbreviation ?? 'DOM';
   const awayAbbr   = match?.away_team?.abbreviation ?? 'EXT';
   const odds       = match?.odds;
   const marketOdds = match?.market_odds;
   const betting    = analysis?.betting_recommendations;
-  const paperState = PaperEngine.load();
-  const bankroll   = paperState.current_bankroll ?? 500;
+  const bankroll   = (PaperEngine.load().current_bankroll) ?? 500;
 
-  // Fonction pastille couleur
-  function _probPill(prob) {
+  const _probPill = (prob) => {
     if (prob === null) return '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--color-border);flex-shrink:0"></span>';
-    let bg;
-    if (prob < 50)      bg = '#ef4444';
-    else if (prob < 60) bg = '#f97316';
-    else if (prob < 75) bg = '#22c55e';
-    else                bg = '#16a34a';
+    let bg = prob < 50 ? '#ef4444' : prob < 60 ? '#f97316' : prob < 75 ? '#22c55e' : '#16a34a';
     return `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${bg};flex-shrink:0;box-shadow:0 0 4px ${bg}44"></span>`;
-  }
+  };
 
-  // Fonction couleur edge
-  function _edgeColor(edge) {
-    if (edge >= 8)  return '#22c55e';
-    if (edge >= 4)  return '#f97316';
-    if (edge > 0)   return 'var(--color-muted)';
-    return '#ef4444';
-  }
+  const _edgeColor = (edge) => edge >= 8 ? '#22c55e' : edge >= 4 ? '#f97316' : edge > 0 ? 'var(--color-muted)' : '#ef4444';
 
-  // Construire les lignes du tableau
-  const rows = [];
-
-  // Récupérer les cotes depuis market_odds (Pinnacle/Betclic) ou ESPN
   const getOdds = (type, side) => {
     if (marketOdds) {
       if (type === 'ML')   return side === 'HOME' ? marketOdds.home_ml_decimal   : marketOdds.away_ml_decimal;
@@ -546,30 +395,20 @@ function renderBlocTousLesParis(analysis, match) {
       if (type === 'OVER') return marketOdds.over_decimal;
       if (type === 'UNDR') return marketOdds.under_decimal;
     }
-    if (odds) {
-      if (type === 'ML')   return side === 'HOME' ? _americanToDecimal(odds.home_ml) : _americanToDecimal(odds.away_ml);
-    }
+    if (odds && type === 'ML') return side === 'HOME' ? _americanToDecimal(odds.home_ml) : _americanToDecimal(odds.away_ml);
     return null;
   };
 
-  const getOddsSource = () => {
-    if (marketOdds?.best_book) return marketOdds.best_book;
-    if (marketOdds)            return 'Pinnacle';
-    return 'DraftKings';
-  };
-
-  // Trouver les recommandations existantes pour les mises Kelly
+  const getOddsSource = () => marketOdds?.best_book ?? (marketOdds ? 'Pinnacle' : 'DraftKings');
   const findRec = (type, side) => betting?.recommendations?.find(r => r.type === type && r.side === side) ?? null;
 
-  // Ligne helper
   const buildRow = (label, type, side, prob, oddsDec, rec, spreadLine, ouLine) => {
     if (!oddsDec) return null;
     const impliedProb = Math.round((1 / oddsDec) * 100);
-    const edge = prob !== null ? prob - impliedProb : null;
-    const kellyEuros = rec?.kelly_stake > 0 ? Math.round(rec.kelly_stake * bankroll * 100) / 100 : null;
-    const isBest = betting?.best?.type === type && betting?.best?.side === side;
-
-    let betData = `data-market="${type}" data-side="${side}" data-side-label="${label}" data-odds="${_decimalToAmerican(oddsDec) ?? 0}" data-edge="${edge ?? 0}" data-motor-prob="${prob ?? 0}" data-implied-prob="${impliedProb}" data-kelly="${rec?.kelly_stake ?? 0}" data-spread-line="${spreadLine ?? ''}" data-ou-line="${ouLine ?? ''}"`;
+    const edge        = prob !== null ? prob - impliedProb : null;
+    const kellyEuros  = rec?.kelly_stake > 0 ? Math.round(rec.kelly_stake * bankroll * 100) / 100 : null;
+    const isBest      = betting?.best?.type === type && betting?.best?.side === side;
+    const betData     = `data-market="${type}" data-side="${side}" data-side-label="${label}" data-odds="${_decimalToAmerican(oddsDec) ?? 0}" data-edge="${edge ?? 0}" data-motor-prob="${prob ?? 0}" data-implied-prob="${impliedProb}" data-kelly="${rec?.kelly_stake ?? 0}" data-spread-line="${spreadLine ?? ''}" data-ou-line="${ouLine ?? ''}"`;
 
     return `
       <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:9px 10px;background:${isBest ? 'rgba(34,197,94,0.06)' : 'var(--color-bg)'};border-radius:8px;border:1px solid ${isBest ? 'rgba(34,197,94,0.3)' : 'transparent'};margin-bottom:6px">
@@ -594,31 +433,22 @@ function renderBlocTousLesParis(analysis, match) {
       </div>`;
   };
 
-  // ML
-  const homeMLOdds = getOdds('ML', 'HOME');
-  const awayMLOdds = getOdds('ML', 'AWAY');
+  const rows = [];
+  const homeMLOdds = getOdds('ML', 'HOME'), awayMLOdds = getOdds('ML', 'AWAY');
   if (homeMLOdds) rows.push(buildRow(`${homeAbbr} vainqueur`, 'MONEYLINE', 'HOME', homeProb, homeMLOdds, findRec('MONEYLINE', 'HOME'), null, null));
   if (awayMLOdds) rows.push(buildRow(`${awayAbbr} vainqueur`, 'MONEYLINE', 'AWAY', awayProb, awayMLOdds, findRec('MONEYLINE', 'AWAY'), null, null));
 
-  // Spread
   const spread = odds?.spread ?? marketOdds?.spread_line;
   if (spread != null) {
-    const homeSpreadOdds = getOdds('SPRD', 'HOME');
-    const awaySpreadOdds = getOdds('SPRD', 'AWAY');
+    const homeSprdOdds = getOdds('SPRD', 'HOME'), awaySprdOdds = getOdds('SPRD', 'AWAY');
     const spreadDisp = spread > 0 ? `+${spread}` : String(spread);
-    if (homeSpreadOdds) rows.push(buildRow(`${homeAbbr} ${spreadDisp} pts`, 'SPREAD', 'HOME', homeProb, homeSpreadOdds, findRec('SPREAD', 'HOME'), spread, null));
-    if (awaySpreadOdds) rows.push(buildRow(`${awayAbbr} ${spread > 0 ? '-' : '+'}${Math.abs(spread)} pts`, 'SPREAD', 'AWAY', awayProb, awaySpreadOdds, findRec('SPREAD', 'AWAY'), -spread, null));
+    if (homeSprdOdds) rows.push(buildRow(`${homeAbbr} ${spreadDisp} pts`, 'SPREAD', 'HOME', homeProb, homeSprdOdds, findRec('SPREAD', 'HOME'), spread, null));
+    if (awaySprdOdds) rows.push(buildRow(`${awayAbbr} ${spread > 0 ? '-' : '+'}${Math.abs(spread)} pts`, 'SPREAD', 'AWAY', awayProb, awaySprdOdds, findRec('SPREAD', 'AWAY'), -spread, null));
   }
 
-  // Over/Under
   const ou = odds?.over_under ?? marketOdds?.ou_line;
   if (ou != null) {
-    const overOdds  = getOdds('OVER', 'OVER');
-    const underOdds = getOdds('UNDR', 'UNDER');
-    // Prob Over/Under approximée depuis le score prévu
-    const projTotal = homeProb != null ? Math.round((analysis.predictive_score * 100 + (100 - analysis.predictive_score * 100)) / 100 * (ou * 1.05)) : null;
-    const overProb  = overOdds  ? Math.round((1 / overOdds)  * 100) : null; // utiliser implied si pas de prob moteur
-    const underProb = underOdds ? Math.round((1 / underOdds) * 100) : null;
+    const overOdds = getOdds('OVER', 'OVER'), underOdds = getOdds('UNDR', 'UNDER');
     if (overOdds)  rows.push(buildRow(`Plus de ${ou} pts`,  'OVER_UNDER', 'OVER',  null, overOdds,  findRec('OVER_UNDER', 'OVER'),  null, ou));
     if (underOdds) rows.push(buildRow(`Moins de ${ou} pts`, 'OVER_UNDER', 'UNDER', null, underOdds, findRec('OVER_UNDER', 'UNDER'), null, ou));
   }
@@ -642,43 +472,30 @@ function renderBlocTousLesParis(analysis, match) {
     </div>`;
 }
 
-// ── BLOC STATS & FORME ────────────────────────────────────────────────────
+// ── BLOC STATS & FORME ────────────────────────────────────────────────────────
 
-/**
- * v3.7 : Stats équipes côte à côte + 10 derniers matchs + tendances.
- * Données issues de variables_used (moteur) et recentForms (store).
- */
-function renderBlocStats(analysis, match, storeInstance) {
-  const homeName  = match?.home_team?.name ?? 'DOM';
-  const awayName  = match?.away_team?.name ?? 'EXT';
-  const homeAbbr  = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbbr  = match?.away_team?.abbreviation ?? 'EXT';
-  const vars      = analysis?.variables_used ?? {};
-
-  // Stats saison depuis advanced_stats
-  const advStats  = storeInstance?.get('advancedStats') ?? {};
-  const homeStats = advStats?.[homeName] ?? {};
-  const awayStats = advStats?.[awayName] ?? {};
-
-  // Forme récente depuis le store
+export function renderBlocStats(analysis, match, storeInstance) {
+  const homeAbbr   = match?.home_team?.abbreviation ?? 'DOM';
+  const awayAbbr   = match?.away_team?.abbreviation ?? 'EXT';
+  const homeName   = match?.home_team?.name ?? 'DOM';
+  const awayName   = match?.away_team?.name ?? 'EXT';
+  const vars       = analysis?.variables_used ?? {};
+  const advStats   = storeInstance?.get('advancedStats') ?? {};
+  const homeStats  = advStats?.[homeName] ?? {};
+  const awayStats  = advStats?.[awayName] ?? {};
   const recentForms = storeInstance?.get('recentForms') ?? {};
   const homeFormKey = Object.keys(recentForms).find(k => recentForms[k]?.matches?.length > 0 && k === String(match?.home_team?.bdl_id ?? ''));
   const awayFormKey = Object.keys(recentForms).find(k => recentForms[k]?.matches?.length > 0 && k === String(match?.away_team?.bdl_id ?? ''));
-  const homeForm  = homeFormKey ? recentForms[homeFormKey] : null;
-  const awayForm  = awayFormKey ? recentForms[awayFormKey] : null;
+  const homeForm   = homeFormKey ? recentForms[homeFormKey] : null;
+  const awayForm   = awayFormKey ? recentForms[awayFormKey] : null;
 
-  // Net rating depuis variables_used
-  const netDiff   = vars.net_rating_diff?.value ?? null;
-  const homeNet   = homeStats.net_rating ?? null;
-  const awayNet   = awayStats.net_rating ?? null;
+  const homePPG    = match?.home_season_stats?.points_per_game ?? homeStats?.ppg ?? null;
+  const awayPPG    = match?.away_season_stats?.points_per_game ?? awayStats?.ppg ?? null;
+  const homeNet    = homeStats.net_rating ?? null;
+  const awayNet    = awayStats.net_rating ?? null;
+  const homeOPPG   = homeStats?.defensive_rating ?? null;
+  const awayOPPG   = awayStats?.defensive_rating ?? null;
 
-  // PPG depuis home/away season stats
-  const homePPG   = match?.home_season_stats?.points_per_game ?? homeStats?.ppg ?? null;
-  const awayPPG   = match?.away_season_stats?.points_per_game ?? awayStats?.ppg ?? null;
-  const homeOPPG  = homeStats?.defensive_rating ?? null;
-  const awayOPPG  = awayStats?.defensive_rating ?? null;
-
-  // Win% depuis match record
   const parseRecord = (rec) => {
     if (!rec) return null;
     const parts = rec.split('-');
@@ -689,30 +506,19 @@ function renderBlocStats(analysis, match, storeInstance) {
   const homeWinPct = parseRecord(match?.home_team?.record);
   const awayWinPct = parseRecord(match?.away_team?.record);
 
-  // Stats des 10 derniers matchs
   const buildFormSummary = (form) => {
     if (!form?.matches?.length) return null;
-    const matches = form.matches.slice(0, 10);
-    const wins    = matches.filter(m => m.won).length;
-    const margins = matches.map(m => m.margin).filter(m => m != null);
+    const matches   = form.matches.slice(0, 10);
+    const wins      = matches.filter(m => m.won).length;
+    const margins   = matches.map(m => m.margin).filter(m => m != null);
     const avgMargin = margins.length ? (margins.reduce((s,m) => s+m, 0) / margins.length).toFixed(1) : null;
-    const ou_line   = match?.odds?.over_under ?? null;
-    let overCount = 0;
-    if (ou_line) {
-      matches.forEach(m => {
-        if (m.team_score != null && m.opp_score != null) {
-          if (m.team_score + m.opp_score > ou_line) overCount++;
-        }
-      });
-    }
-    return { wins, total: matches.length, avgMargin, overCount, ouTotal: ou_line ? matches.filter(m => m.team_score != null).length : 0, matches };
+    return { wins, total: matches.length, avgMargin, matches };
   };
 
   const homeFormSum = buildFormSummary(homeForm);
   const awayFormSum = buildFormSummary(awayForm);
 
-  // Affichage W/L des 10 derniers
-  const renderWL = (form, abbr) => {
+  const renderWL = (form) => {
     if (!form?.matches?.length) return `<div style="font-size:11px;color:var(--color-muted)">Données indisponibles</div>`;
     return `<div style="display:flex;gap:3px;flex-wrap:wrap">
       ${form.matches.slice(0, 10).map(m => {
@@ -723,17 +529,16 @@ function renderBlocStats(analysis, match, storeInstance) {
     </div>`;
   };
 
-  const statRow = (label, homeVal, awayVal, higherIsBetter = true) => {
-    if (homeVal === null && awayVal === null) return '';
-    const homeNum = parseFloat(homeVal);
-    const awayNum = parseFloat(awayVal);
-    const homeWins = !isNaN(homeNum) && !isNaN(awayNum) && (higherIsBetter ? homeNum > awayNum : homeNum < awayNum);
-    const awayWins = !isNaN(homeNum) && !isNaN(awayNum) && (higherIsBetter ? awayNum > homeNum : awayNum < homeNum);
+  const statRow = (label, hVal, aVal, higherIsBetter = true) => {
+    if (hVal === null && aVal === null) return '';
+    const hN = parseFloat(hVal), aN = parseFloat(aVal);
+    const hW = !isNaN(hN) && !isNaN(aN) && (higherIsBetter ? hN > aN : hN < aN);
+    const aW = !isNaN(hN) && !isNaN(aN) && (higherIsBetter ? aN > hN : aN < hN);
     return `
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-border)">
-        <div style="font-size:12px;font-weight:${homeWins ? '700' : '400'};color:${homeWins ? 'var(--color-text)' : 'var(--color-muted)'}">${homeVal ?? '—'}</div>
+        <div style="font-size:12px;font-weight:${hW ? '700' : '400'};color:${hW ? 'var(--color-text)' : 'var(--color-muted)'}">${hVal ?? '—'}</div>
         <div style="font-size:10px;color:var(--color-muted);text-align:center;white-space:nowrap">${label}</div>
-        <div style="font-size:12px;font-weight:${awayWins ? '700' : '400'};color:${awayWins ? 'var(--color-text)' : 'var(--color-muted)'};text-align:right">${awayVal ?? '—'}</div>
+        <div style="font-size:12px;font-weight:${aW ? '700' : '400'};color:${aW ? 'var(--color-text)' : 'var(--color-muted)'};text-align:right">${aVal ?? '—'}</div>
       </div>`;
   };
 
@@ -742,48 +547,33 @@ function renderBlocStats(analysis, match, storeInstance) {
       <div class="bloc-header" style="margin-bottom:var(--space-3)">
         <span class="bloc-header__title">Stats & Forme</span>
       </div>
-
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:4px;align-items:center;margin-bottom:10px">
         <div style="font-size:12px;font-weight:700;color:var(--color-signal)">${homeAbbr}</div>
         <div style="font-size:10px;color:var(--color-muted);text-align:center">Saison</div>
         <div style="font-size:12px;font-weight:700;color:var(--color-signal);text-align:right">${awayAbbr}</div>
       </div>
-
-      ${statRow('Pts marqués/match', homePPG ? homePPG.toFixed(1) : null, awayPPG ? awayPPG.toFixed(1) : null)}
-      ${statRow('Pts encaissés/match', homeOPPG ? homeOPPG.toFixed(1) : null, awayOPPG ? awayOPPG.toFixed(1) : null, false)}
-      ${statRow('Net Rating', homeNet ? (homeNet > 0 ? '+'+homeNet.toFixed(1) : homeNet.toFixed(1)) : null, awayNet ? (awayNet > 0 ? '+'+awayNet.toFixed(1) : awayNet.toFixed(1)) : null)}
+      ${statRow('Pts marqués/match', homePPG?.toFixed(1) ?? null, awayPPG?.toFixed(1) ?? null)}
+      ${statRow('Pts encaissés/match', homeOPPG?.toFixed(1) ?? null, awayOPPG?.toFixed(1) ?? null, false)}
+      ${statRow('Net Rating', homeNet != null ? (homeNet > 0 ? '+'+homeNet.toFixed(1) : homeNet.toFixed(1)) : null, awayNet != null ? (awayNet > 0 ? '+'+awayNet.toFixed(1) : awayNet.toFixed(1)) : null)}
       ${statRow('Win %', homeWinPct ? homeWinPct+'%' : null, awayWinPct ? awayWinPct+'%' : null)}
       ${homeFormSum ? statRow('Moy. écart (10j)', homeFormSum.avgMargin ? (homeFormSum.avgMargin > 0 ? '+'+homeFormSum.avgMargin : homeFormSum.avgMargin)+'pts' : null, awayFormSum?.avgMargin ? (awayFormSum.avgMargin > 0 ? '+'+awayFormSum.avgMargin : awayFormSum.avgMargin)+'pts' : null) : ''}
-
       <div style="margin-top:12px">
         <div style="font-size:11px;color:var(--color-muted);margin-bottom:6px">10 derniers matchs</div>
         <div style="margin-bottom:8px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:4px">${homeAbbr} — ${homeFormSum ? homeFormSum.wins+'V/'+( homeFormSum.total - homeFormSum.wins)+'D' : '—'}</div>
-          ${renderWL(homeForm, homeAbbr)}
+          <div style="font-size:10px;color:var(--color-muted);margin-bottom:4px">${homeAbbr} — ${homeFormSum ? homeFormSum.wins+'V/'+(homeFormSum.total - homeFormSum.wins)+'D' : '—'}</div>
+          ${renderWL(homeForm)}
         </div>
         <div>
           <div style="font-size:10px;color:var(--color-muted);margin-bottom:4px">${awayAbbr} — ${awayFormSum ? awayFormSum.wins+'V/'+(awayFormSum.total - awayFormSum.wins)+'D' : '—'}</div>
-          ${renderWL(awayForm, awayAbbr)}
+          ${renderWL(awayForm)}
         </div>
       </div>
-
-      ${match?.odds?.over_under && (homeFormSum?.ouTotal > 0 || awayFormSum?.ouTotal > 0) ? `
-        <div style="margin-top:10px;padding:8px 10px;background:var(--color-bg);border-radius:8px">
-          <div style="font-size:11px;color:var(--color-muted);margin-bottom:4px">Tendance Over/Under (ligne : ${match.odds.over_under} pts)</div>
-          <div style="display:flex;gap:12px;font-size:12px">
-            ${homeFormSum?.ouTotal > 0 ? `<span>${homeAbbr} : <strong>${homeFormSum.overCount}/${homeFormSum.ouTotal}</strong> Over</span>` : ''}
-            ${awayFormSum?.ouTotal > 0 ? `<span>${awayAbbr} : <strong>${awayFormSum.overCount}/${awayFormSum.ouTotal}</strong> Over</span>` : ''}
-          </div>
-        </div>` : ''}
     </div>`;
 }
 
-// ── BLOC ABSENCES & CONTEXTE ──────────────────────────────────────────────
+// ── BLOC ABSENCES & CONTEXTE ──────────────────────────────────────────────────
 
-/**
- * v3.7 : Joueurs absents consolidés + contexte IA.
- */
-function renderBlocAbsences(analysis, match, storeInstance) {
+export function renderBlocAbsences(analysis, match, storeInstance) {
   const homeInj   = match?.home_injuries ?? [];
   const awayInj   = match?.away_injuries ?? [];
   const homeName  = match?.home_team?.name ?? 'DOM';
@@ -797,7 +587,7 @@ function renderBlocAbsences(analysis, match, storeInstance) {
   const STATUS_LABELS = { 'Out': 'Absent', 'Doubtful': 'Incertain', 'Day-To-Day': 'DTD', 'Questionable': 'Douteux', 'Limited': 'Limité' };
   const STATUS_COLORS = { 'Out': '#ef4444', 'Doubtful': '#f97316', 'Day-To-Day': '#f59e0b', 'Questionable': '#f59e0b', 'Limited': '#3b82f6' };
 
-  const renderPlayerList = (injuries, teamName) => {
+  const renderPlayerList = (injuries) => {
     const relevant = injuries.filter(p => ['Out', 'Doubtful', 'Questionable', 'Day-To-Day', 'Limited'].includes(p.status));
     if (!relevant.length) return `<div style="font-size:11px;color:var(--color-muted)">Aucune absence signalée</div>`;
     return relevant.map(p => {
@@ -817,36 +607,31 @@ function renderBlocAbsences(analysis, match, storeInstance) {
     }).join('');
   };
 
-  const hasInjuries = homeInj.length > 0 || awayInj.length > 0;
-  const hasContext  = homeCtx || awayCtx || marketSig;
-
-  if (!hasInjuries && !hasContext) return '';
+  if (!homeInj.length && !awayInj.length && !homeCtx && !awayCtx && !marketSig) return '';
 
   return `
     <div class="card match-detail__bloc">
       <div class="bloc-header" style="margin-bottom:var(--space-3)">
         <span class="bloc-header__title">Absences & Contexte</span>
       </div>
-
-      ${hasInjuries ? `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:${hasContext ? '12px' : '0'}">
+      ${(homeInj.length || awayInj.length) ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:${(homeCtx || awayCtx || marketSig) ? '12px' : '0'}">
           <div>
             <div style="font-size:11px;font-weight:600;color:var(--color-muted);margin-bottom:6px">${match?.home_team?.abbreviation ?? 'DOM'}</div>
-            ${renderPlayerList(homeInj, homeName)}
+            ${renderPlayerList(homeInj)}
           </div>
           <div>
             <div style="font-size:11px;font-weight:600;color:var(--color-muted);margin-bottom:6px">${match?.away_team?.abbreviation ?? 'EXT'}</div>
-            ${renderPlayerList(awayInj, awayName)}
+            ${renderPlayerList(awayInj)}
           </div>
         </div>` : ''}
-
       ${homeCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;margin-bottom:6px;color:var(--color-muted)"><strong style="color:var(--color-text)">${homeName}</strong> — ${homeCtx}</div>` : ''}
       ${awayCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;margin-bottom:6px;color:var(--color-muted)"><strong style="color:var(--color-text)">${awayName}</strong> — ${awayCtx}</div>` : ''}
       ${marketSig?.movement ? `<div style="font-size:12px;padding:8px 12px;background:rgba(99,179,237,0.06);border-left:3px solid var(--color-signal);border-radius:6px;color:var(--color-muted)">📈 <strong style="color:var(--color-signal)">Mouvement de ligne</strong> — ${marketSig.detail ?? ''}</div>` : ''}
     </div>`;
 }
 
-// ── BLOC FIABILITÉ ────────────────────────────────────────────────────────
+// ── BLOC FIABILITÉ ────────────────────────────────────────────────────────────
 
 function renderBlocFiabilite(analysis) {
   const rob   = analysis?.robustness_score;
@@ -859,8 +644,7 @@ function renderBlocFiabilite(analysis) {
   else if (score >= 60) { label = 'Moyenne'; color = 'var(--color-warning)'; }
   else                  { label = 'Faible';  color = 'var(--color-danger)'; }
 
-  const missing       = analysis?.missing_variables ?? [];
-  const missingSimple = missing.map(v => SIGNAL_LABELS[v] ?? v).slice(0, 2);
+  const missingSimple = (analysis?.missing_variables ?? []).map(v => SIGNAL_LABELS[v] ?? v).slice(0, 2);
 
   return `
     <div class="card match-detail__bloc">
@@ -873,7 +657,7 @@ function renderBlocFiabilite(analysis) {
           <div style="height:100%;width:${score}%;background:${color};border-radius:4px;transition:width 0.5s ease"></div>
         </div>
         <div style="font-size:12px;color:var(--color-muted);margin-bottom:${missingSimple.length ? '10px' : '0'}">
-          ${score >= 80 && missingSimple.length === 0 ? 'Données complètes et cohérentes. L\'analyse est fiable.'
+          ${score >= 80 && missingSimple.length === 0 ? "Données complètes et cohérentes. L'analyse est fiable."
             : score >= 80 ? 'Analyse fiable malgré quelques données manquantes.'
             : score >= 60 ? 'Quelques données manquantes. L\'analyse reste valable.'
             : 'Données insuffisantes. À prendre avec précaution.'}
@@ -883,7 +667,7 @@ function renderBlocFiabilite(analysis) {
     </div>`;
 }
 
-// ── BLOC SOURCES ──────────────────────────────────────────────────────────
+// ── BLOC SOURCES ──────────────────────────────────────────────────────────────
 
 function renderBlocSources(analysis) {
   const breakdown = analysis?.data_quality_breakdown?.breakdown ?? {};
@@ -903,10 +687,10 @@ function renderBlocSources(analysis) {
           ${!fields.length ? `<div class="text-muted" style="font-size:12px">Non disponibles.</div>` : `
             <div style="display:grid;gap:6px">
               ${fields.map(([varId, d]) => {
-                const label = _simplifyLabel(d.label, varId);
+                const lbl   = _simplifyLabel(d.label, varId);
                 const q     = QUALITY_LABELS[d.quality] ?? d.quality;
                 const color = QUALITY_COLORS[d.quality] ?? 'var(--color-muted)';
-                return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px"><span>${label}</span><span style="color:${color};font-size:11px">${q}</span></div>`;
+                return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px"><span>${lbl}</span><span style="color:${color};font-size:11px">${q}</span></div>`;
               }).join('')}
             </div>`}
         </div>
@@ -914,7 +698,7 @@ function renderBlocSources(analysis) {
     </div>`;
 }
 
-// ── BLOC IA ───────────────────────────────────────────────────────────────
+// ── BLOC IA ───────────────────────────────────────────────────────────────────
 
 function renderBlocIA(analysis, match) {
   const summary = _buildLocalAIStyleSummary(analysis, match);
@@ -932,22 +716,19 @@ function renderBlocIA(analysis, match) {
 
 function _buildLocalAIStyleSummary(analysis, match) {
   if (!analysis) return '<div class="text-muted">Analyse non disponible.</div>';
-
-  const home = match.home_team?.name ?? 'Domicile';
-  const away = match.away_team?.name ?? 'Extérieur';
+  const home       = match.home_team?.name ?? 'Domicile';
+  const away       = match.away_team?.name ?? 'Extérieur';
   const predictive = analysis.predictive_score != null ? Math.round(analysis.predictive_score * 100) : null;
-  const robustness = analysis.robustness_score != null ? Math.round(analysis.robustness_score * 100) : null;
-  const quality = analysis.data_quality_score != null ? Math.round(analysis.data_quality_score * 100) : null;
-  const keySignals = (analysis.key_signals ?? []).slice(0, 2).map(function(s) {
-    return _simplifyLabel(s.label, s.variable);
-  }).filter(Boolean);
-  const best = analysis.betting_recommendations?.best ?? null;
+  const robustness = analysis.robustness_score  != null ? Math.round(analysis.robustness_score  * 100) : null;
+  const quality    = analysis.data_quality_score != null ? Math.round(analysis.data_quality_score * 100) : null;
+  const keySignals = (analysis.key_signals ?? []).slice(0, 2).map(s => _simplifyLabel(s.label, s.variable)).filter(Boolean);
+  const best       = analysis.betting_recommendations?.best ?? null;
 
   let line1 = 'Match équilibré ou lecture insuffisante.';
   if (predictive != null) {
-    if (predictive > 52) line1 = `${home} ressort légèrement devant (${predictive}%).`;
+    if (predictive > 52)      line1 = `${home} ressort légèrement devant (${predictive}%).`;
     else if (predictive < 48) line1 = `${away} ressort légèrement devant (${100 - predictive}%).`;
-    else line1 = 'Le moteur voit un match serré.';
+    else                      line1 = 'Le moteur voit un match serré.';
   }
 
   const line2 = keySignals.length ? `Signal principal : ${keySignals.join(' · ')}.` : 'Aucun signal majeur clairement exploitable.';
@@ -957,7 +738,7 @@ function _buildLocalAIStyleSummary(analysis, match) {
   return `<div>${escapeHtml(line1)}</div><div style="margin-top:8px">${escapeHtml(line2)}</div><div style="margin-top:8px">${escapeHtml(line3)}</div><div style="margin-top:8px">${escapeHtml(line4)}</div>`;
 }
 
-// ── COTES MULTI-BOOKS ────────────────────────────────────────────────────
+// ── COTES MULTI-BOOKS ─────────────────────────────────────────────────────────
 
 async function _loadAndRenderMultiBookOdds(container, match, analysis) {
   try {
@@ -967,11 +748,10 @@ async function _loadAndRenderMultiBookOdds(container, match, analysis) {
     if (!matchOdds?.bookmakers?.length) return;
     const bloc7 = container.querySelector('#bloc-7');
     if (!bloc7) return;
-    const existing = bloc7.querySelector('.multibook-table');
-    if (existing) existing.remove();
+    bloc7.querySelector('.multibook-table')?.remove();
 
     const BOOK_LABELS = { winamax: 'Winamax', betclic: 'Betclic', unibet_eu: 'Unibet', betsson: 'Betsson', pinnacle: 'Pinnacle', bet365: 'Bet365' };
-    const isFlipped  = matchOdds.home_team !== match.home_team?.name;
+    const isFlipped   = matchOdds.home_team !== match.home_team?.name;
 
     const rows = matchOdds.bookmakers.map(bk => {
       const homeOdds = isFlipped ? bk.away_ml : bk.home_ml;
@@ -981,7 +761,7 @@ async function _loadAndRenderMultiBookOdds(container, match, analysis) {
     }).join('');
 
     const table = document.createElement('div');
-    table.className  = 'multibook-table';
+    table.className = 'multibook-table';
     table.style.cssText = 'margin-top:16px;border-top:1px solid var(--color-border);padding-top:12px';
     table.innerHTML = `
       <div class="collapsible" id="books-collapsible">
@@ -1000,9 +780,8 @@ async function _loadAndRenderMultiBookOdds(container, match, analysis) {
 
     bloc7.appendChild(table);
     _checkBetterOddsAlert(bloc7, matchOdds, match, analysis);
-
-    table.querySelector('#books-collapsible')?.querySelector('.collapsible__header')?.addEventListener('click', () => {
-      const body = table.querySelector('.collapsible__body');
+    table.querySelector('#books-collapsible .collapsible__header')?.addEventListener('click', () => {
+      const body  = table.querySelector('.collapsible__body');
       const arrow = table.querySelector('.collapsible__arrow');
       const open  = body.style.display !== 'none';
       body.style.display = open ? 'none' : '';
@@ -1013,26 +792,25 @@ async function _loadAndRenderMultiBookOdds(container, match, analysis) {
 
 function _checkBetterOddsAlert(bloc7, matchOdds, match, analysis) {
   if (!analysis?.betting_recommendations?.best) return;
-  const best      = analysis.betting_recommendations.best;
-  const isFlipped = matchOdds.home_team !== match.home_team?.name;
+  const best       = analysis.betting_recommendations.best;
+  const isFlipped  = matchOdds.home_team !== match.home_team?.name;
   const draftKings = _americanToDecimal(best.odds_line);
   const sideIsHome = best.side === 'HOME';
   let bestExternal = null, bestBook = null;
   for (const bk of (matchOdds.bookmakers ?? [])) {
-    const odds = isFlipped ? (sideIsHome ? bk.away_ml : bk.home_ml) : (sideIsHome ? bk.home_ml : bk.away_ml);
-    if (odds && (!bestExternal || odds > bestExternal)) { bestExternal = odds; bestBook = bk.title; }
+    const oddsVal = isFlipped ? (sideIsHome ? bk.away_ml : bk.home_ml) : (sideIsHome ? bk.home_ml : bk.away_ml);
+    if (oddsVal && (!bestExternal || oddsVal > bestExternal)) { bestExternal = oddsVal; bestBook = bk.title; }
   }
   if (!bestExternal || !draftKings || bestExternal <= draftKings) return;
-  const existing = bloc7.querySelector('.better-odds-alert');
-  if (existing) existing.remove();
+  bloc7.querySelector('.better-odds-alert')?.remove();
   const alert = document.createElement('div');
-  alert.className = 'better-odds-alert';
+  alert.className   = 'better-odds-alert';
   alert.style.cssText = 'margin-top:10px;padding:10px 12px;background:rgba(72,199,142,0.1);border-left:3px solid var(--color-success);border-radius:6px;font-size:12px;';
-  alert.innerHTML = `<div style="color:var(--color-success);font-weight:700;margin-bottom:2px">💡 Meilleure cote disponible</div><div style="color:var(--color-muted)">${bestBook} propose <strong style="color:var(--color-text)">${bestExternal.toFixed(2)}</strong> au lieu de ${draftKings} — misez sur ${bestBook}.</div>`;
+  alert.innerHTML   = `<div style="color:var(--color-success);font-weight:700;margin-bottom:2px">💡 Meilleure cote disponible</div><div style="color:var(--color-muted)">${bestBook} propose <strong style="color:var(--color-text)">${bestExternal.toFixed(2)}</strong> au lieu de ${draftKings} — misez sur ${bestBook}.</div>`;
   bloc7.appendChild(alert);
 }
 
-// ── ÉVÉNEMENTS ────────────────────────────────────────────────────────────
+// ── ÉVÉNEMENTS ────────────────────────────────────────────────────────────────
 
 function bindEvents(container, storeInstance, match, analysis) {
   container.querySelector('#back-btn')?.addEventListener('click', () => router.navigate('dashboard'));
@@ -1064,10 +842,9 @@ function bindEvents(container, storeInstance, match, analysis) {
   container.querySelectorAll('.paper-bet-btn').forEach(btn => {
     btn.addEventListener('click', () => _openBetModal(btn, match, analysis, storeInstance));
   });
-
 }
 
-// ── MODAL PAPER TRADING ──────────────────────────────────────────────────
+// ── MODAL PAPER TRADING ───────────────────────────────────────────────────────
 
 function _openBetModal(btn, match, analysis, storeInstance) {
   const market      = btn.dataset.market;
@@ -1079,7 +856,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
   const impliedProb = Number(btn.dataset.impliedProb);
   const kelly       = Number(btn.dataset.kelly);
   const spreadLine  = btn.dataset.spreadLine !== '' ? Number(btn.dataset.spreadLine) : null;
-  const ouLine      = btn.dataset.ouLine !== '' ? Number(btn.dataset.ouLine) : null;
+  const ouLine      = btn.dataset.ouLine     !== '' ? Number(btn.dataset.ouLine)     : null;
 
   const state       = PaperEngine.load();
   const bankroll    = state.current_bankroll;
@@ -1131,7 +908,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
     </div>`;
 
   document.body.appendChild(modal);
-  modal.querySelector('#modal-close')?.addEventListener('click', () => modal.remove());
+  modal.querySelector('#modal-close')?.addEventListener('click',  () => modal.remove());
   modal.querySelector('#modal-cancel')?.addEventListener('click', () => modal.remove());
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 
@@ -1146,7 +923,6 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       return;
     }
 
-    // v3.1 : top_signal + match_time sauvegardés dans le pari
     const topSignal = analysis?.key_signals?.[0]
       ? (_simplifyLabel(analysis.key_signals[0].label, analysis.key_signals[0].variable)
          + ' (' + (analysis.key_signals[0].direction === 'POSITIVE' ? '▲ dom.' : '▼ ext.') + ')')
@@ -1155,7 +931,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       ? new Date(match.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
       : null;
 
-    const result = await PaperEngine.placeBet({
+    await PaperEngine.placeBet({
       match_id: match.id, date: match.date, sport: 'NBA',
       home: match.home_team?.name ?? '—', away: match.away_team?.name ?? '—',
       market, side, side_label: sideLabel,
@@ -1164,9 +940,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       stake, kelly_stake: kelly, edge, motor_prob: motorProb, implied_prob: impliedProb,
       confidence_level: analysis?.confidence_level ?? null,
       data_quality: analysis?.data_quality_score ?? null,
-      decision_note: note,
-      top_signal: topSignal,
-      match_time: matchTime,
+      decision_note: note, top_signal: topSignal, match_time: matchTime,
     });
 
     modal.remove();
@@ -1183,6 +957,8 @@ function _showBetConfirmation(sideLabel, oddsStr, stake) {
   setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
 }
 
+// ── NO MATCH ──────────────────────────────────────────────────────────────────
+
 function renderNoMatch(container) {
   container.innerHTML = `
     <div class="view-placeholder">
@@ -1192,464 +968,4 @@ function renderNoMatch(container) {
       <button class="btn btn--ghost" id="back-from-empty">← Dashboard</button>
     </div>`;
   container.querySelector('#back-from-empty')?.addEventListener('click', () => router.navigate('dashboard'));
-}
-
-function formatMatchTime(match) {
-  try {
-    if (match.datetime) {
-      return new Date(match.datetime).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })
-        + ' · ' + new Date(match.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    }
-    if (match.date) return new Date(match.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
-  } catch {}
-  return '—';
-}
-
-function formatRejection(reason) {
-  const labels = { WEIGHTS_NOT_CALIBRATED: 'Pondérations non calibrées', MISSING_CRITICAL_DATA: 'Données critiques manquantes', DATA_QUALITY_BELOW_THRESHOLD: 'Qualité des données insuffisante', ROBUSTNESS_BELOW_THRESHOLD: 'Analyse trop instable', ABSENCES_NOT_CONFIRMED: 'Absences non confirmées' };
-  return labels[reason] ?? reason;
-}
-
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// ── TEAM DETAIL — v3.8 ────────────────────────────────────────────────────────
-
-/**
- * Loader asynchrone : fetch /nba/team-detail depuis le store ou le worker,
- * puis injecte le HTML dans #team-detail-container.
- */
-async function _loadAndRenderTeamDetail(container, match, storeInstance) {
-  const detailEl = container.querySelector('#team-detail-container');
-  if (!detailEl) return;
-
-  try {
-    // Chercher dans le store en premier (pré-chargé par l'orchestrateur)
-    const teamDetails = storeInstance?.get('teamDetails') ?? {};
-    let teamDetail = teamDetails[match.id] ?? null;
-
-    const injReport = storeInstance?.get('injuryReport') ?? null;
-    if (!teamDetail) {
-      detailEl.innerHTML = `
-        <div class="card match-detail__bloc" style="text-align:center;padding:22px 16px">
-          <div style="font-size:13px;color:var(--color-muted);line-height:1.7">
-            Les stats avancées d'équipe sont chargées pendant la synchronisation de 12h, 23h ou via le refresh manuel du dashboard.
-          </div>
-        </div>`;
-      return;
-    }
-    detailEl.innerHTML = renderBlocTeamDetail(match, teamDetail, injReport);
-
-  } catch (err) {
-    Logger.warn('TEAM_DETAIL_RENDER_FAILED', { message: err.message });
-    // Fallback sur les blocs v3.7 existants
-    const injReport = storeInstance?.get('injuryReport') ?? null;
-    const analyses = storeInstance?.get('analyses') ?? {};
-    const preferredAnalysisId = storeInstance?.get('activeAnalysisId') ?? null;
-    const analysis  = _resolveLatestAnalysisForMatch(analyses, match.id, preferredAnalysisId);
-    detailEl.innerHTML =
-      renderBlocStats(analysis, match, storeInstance) +
-      renderBlocAbsences(analysis, match, storeInstance);
-  }
-}
-
-function renderBlocTeamDetailSkeleton() {
-  return `
-    <div class="card match-detail__bloc" style="text-align:center;padding:24px 0">
-      <div style="display:inline-flex;align-items:center;gap:8px;color:var(--color-muted);font-size:13px">
-        <div style="width:14px;height:14px;border:2px solid var(--color-muted);border-top-color:var(--color-signal);border-radius:50%;animation:spin 0.8s linear infinite"></div>
-        Chargement stats avancées…
-      </div>
-    </div>`;
-}
-
-/**
- * Fonction principale : orchestre les 5 blocs teamDetail.
- */
-function renderBlocTeamDetail(match, teamDetail, injReport) {
-  if (!teamDetail) {
-    return `<div class="card match-detail__bloc"><div class="text-muted" style="font-size:12px;padding:8px 0">Stats avancées indisponibles pour ce match.</div></div>`;
-  }
-  return [
-    _renderTDStats(match, teamDetail),
-    _renderTDTop10(match, teamDetail, injReport),
-    _renderTDLast10(match, teamDetail),
-    _renderTDH2H_OU(match, teamDetail),
-    _renderTDAbsents(match, injReport),
-  ].join('');
-}
-
-// ── Helper communs ────────────────────────────────────────────────────────────
-
-function _resultBadge(result) {
-  const color = result === 'W' ? '#22c55e' : result === 'L' ? '#ef4444' : '#6b7280';
-  const letter = result === 'W' ? 'V' : result === 'L' ? 'D' : '?';
-  return `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:${color};color:#fff;font-size:10px;font-weight:700;flex-shrink:0">${letter}</span>`;
-}
-
-function _trendArrow(season, last5) {
-  if (!season || !last5) return '';
-  const diff = last5 - season;
-  if (diff > 1.5)  return `<span style="color:#22c55e;font-size:11px;font-weight:700">↑+${diff.toFixed(1)}</span>`;
-  if (diff < -1.5) return `<span style="color:#ef4444;font-size:11px;font-weight:700">↓${diff.toFixed(1)}</span>`;
-  return `<span style="color:var(--color-muted);font-size:11px">→${diff >= 0 ? '+' : ''}${diff.toFixed(1)}</span>`;
-}
-
-function _restBadge(days) {
-  if (days === null || days === undefined) return '';
-  if (days === 0) return `<span style="background:#ef4444;color:#fff;border-radius:4px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px">B2B</span>`;
-  if (days === 1) return `<span style="background:#f97316;color:#fff;border-radius:4px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px">1j</span>`;
-  return `<span style="background:rgba(34,197,94,0.15);color:#22c55e;border-radius:4px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px">${days}j</span>`;
-}
-
-function _momentumBadge(momentum) {
-  if (!momentum) return '';
-  const { last3W, last10W } = momentum;
-  if (last3W >= 2) return `<span style="color:#22c55e;font-size:11px">🔥 ${last3W}/3 derniers</span>`;
-  if (last3W === 0) return `<span style="color:#ef4444;font-size:11px">❄️ ${last3W}/3 derniers</span>`;
-  return `<span style="color:var(--color-muted);font-size:11px">→ ${last3W}/3 derniers</span>`;
-}
-
-// ── Section 1 : Stats équipes ─────────────────────────────────────────────────
-
-function _renderTDStats(match, teamDetail) {
-  const homeAbv  = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv  = match?.away_team?.abbreviation ?? 'EXT';
-  const hStats   = match?.home_season_stats ?? {};
-  const aStats   = match?.away_season_stats ?? {};
-  const hDetail  = teamDetail?.home ?? {};
-  const aDetail  = teamDetail?.away ?? {};
-
-  const rows = [
-    { label: 'Pts/match',    hVal: hStats.avg_pts?.toFixed(1),          aVal: aStats.avg_pts?.toFixed(1),          better: 'high' },
-    { label: 'Pts encaissés',hVal: hDetail.avgTotal != null ? (hDetail.avgTotal - (hStats.avg_pts ?? 0)).toFixed(1) : null,
-                              aVal: aDetail.avgTotal != null ? (aDetail.avgTotal - (aStats.avg_pts ?? 0)).toFixed(1) : null, better: 'low' },
-    { label: 'Net Rating',   hVal: hStats.net_rating != null ? (hStats.net_rating > 0 ? '+' : '') + hStats.net_rating?.toFixed(1) : null,
-                              aVal: aStats.net_rating != null ? (aStats.net_rating > 0 ? '+' : '') + aStats.net_rating?.toFixed(1) : null, better: 'high', raw: true },
-    { label: 'Win %',        hVal: hStats.win_pct != null ? Math.round(hStats.win_pct * 100) + '%' : null,
-                              aVal: aStats.win_pct != null ? Math.round(aStats.win_pct * 100) + '%' : null, better: 'high', raw: true },
-    { label: 'Moy. total',   hVal: hDetail.avgTotal?.toFixed(1),        aVal: aDetail.avgTotal?.toFixed(1),        better: null },
-    { label: 'Pts/m last5',  hVal: hDetail.last5ScoringAvg?.toFixed(1), aVal: aDetail.last5ScoringAvg?.toFixed(1), better: 'high' },
-  ];
-
-  const rowsHtml = rows.map(r => {
-    if (!r.hVal && !r.aVal) return '';
-    const hNum = parseFloat(r.hVal);
-    const aNum = parseFloat(r.aVal);
-    const hBetter = r.better === 'high' ? hNum > aNum : r.better === 'low' ? hNum < aNum : false;
-    const aBetter = r.better === 'high' ? aNum > hNum : r.better === 'low' ? aNum < hNum : false;
-    return `
-      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-border)">
-        <div style="font-size:12px;font-weight:${hBetter ? '700' : '400'};color:${hBetter ? 'var(--color-text)' : 'var(--color-muted)'}">${r.hVal ?? '—'}</div>
-        <div style="font-size:10px;color:var(--color-muted);text-align:center;white-space:nowrap">${r.label}</div>
-        <div style="font-size:12px;font-weight:${aBetter ? '700' : '400'};color:${aBetter ? 'var(--color-text)' : 'var(--color-muted)'};text-align:right">${r.aVal ?? '—'}</div>
-      </div>`;
-  }).join('');
-
-  const hHomeSplit = hDetail.homeSplit;
-  const hAwaySplit = hDetail.awaySplit;
-  const aHomeSplit = aDetail.homeSplit;
-  const aAwaySplit = aDetail.awaySplit;
-
-  return `
-    <div class="card match-detail__bloc">
-      <div class="bloc-header" style="margin-bottom:var(--space-3)">
-        <span class="bloc-header__title">📊 Stats équipes</span>
-        <div style="display:flex;gap:6px;align-items:center;font-size:11px">
-          <strong>${homeAbv}</strong>${_restBadge(hDetail.restDays)}
-          <span style="color:var(--color-muted)">vs</span>
-          <strong>${awayAbv}</strong>${_restBadge(aDetail.restDays)}
-        </div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:4px;align-items:center;margin-bottom:8px">
-        <div style="font-size:11px;font-weight:700;color:var(--color-signal)">${homeAbv}</div>
-        <div style="font-size:9px;color:var(--color-muted);text-align:center">Saison</div>
-        <div style="font-size:11px;font-weight:700;color:var(--color-signal);text-align:right">${awayAbv}</div>
-      </div>
-      ${rowsHtml}
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
-        <div style="background:var(--color-bg);border-radius:8px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:3px">${homeAbv} — Dom/Ext</div>
-          <div style="font-size:11px">🏠 ${hHomeSplit ? `${hHomeSplit.wins}-${hHomeSplit.losses}` : '—'} · ✈️ ${hAwaySplit ? `${hAwaySplit.wins}-${hAwaySplit.losses}` : '—'}</div>
-          <div style="margin-top:3px">${_momentumBadge(hDetail.momentum)}</div>
-        </div>
-        <div style="background:var(--color-bg);border-radius:8px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:3px">${awayAbv} — Dom/Ext</div>
-          <div style="font-size:11px">🏠 ${aHomeSplit ? `${aHomeSplit.wins}-${aHomeSplit.losses}` : '—'} · ✈️ ${aAwaySplit ? `${aAwaySplit.wins}-${aAwaySplit.losses}` : '—'}</div>
-          <div style="margin-top:3px">${_momentumBadge(aDetail.momentum)}</div>
-        </div>
-      </div>
-    </div>`;
-}
-
-// ── Section 2 : Top 10 scoreurs ───────────────────────────────────────────────
-
-function _renderTDTop10(match, teamDetail, injReport) {
-  const homeAbv = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv = match?.away_team?.abbreviation ?? 'EXT';
-  const uid = 'top10_' + (match?.id ?? Date.now());
-
-  const absentNames = new Set();
-  if (injReport?.by_team) {
-    Object.values(injReport.by_team).forEach(players =>
-      players.forEach(p => { if (p?.name) absentNames.add(p.name.toLowerCase()); })
-    );
-  }
-
-  const renderTable = (players) => {
-    if (!players?.length) return `<div style="font-size:12px;color:var(--color-muted);padding:8px">Données indisponibles</div>`;
-    return `
-      <table style="width:100%;border-collapse:collapse;font-size:11px">
-        <thead>
-          <tr style="border-bottom:1px solid var(--color-border)">
-            <th style="padding:5px 6px;text-align:left;color:var(--color-muted);font-weight:600">Joueur</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">PPG</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">L5</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">REB</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">AST</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">STL</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">BLK</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${players.map((p, i) => {
-            const absent = absentNames.has((p.name ?? '').toLowerCase());
-            const star   = p.pts >= 20;
-            const bg     = absent ? 'rgba(239,68,68,0.06)' : i % 2 === 0 ? '' : 'var(--color-bg)';
-            return `
-              <tr style="background:${bg};border-bottom:1px solid var(--color-border);${absent ? 'opacity:0.65' : ''}">
-                <td style="padding:6px 6px;color:${absent ? '#ef4444' : 'var(--color-text)'};white-space:nowrap;overflow:hidden;max-width:110px;text-overflow:ellipsis">
-                  ${star ? '⭐ ' : ''}${p.name ?? '—'}${absent ? ' <span style="font-size:9px;color:#ef4444;font-weight:700">OUT</span>' : ''}
-                </td>
-                <td style="padding:6px 4px;text-align:center;font-weight:600">${p.pts?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center">${p.last5pts !== null && p.last5pts !== undefined ? p.last5pts.toFixed(1) + ' ' + _trendArrow(p.pts, p.last5pts) : '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.reb?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.ast?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.stl?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.blk?.toFixed(1) ?? '—'}</td>
-              </tr>`;
-          }).join('')}
-        </tbody>
-      </table>`;
-  };
-
-  return `
-    <div class="card match-detail__bloc">
-      <div class="bloc-header" style="margin-bottom:var(--space-3)">
-        <span class="bloc-header__title">🏀 Top 10 scoreurs</span>
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:10px">
-        <button id="${uid}_btnH" onclick="
-          document.getElementById('${uid}_H').style.display='block';
-          document.getElementById('${uid}_A').style.display='none';
-          this.style.background='rgba(99,102,241,0.2)';this.style.color='var(--color-signal)';
-          document.getElementById('${uid}_btnA').style.background='var(--color-bg)';document.getElementById('${uid}_btnA').style.color='var(--color-muted)';
-        " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:rgba(99,102,241,0.2);color:var(--color-signal)">${homeAbv}</button>
-        <button id="${uid}_btnA" onclick="
-          document.getElementById('${uid}_A').style.display='block';
-          document.getElementById('${uid}_H').style.display='none';
-          this.style.background='rgba(99,102,241,0.2)';this.style.color='var(--color-signal)';
-          document.getElementById('${uid}_btnH').style.background='var(--color-bg)';document.getElementById('${uid}_btnH').style.color='var(--color-muted)';
-        " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:var(--color-bg);color:var(--color-muted)">${awayAbv}</button>
-      </div>
-      <div id="${uid}_H" style="display:block;overflow-x:auto">${renderTable(teamDetail?.home?.top10scorers)}</div>
-      <div id="${uid}_A" style="display:none;overflow-x:auto">${renderTable(teamDetail?.away?.top10scorers)}</div>
-    </div>`;
-}
-
-// ── Section 3 : 10 derniers matchs ───────────────────────────────────────────
-
-function _renderTDLast10(match, teamDetail) {
-  const homeAbv = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv = match?.away_team?.abbreviation ?? 'EXT';
-
-  const renderTimeline = (games) => {
-    if (!games?.length) return `<div style="font-size:11px;color:var(--color-muted)">Données indisponibles</div>`;
-    return games.map(g => {
-      const dateStr  = g.date ? `${g.date.slice(4,6)}/${g.date.slice(6,8)}` : '';
-      const locIcon  = g.homeAway === 'home' ? '🏠' : '✈️';
-      const scoreStr = g.score ?? '—';
-      return `
-        <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;background:var(--color-bg);margin-bottom:4px">
-          ${_resultBadge(g.result)}
-          <span style="font-size:10px;color:var(--color-muted);width:30px">${dateStr}</span>
-          <span style="font-size:11px;font-weight:600;min-width:28px">${g.opponent ?? '?'}</span>
-          <span style="font-size:10px">${locIcon}</span>
-          <span style="font-size:11px;color:var(--color-muted);margin-left:auto;font-variant-numeric:tabular-nums">${scoreStr}</span>
-        </div>`;
-    }).join('');
-  };
-
-  return `
-    <div class="card match-detail__bloc">
-      <div class="bloc-header" style="margin-bottom:var(--space-3)">
-        <span class="bloc-header__title">📅 10 derniers matchs</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
-          ${renderTimeline(teamDetail?.home?.last10)}
-        </div>
-        <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
-          ${renderTimeline(teamDetail?.away?.last10)}
-        </div>
-      </div>
-    </div>`;
-}
-
-// ── Section 4 : H2H + O/U trend ──────────────────────────────────────────────
-
-function _renderTDH2H_OU(match, teamDetail) {
-  const homeAbv = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv = match?.away_team?.abbreviation ?? 'EXT';
-  const h2h     = teamDetail?.home?.h2h ?? [];
-  const ouLine  = parseFloat(match?.odds?.over_under ?? match?.market_odds?.total_line ?? 0);
-
-  const calcOU = (games) => {
-    if (!ouLine || !games?.length) return null;
-    const withTotal = games.filter(g => g.total !== null && g.total !== undefined);
-    if (!withTotal.length) return null;
-    const over  = withTotal.filter(g => g.total > ouLine).length;
-    const under = withTotal.filter(g => g.total < ouLine).length;
-    const avg   = (withTotal.reduce((s, g) => s + g.total, 0) / withTotal.length).toFixed(1);
-    return { over, under, total: withTotal.length, avg };
-  };
-
-  const ouBar = (ou, label) => {
-    if (!ou) return `<div style="font-size:11px;color:var(--color-muted)">${label} : ligne O/U indisponible</div>`;
-    const overPct  = Math.round((ou.over  / ou.total) * 100);
-    const underPct = Math.round((ou.under / ou.total) * 100);
-    return `
-      <div style="margin-bottom:8px">
-        <div style="font-size:10px;color:var(--color-muted);margin-bottom:3px">${label} · ${ou.total} matchs · moy. ${ou.avg} pts</div>
-        <div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--color-border)">
-          <div style="width:${overPct}%;background:#22c55e"></div>
-          <div style="width:${underPct}%;background:#ef4444;margin-left:1px"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:2px">
-          <span style="color:#22c55e">Over ${ou.over}/${ou.total} (${overPct}%)</span>
-          <span style="color:#ef4444">Under ${ou.under}/${ou.total} (${underPct}%)</span>
-        </div>
-      </div>`;
-  };
-
-  const h2hHtml = h2h.length
-    ? h2h.slice(0, 5).map(g => {
-        const dateStr = g.date ? `${g.date.slice(4,6)}/${g.date.slice(6,8)}` : '';
-        return `
-          <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;background:var(--color-bg);margin-bottom:4px">
-            ${_resultBadge(g.result)}
-            <span style="font-size:10px;color:var(--color-muted);width:30px">${dateStr}</span>
-            <span style="font-size:10px">${g.homeAway === 'home' ? '🏠' : '✈️'}</span>
-            <span style="font-size:11px;color:var(--color-muted);margin-left:auto">${g.score ?? '—'}</span>
-          </div>`;
-      }).join('')
-    : `<div style="font-size:11px;color:var(--color-muted)">Pas de confrontation cette saison</div>`;
-
-  return `
-    <div class="card match-detail__bloc">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div>
-          <div class="bloc-header" style="margin-bottom:var(--space-3)">
-            <span class="bloc-header__title">🔁 H2H saison</span>
-          </div>
-          ${h2hHtml}
-        </div>
-        <div>
-          <div class="bloc-header" style="margin-bottom:var(--space-3)">
-            <span class="bloc-header__title">📈 O/U${ouLine ? ` · ${ouLine}` : ''}</span>
-          </div>
-          ${ouBar(calcOU(teamDetail?.home?.last10), homeAbv)}
-          ${ouBar(calcOU(teamDetail?.away?.last10), awayAbv)}
-        </div>
-      </div>
-    </div>`;
-}
-
-// ── Section 5 : Joueurs absents triés PPG ─────────────────────────────────────
-
-function _renderTDAbsents(match, injReport) {
-  const homeAbv  = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv  = match?.away_team?.abbreviation ?? 'EXT';
-  const homeName = match?.home_team?.name ?? '';
-  const awayName = match?.away_team?.name ?? '';
-
-  const STATUS_COLORS = { 'Out': '#ef4444', 'Doubtful': '#f97316', 'Day-To-Day': '#eab308', 'Questionable': '#eab308', 'Limited': '#a78bfa' };
-  const STATUS_LABELS = { 'Out': 'Absent', 'Doubtful': 'Incertain', 'Day-To-Day': 'DTD', 'Questionable': 'Douteux', 'Limited': 'Limité' };
-
-  const buildList = (teamName) => {
-    if (!injReport?.by_team?.[teamName]) return [];
-    return (injReport.by_team[teamName] ?? [])
-      .filter(p => ['Out', 'Doubtful', 'Day-To-Day', 'Questionable', 'Limited'].includes(p.status))
-      .sort((a, b) => (parseFloat(b.ppg) || 0) - (parseFloat(a.ppg) || 0));
-  };
-
-  const renderList = (players, abbr) => {
-    if (!players.length) return `<div style="font-size:11px;color:#22c55e">✅ Effectif au complet</div>`;
-    return players.map(p => {
-      const color = STATUS_COLORS[p.status] ?? 'var(--color-muted)';
-      const label = STATUS_LABELS[p.status] ?? p.status;
-      const star  = parseFloat(p.ppg) >= 20;
-      return `
-        <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;border-left:3px solid ${color};background:var(--color-bg);margin-bottom:4px">
-          <div style="flex:1;min-width:0">
-            <span style="font-size:12px;font-weight:600">${star ? '⭐ ' : ''}${p.name}</span>
-            ${p.ppg ? `<span style="font-size:10px;color:var(--color-muted);margin-left:4px">${p.ppg} pts/m</span>` : ''}
-          </div>
-          <span style="font-size:10px;font-weight:700;color:${color};border:1px solid ${color};border-radius:4px;padding:1px 5px;flex-shrink:0">${label}</span>
-        </div>`;
-    }).join('');
-  };
-
-  const homeList = buildList(homeName);
-  const awayList = buildList(awayName);
-
-  if (!homeList.length && !awayList.length) {
-    return `
-      <div class="card match-detail__bloc">
-        <div class="bloc-header" style="margin-bottom:var(--space-3)"><span class="bloc-header__title">🏥 Absences</span></div>
-        <div style="font-size:12px;color:#22c55e">✅ Aucune absence signalée pour ce match</div>
-      </div>`;
-  }
-
-  return `
-    <div class="card match-detail__bloc">
-      <div class="bloc-header" style="margin-bottom:var(--space-3)">
-        <span class="bloc-header__title">🏥 Absences</span>
-        <span style="font-size:10px;color:var(--color-muted)">triées par PPG</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
-          ${renderList(homeList, homeAbv)}
-        </div>
-        <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
-          ${renderList(awayList, awayAbv)}
-        </div>
-      </div>
-    </div>`;
-}
-
-// ── Helper mapping ESPN name → Tank01 abv ─────────────────────────────────────
-
-const ESPN_TO_TANK01_ABV = {
-  'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN',
-  'Charlotte Hornets': 'CHA', 'Chicago Bulls': 'CHI', 'Cleveland Cavaliers': 'CLE',
-  'Dallas Mavericks': 'DAL', 'Denver Nuggets': 'DEN', 'Detroit Pistons': 'DET',
-  'Golden State Warriors': 'GS', 'Houston Rockets': 'HOU', 'Indiana Pacers': 'IND',
-  'LA Clippers': 'LAC', 'Los Angeles Lakers': 'LAL', 'Memphis Grizzlies': 'MEM',
-  'Miami Heat': 'MIA', 'Milwaukee Bucks': 'MIL', 'Minnesota Timberwolves': 'MIN',
-  'New Orleans Pelicans': 'NO', 'New York Knicks': 'NY', 'Oklahoma City Thunder': 'OKC',
-  'Orlando Magic': 'ORL', 'Philadelphia 76ers': 'PHI', 'Phoenix Suns': 'PHO',
-  'Portland Trail Blazers': 'POR', 'Sacramento Kings': 'SAC', 'San Antonio Spurs': 'SA',
-  'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS',
-};
-
-function _getTeamAbvFromName(name) {
-  return ESPN_TO_TANK01_ABV[name] ?? null;
 }
