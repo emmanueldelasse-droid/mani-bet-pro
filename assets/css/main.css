@@ -1340,3 +1340,13 @@ body.theme-light .paper-modal__input::placeholder,
 }
 
 #theme-toggle:hover { transform: scale(1.1); }
+
+/* ── Nom d'équipe cliquable ── */
+.team-name-clickable {
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.team-name-clickable:hover {
+  color: var(--color-signal);
+  text-decoration: underline;
+}
