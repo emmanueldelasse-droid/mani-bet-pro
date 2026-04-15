@@ -41,6 +41,8 @@ export async function loadAndRenderTeamDetail(container, match, storeInstance) {
     }
 
     detailEl.innerHTML = renderBlocTeamDetail(match, teamDetail, injReport);
+    // Activer les clics sur les lignes last10 avec boxscore
+    _bindLast10Clicks(detailEl, teamDetail);
 
   } catch (err) {
     Logger.warn('TEAM_DETAIL_RENDER_FAILED', { message: err.message });
@@ -269,41 +271,182 @@ function _renderTDTop10(match, teamDetail, injReport) {
 // ── SECTION 3 : 10 DERNIERS MATCHS ───────────────────────────────────────────
 
 function _renderTDLast10(match, teamDetail) {
-  const homeAbv = match?.home_team?.abbreviation ?? 'DOM';
-  const awayAbv = match?.away_team?.abbreviation ?? 'EXT';
+  const homeAbv  = match?.home_team?.abbreviation ?? 'DOM';
+  const awayAbv  = match?.away_team?.abbreviation ?? 'EXT';
+  const homeName = match?.home_team?.name ?? homeAbv;
+  const awayName = match?.away_team?.name ?? awayAbv;
 
-  const renderTimeline = (games) => {
+  const renderTimeline = (games, teamAbv, teamName, boxScores) => {
     if (!games?.length) return `<div style="font-size:11px;color:var(--color-muted)">Données indisponibles</div>`;
     return games.map(g => {
-      const dateStr = g.date ? `${g.date.slice(4,6)}/${g.date.slice(6,8)}` : '';
-      const locIcon = g.homeAway === 'home' ? '🏠' : '✈️';
+      const dateStr    = g.date ? `${g.date.slice(4,6)}/${g.date.slice(6,8)}` : '';
+      const locIcon    = g.homeAway === 'home' ? '🏠' : '✈️';
+      const won        = g.result === 'W';
+      const color      = won ? '#22c55e' : '#ef4444';
+      const hasBoxscore = (boxScores ?? []).some(b => b.gameID === g.gameID);
+      const clickable  = hasBoxscore;
+
       return `
-        <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;background:var(--color-bg);margin-bottom:4px">
-          ${_resultBadge(g.result)}
-          <span style="font-size:10px;color:var(--color-muted);width:30px">${dateStr}</span>
-          <span style="font-size:11px;font-weight:600;min-width:28px">${g.opponent ?? '?'}</span>
+        <div class="game-row${clickable ? ' game-row--clickable' : ''}"
+          style="display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:6px;background:var(--color-bg);margin-bottom:4px;border-left:3px solid ${color};${clickable ? 'cursor:pointer' : ''}"
+          ${clickable ? `data-game-id="${g.gameID}" data-team-abv="${teamAbv}" data-team-name="${escapeAttr(teamName)}"` : ''}>
+          <span style="font-size:9px;font-weight:700;color:${color};width:12px">${won ? 'V' : 'D'}</span>
+          <span style="font-size:10px;color:var(--color-muted);width:28px">${dateStr}</span>
+          <span style="font-size:11px;font-weight:600;min-width:26px">${g.opponent ?? '?'}</span>
           <span style="font-size:10px">${locIcon}</span>
           <span style="font-size:11px;color:var(--color-muted);margin-left:auto;font-variant-numeric:tabular-nums">${g.score ?? '—'}</span>
+          ${clickable ? `<span style="font-size:9px;color:var(--color-signal);margin-left:4px">▸</span>` : ''}
         </div>`;
     }).join('');
   };
 
   return `
-    <div class="card match-detail__bloc">
+    <div class="card match-detail__bloc" id="last10-bloc">
       <div class="bloc-header" style="margin-bottom:var(--space-3)">
         <span class="bloc-header__title">📅 10 derniers matchs</span>
+        <span style="font-size:10px;color:var(--color-muted)">▸ = boxscore disponible</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
           <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
-          ${renderTimeline(teamDetail?.home?.last10)}
+          ${renderTimeline(teamDetail?.home?.last10, homeAbv, homeName, teamDetail?.home?.boxScores)}
         </div>
         <div>
           <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
-          ${renderTimeline(teamDetail?.away?.last10)}
+          ${renderTimeline(teamDetail?.away?.last10, awayAbv, awayName, teamDetail?.away?.boxScores)}
         </div>
       </div>
     </div>`;
+}
+
+function escapeAttr(str) {
+  return String(str ?? '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── MODAL BOXSCORE ────────────────────────────────────────────────────────────
+
+export function bindLast10Clicks(container, teamDetail) {
+  const bloc = container.querySelector('#last10-bloc');
+  if (!bloc) return;
+
+  bloc.addEventListener('click', (e) => {
+    const row = e.target.closest('.game-row--clickable');
+    if (!row) return;
+    const gameID   = row.dataset.gameId;
+    const teamAbv  = row.dataset.teamAbv;
+    const teamName = row.dataset.teamName;
+    if (!gameID || !teamAbv) return;
+
+    // Chercher le boxscore dans home ou away
+    const boxScores = [
+      ...(teamDetail?.home?.boxScores ?? []),
+      ...(teamDetail?.away?.boxScores ?? []),
+    ];
+    const box = boxScores.find(b => b.gameID === gameID);
+    if (!box) return;
+
+    // Trouver les infos du match depuis last10
+    const allGames = [
+      ...(teamDetail?.home?.last10 ?? []).map(g => ({ ...g, _teamAbv: teamAbv })),
+      ...(teamDetail?.away?.last10 ?? []).map(g => ({ ...g, _teamAbv: teamAbv })),
+    ];
+    const game = [...(teamDetail?.home?.last10 ?? []), ...(teamDetail?.away?.last10 ?? [])]
+      .find(g => g.gameID === gameID);
+
+    _openGameModal(gameID, teamAbv, teamName, box, game);
+  });
+}
+
+function _openGameModal(gameID, teamAbv, teamName, box, game) {
+  // Extraire les joueurs du boxscore pour cette équipe
+  const allPlayers = Object.values(box?.playerStats ?? {});
+  const teamPlayers = allPlayers
+    .filter(p => String(p?.teamAbv ?? '').toUpperCase() === teamAbv.toUpperCase())
+    .map(p => ({
+      name:   p.longName ?? p.name ?? '—',
+      min:    p.mins ?? p.min ?? '—',
+      pts:    parseInt(p.pts ?? 0) || 0,
+      reb:    parseInt(p.reb ?? p.treb ?? 0) || 0,
+      ast:    parseInt(p.ast ?? 0) || 0,
+      stl:    parseInt(p.stl ?? 0) || 0,
+      blk:    parseInt(p.blk ?? 0) || 0,
+      tov:    parseInt(p.TOV ?? p.tov ?? 0) || 0,
+      fgm:    parseInt(p.fgm ?? 0) || 0,
+      fga:    parseInt(p.fga ?? 0) || 0,
+      tpm:    parseInt(p.tpm ?? p['3pm'] ?? 0) || 0,
+    }))
+    .filter(p => (p.min && p.min !== '0' && p.min !== '—') || p.pts > 0)
+    .sort((a, b) => b.pts - a.pts);
+
+  const dateStr  = game?.date
+    ? `${game.date.slice(0,4)}-${game.date.slice(4,6)}-${game.date.slice(6,8)}`
+    : '';
+  const won      = game?.result === 'W';
+  const score    = game ? `${game.teamPts ?? '—'} – ${game.oppPts ?? '—'}` : '—';
+  const venue    = game?.homeAway === 'home' ? '🏠 Domicile' : '✈️ Extérieur';
+  const result   = won ? '✓ Victoire' : '✗ Défaite';
+  const resColor = won ? '#22c55e' : '#ef4444';
+
+  const rows = teamPlayers.map(p => {
+    const fgStr = p.fga > 0 ? `${p.fgm}/${p.fga}` : '—';
+    const isTop = p.pts >= 20;
+    return `
+      <tr style="border-bottom:1px solid var(--color-border)${isTop ? ';background:rgba(34,197,94,0.04)' : ''}">
+        <td style="padding:5px 6px;font-size:11px;font-weight:${isTop ? '700' : '400'};white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis">${p.name}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.min}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:12px;font-weight:${isTop ? '700' : '600'};color:${isTop ? '#22c55e' : 'var(--color-text)'}">${p.pts}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px">${p.reb}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px">${p.ast}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.stl}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.blk}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.tov}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${fgStr}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.tpm > 0 ? p.tpm : '—'}</td>
+      </tr>`;
+  }).join('');
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.75);display:flex;align-items:flex-end;justify-content:center;padding:0';
+  modal.innerHTML = `
+    <div style="background:var(--color-card);border-radius:16px 16px 0 0;width:100%;max-width:600px;max-height:85vh;overflow-y:auto;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <div style="font-size:14px;font-weight:700">${teamName} · ${dateStr}</div>
+          <div style="display:flex;gap:10px;margin-top:4px">
+            <span style="font-size:12px;font-weight:700;color:${resColor}">${result}</span>
+            <span style="font-size:12px;color:var(--color-muted)">${score}</span>
+            <span style="font-size:11px;color:var(--color-muted)">${venue}</span>
+          </div>
+        </div>
+        <button id="close-game-modal" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--color-muted);padding:0 4px">✕</button>
+      </div>
+      ${teamPlayers.length ? `
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead>
+              <tr style="border-bottom:2px solid var(--color-border)">
+                <th style="padding:4px 6px;text-align:left;color:var(--color-muted);font-size:10px">Joueur</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">MIN</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">PTS</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">REB</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">AST</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">STL</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">BLK</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">TOV</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">TIR</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">3PT</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="font-size:10px;color:var(--color-muted);margin-top:8px">Source : Tank01 · 5 derniers matchs uniquement</div>
+      ` : `<div style="font-size:12px;color:var(--color-muted);padding:16px 0">Boxscore non disponible pour ce match.</div>`}
+    </div>`;
+
+  document.body.appendChild(modal);
+  modal.querySelector('#close-game-modal')?.addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
 // ── SECTION 4 : H2H + O/U TREND ──────────────────────────────────────────────

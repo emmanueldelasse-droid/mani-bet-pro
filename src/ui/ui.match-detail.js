@@ -32,6 +32,7 @@ import {
 import {
   loadAndRenderTeamDetail    as _loadAndRenderTeamDetail,
   renderBlocTeamDetailSkeleton,
+  bindLast10Clicks           as _bindLast10Clicks,
 } from './ui.match-detail.teamdetail.js';
 
 // ── POINT D'ENTRÉE PUBLIC ─────────────────────────────────────────────────────
