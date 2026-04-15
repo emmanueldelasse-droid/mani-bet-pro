@@ -619,7 +619,7 @@ function _createMatchCard(match) {
         <span class="mc-team__record">${homeRecord}</span>
         <!-- cote ML décimale -->
         <span class="mc-team__odds" id="odds-home-${match.id}">
-          ${homeDec ? `<strong>${homeDec}</strong>${oddsSource ? `<span class="mc-team__odds-src"> ${oddsSource}</span>` : ''}` : '—'}
+          ${homeDec ? `<strong>${homeDec}</strong>` : '—'}
         </span>
         <!-- prob moteur injectée par _updateMatchCard -->
         <span class="mc-team__prob" id="motor-home-${match.id}" style="display:none"></span>
@@ -632,6 +632,7 @@ function _createMatchCard(match) {
           ? `<div class="mc-vs__score">${homeScore}<br><span style="font-size:10px;color:var(--color-text-muted)">–</span><br>${awayScore}</div>`
           : `<span class="mc-vs__label">VS</span>`
         }
+        ${oddsSource ? `<span style="font-size:9px;color:var(--color-text-muted);margin-top:4px">${oddsSource}</span>` : ''}
       </div>
 
       <!-- Équipe extérieure -->
@@ -641,7 +642,7 @@ function _createMatchCard(match) {
         <span class="mc-team__record">${awayRecord}</span>
         <!-- cote ML décimale -->
         <span class="mc-team__odds" id="odds-away-${match.id}">
-          ${awayDec ? `<strong>${awayDec}</strong>${oddsSource ? `<span class="mc-team__odds-src"> ${oddsSource}</span>` : ''}` : '—'}
+          ${awayDec ? `<strong>${awayDec}</strong>` : '—'}
         </span>
         <span class="mc-team__prob" id="motor-away-${match.id}" style="display:none"></span>
         <span style="display:none" id="market-away-${match.id}"></span>
@@ -657,15 +658,17 @@ function _createMatchCard(match) {
       </div>
     </div>
 
-    <!-- ── O/U ── -->
+    <!-- ── O/U + SPREAD ── -->
     ${ou != null ? `
     <div class="mc-ou" id="ou-${match.id}">
-      <span class="mc-ou__label">O/U ${ou}</span>
-      <div class="mc-ou__odds">
-        ${ouOverFmt  ? `<span class="mc-ou__item"><span class="mc-ou__side">Over</span><span class="mc-ou__val">${ouOverFmt}</span></span>` : ''}
-        ${ouUnderFmt ? `<span class="mc-ou__item"><span class="mc-ou__side">Under</span><span class="mc-ou__val">${ouUnderFmt}</span></span>` : ''}
-        ${!ouOverFmt && !ouUnderFmt && oddsSource ? `<span style="font-size:10px;color:var(--color-text-muted)">cotes indisponibles</span>` : ''}
+      <div class="mc-ou__row">
+        <span class="mc-ou__label">O/U ${ou}</span>
+        <div class="mc-ou__odds">
+          ${ouOverFmt  ? `<span class="mc-ou__item"><span class="mc-ou__side">Over</span><span class="mc-ou__val">${ouOverFmt}</span></span>` : ''}
+          ${ouUnderFmt ? `<span class="mc-ou__item"><span class="mc-ou__side">Under</span><span class="mc-ou__val">${ouUnderFmt}</span></span>` : ''}
+        </div>
       </div>
+      <div id="spread-row-${match.id}" style="display:none" class="mc-ou__row mc-ou__row--spread"></div>
     </div>` : ''}
 
     <!-- Nœuds hérités compatibilité -->
@@ -764,15 +767,11 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
       motorAwayEl.style.display = '';
     }
 
-    // Barre de probabilité
+    // Barre de probabilité — sans labels redondants sous la barre
     const probaBarEl   = card.querySelector(`#proba-bar-${matchId}`);
     const probaFillEl  = card.querySelector(`#proba-fill-${matchId}`);
-    const labelHomeEl  = card.querySelector(`#prob-label-home-${matchId}`);
-    const labelAwayEl  = card.querySelector(`#prob-label-away-${matchId}`);
     if (probaBarEl && probaFillEl) {
       probaFillEl.style.width = `${homeProb}%`;
-      if (labelHomeEl) labelHomeEl.textContent = `${match?.home_team?.abbreviation ?? 'DOM'} ${homeProb}%`;
-      if (labelAwayEl) labelAwayEl.textContent = `${awayProb}% ${match?.away_team?.abbreviation ?? 'EXT'}`;
       probaBarEl.style.display = '';
     }
   }
@@ -793,10 +792,55 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
     else if (absVal < 10) { label = `Domination ${domTeam}`;      color = netRating > 0 ? 'var(--color-success)' : 'var(--color-danger)'; bg = netRating > 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)'; }
     else                  { label = `Mismatch total — ${domTeam}`; color = netRating > 0 ? 'var(--color-success)' : 'var(--color-danger)'; bg = netRating > 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)'; }
 
+    // Badge qualité données dans le même bloc
+    const quality  = analysis.data_quality_score != null ? Math.round(analysis.data_quality_score * 100) : null;
+    const qColor   = quality == null ? 'var(--color-text-muted)'
+                   : quality >= 80   ? '#22c55e'
+                   : quality >= 60   ? '#f97316'
+                   : '#ef4444';
+    const qBadge   = quality != null
+      ? `<span style="margin-left:auto;font-size:10px;font-weight:600;color:${qColor}">● ${quality}%</span>`
+      : '';
+
     levelEl.className = 'mc-level';
     levelEl.style.cssText = `color:${color};background:${bg}`;
-    levelEl.innerHTML = `<span class="mc-level__dot"></span><span>${label}</span>`;
+    levelEl.innerHTML = `<span class="mc-level__dot"></span><span>${label}</span>${qBadge}`;
     levelEl.style.display = '';
+  }
+
+  // ── 4b. Spread dans la section O/U ───────────────────────────────────────
+  const spreadRowEl = card.querySelector(`#spread-row-${matchId}`);
+  if (spreadRowEl) {
+    const marketOdds   = match?.market_odds ?? null;
+    const espnOdds     = match?.odds ?? {};
+    const spreadLine   = espnOdds.spread ?? marketOdds?.spread_line ?? null;
+    const homeSprdDec  = marketOdds?.home_spread_decimal ?? null;
+    const awaySprdDec  = marketOdds?.away_spread_decimal ?? null;
+
+    if (spreadLine != null) {
+      const homeAbv = match?.home_team?.abbreviation ?? 'DOM';
+      const awayAbv = match?.away_team?.abbreviation ?? 'EXT';
+      const homeSprdFmt = spreadLine <= 0
+        ? `${homeAbv} ${spreadLine}`
+        : `${homeAbv} +${spreadLine}`;
+      const awaySprdFmt = spreadLine <= 0
+        ? `${awayAbv} +${Math.abs(spreadLine)}`
+        : `${awayAbv} -${spreadLine}`;
+
+      spreadRowEl.innerHTML = `
+        <span class="mc-ou__label">Spread</span>
+        <div class="mc-ou__odds">
+          <span class="mc-ou__item">
+            <span class="mc-ou__side">${homeSprdFmt}</span>
+            ${homeSprdDec ? `<span class="mc-ou__val">${Number(homeSprdDec).toFixed(2)}</span>` : ''}
+          </span>
+          <span class="mc-ou__item">
+            <span class="mc-ou__side">${awaySprdFmt}</span>
+            ${awaySprdDec ? `<span class="mc-ou__val">${Number(awaySprdDec).toFixed(2)}</span>` : ''}
+          </span>
+        </div>`;
+      spreadRowEl.style.display = '';
+    }
   }
 
   // ── 5. Badge warning données partielles ──────────────────────────────────
