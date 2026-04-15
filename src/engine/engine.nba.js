@@ -179,15 +179,3 @@ export class EngineNBA {
     return computeScore(variables, weights).score;
   }
 }
- *
- * REFACTOR v5.13 :
- *   Découpe en 3 sous-modules pour améliorer la maintenabilité :
- *     engine.nba.variables.js — extraction, normalisation, absences, EMA
- *     engine.nba.score.js     — score pondéré, poids effectifs, signaux
- *     engine.nba.betting.js   — Moneyline, Spread, O/U, Kelly, divergence marché
- *   Ce fichier (engine.nba.js) est désormais l'orchestrateur mince.
- *   Interface publique inchangée : compute() et computeFromVariables().
- *   Compatible engine.core.js, engine.robustness.js — aucun changement externe.
- *
- * Historique des versions antérieures → voir git log ou engine.nba.variables.js.
- */
