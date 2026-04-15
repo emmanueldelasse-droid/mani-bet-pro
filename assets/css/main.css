@@ -855,24 +855,65 @@ body.theme-light .chip--active,
 
 .mc-team__odds {
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   margin-top: 6px;
   line-height: 1;
   color: var(--color-text-primary);
-  transition: color var(--transition-fast);
 }
 
 .mc-team__odds-src {
   font-size: 9px;
   font-weight: 400;
   color: var(--color-text-muted);
-  display: block;
-  margin-top: 1px;
 }
 
 .mc-team__odds--home { color: var(--color-success); }
 .mc-team__odds--away { color: var(--color-danger); }
+
+/* ── Section O/U ── */
+.mc-ou {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.mc-ou__label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.mc-ou__odds {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+}
+
+.mc-ou__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.mc-ou__side {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.mc-ou__val {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
 
 .mc-team__prob {
   font-size: 10px;
