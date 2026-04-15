@@ -624,9 +624,9 @@ function renderBlocTousLesParis(analysis, match) {
   if (!validRows.length) return '';
 
   // Séparer par type de marché
-  const mlRows     = validRows.filter(r => r.includes('MONEYLINE'));
-  const sprdRows   = validRows.filter(r => r.includes('"SPREAD"'));
-  const ouRows     = validRows.filter(r => r.includes('OVER_UNDER'));
+  const mlRows     = validRows.filter(r => r.includes('data-market="MONEYLINE"'));
+  const sprdRows   = validRows.filter(r => r.includes('data-market="SPREAD"'));
+  const ouRows     = validRows.filter(r => r.includes('data-market="OVER_UNDER"'));
 
   const section = (title, rowsArr) => rowsArr.length ? `
     <div style="font-size:9px;font-weight:700;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px 2px">${title}</div>
