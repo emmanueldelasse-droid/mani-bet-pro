@@ -267,22 +267,20 @@ function _injectStyles() {
       font-size: 11px; color: var(--color-text-muted);
       font-variant-numeric: tabular-nums;
     }
-    .mc-footer {
-      display: flex; align-items: center;
-      justify-content: space-between;
-      margin-top: 8px; gap: 8px;
-    }
-    .mc-footer__arrow {
-      display: inline-flex; align-items: center; gap: 4px;
-      font-size: 11px; font-weight: 600;
+    .mc-footer__cta {
+      display: block; width: 100%;
+      margin-top: 10px;
+      padding: 10px 0;
+      font-size: 12px; font-weight: 600;
       color: var(--color-signal);
       background: rgba(59,130,246,0.07);
       border: 1px solid rgba(59,130,246,0.18);
-      border-radius: 6px; padding: 5px 12px;
+      border-radius: 8px;
       cursor: pointer; transition: background 0.15s;
-      flex-shrink: 0; white-space: nowrap;
+      text-align: center; letter-spacing: 0.02em;
     }
-    .mc-footer__arrow:hover { background: rgba(59,130,246,0.14); }
+    .mc-footer__cta:hover { background: rgba(59,130,246,0.14); }
+    .mc-pill__sep { color: var(--color-border); font-weight: 400; font-size: 9px; }
 
     /* IDs cachés hérités — maintenus pour _updateMatchCard */
     #proba-placeholder { display: none !important; }
@@ -666,10 +664,10 @@ function _createMatchCard(match) {
     <div class="match-card__header" style="display:flex;align-items:center;gap:6px">
       <span class="sport-tag ${isTennis ? 'sport-tag--tennis' : 'sport-tag--nba'}">${isTennis ? 'Tennis' : 'NBA'}</span>
       ${!isFinal ? countdownHtml : ''}
-      <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}">
-        ${isFinal ? 'Final' : 'Analyse…'}
-      </span>
       <span class="mc-header-date" style="margin-left:auto">${isFinal ? 'Terminé' : time}</span>
+      <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}" style="font-size:10px;padding:2px 7px">
+        ${isFinal ? 'Final' : '…'}
+      </span>
     </div>
 
     <!-- ── ÉQUIPES ── -->
@@ -725,8 +723,8 @@ function _createMatchCard(match) {
         <span class="mc-market-row__label">O/U</span>
         <div class="mc-market-pills">
           <span class="mc-pill mc-pill--line">${ou}</span>
-          ${ouOverFmt  ? `<span class="mc-pill"><span class="mc-pill__side">Over</span> <span class="mc-pill__val">${ouOverFmt}</span></span>`  : ''}
-          ${ouUnderFmt ? `<span class="mc-pill"><span class="mc-pill__side">Under</span> <span class="mc-pill__val">${ouUnderFmt}</span></span>` : ''}
+          ${ouOverFmt  ? `<span class="mc-pill"><span class="mc-pill__side">Over</span><span class="mc-pill__sep"> · </span><span class="mc-pill__val">${ouOverFmt}</span></span>`  : ''}
+          ${ouUnderFmt ? `<span class="mc-pill"><span class="mc-pill__side">Under</span><span class="mc-pill__sep"> · </span><span class="mc-pill__val">${ouUnderFmt}</span></span>` : ''}
         </div>
       </div>
       <div id="spread-row-${match.id}" style="display:none" class="mc-market-row mc-market-row--spread"></div>
@@ -749,12 +747,10 @@ function _createMatchCard(match) {
     <div id="recs-${match.id}" class="match-card__recs" style="display:none"></div>
 
     <!-- Footer -->
-    <div class="mc-footer">
-      <div id="bet-indicator-${match.id}"></div>
-      <button class="mc-footer__arrow match-card__cta" data-match-id="${match.id}" data-analysis-id="">
-        Voir l'analyse →
-      </button>
-    </div>
+    <div id="bet-indicator-${match.id}" style="margin-top:6px"></div>
+    <button class="mc-footer__cta match-card__cta" data-match-id="${match.id}" data-analysis-id="">
+      Voir l'analyse →
+    </button>
   `;
 
   card.querySelector('.match-card__cta').addEventListener('click', (e) => {
@@ -890,8 +886,8 @@ function _updateMatchCard(list, matchId, analysis, match, ptState) {
       spreadRowEl.innerHTML = `
         <span class="mc-market-row__label">Hcap</span>
         <div class="mc-market-pills">
-          <span class="mc-pill"><span class="mc-pill__side">${homeSprdFmt}</span>${homeSprdDec ? ` <span class="mc-pill__val">${Number(homeSprdDec).toFixed(2)}</span>` : ''}</span>
-          <span class="mc-pill"><span class="mc-pill__side">${awaySprdFmt}</span>${awaySprdDec ? ` <span class="mc-pill__val">${Number(awaySprdDec).toFixed(2)}</span>` : ''}</span>
+          <span class="mc-pill"><span class="mc-pill__side">${homeSprdFmt}</span>${homeSprdDec ? `<span class="mc-pill__sep"> · </span><span class="mc-pill__val">${Number(homeSprdDec).toFixed(2)}</span>` : ''}</span>
+          <span class="mc-pill"><span class="mc-pill__side">${awaySprdFmt}</span>${awaySprdDec ? `<span class="mc-pill__sep"> · </span><span class="mc-pill__val">${Number(awaySprdDec).toFixed(2)}</span>` : ''}</span>
         </div>`;
       spreadRowEl.style.display = '';
     }

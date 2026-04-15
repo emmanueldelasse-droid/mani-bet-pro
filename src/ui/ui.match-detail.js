@@ -75,8 +75,8 @@ function renderShell(match, analysis, storeInstance) {
           <div class="match-detail__team">
             <div class="match-detail__team-abbr">${match.home_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.home_team?.name ?? '—'}</div>
-            <div class="match-detail__team-role text-muted">Domicile</div>
-            <div class="text-muted mono" style="font-size:11px">${match.home_team?.record ?? ''}</div>
+            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-muted);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">🏠 Domicile</div>
+            <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.home_team?.record ?? ''}</div>
           </div>
           <div class="match-detail__separator">
             <span class="match-detail__vs">VS</span>
@@ -84,13 +84,14 @@ function renderShell(match, analysis, storeInstance) {
           <div class="match-detail__team match-detail__team--away">
             <div class="match-detail__team-abbr">${match.away_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.away_team?.name ?? '—'}</div>
-            <div class="match-detail__team-role text-muted">Extérieur</div>
-            <div class="text-muted mono" style="font-size:11px">${match.away_team?.record ?? ''}</div>
+            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-muted);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">✈️ Extérieur</div>
+            <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.away_team?.record ?? ''}</div>
           </div>
         </div>
         ${match.odds ? renderOddsBar(match.odds) : ''}
       </div>
 
+      ${renderBlocSyntheseSummary(analysis, match)}
       ${renderBlocProbas(analysis, match)}
       ${renderBlocTousLesParis(analysis, match)}
       <div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>
@@ -102,21 +103,71 @@ function renderShell(match, analysis, storeInstance) {
 // ── COTES ESPN ────────────────────────────────────────────────────────────────
 
 function renderOddsBar(odds) {
-  const spread = odds.spread != null ? (odds.spread > 0 ? `+${odds.spread}` : String(odds.spread)) : '—';
-  const ou     = odds.over_under ?? '—';
-  const homeML = odds.home_ml != null ? (odds.home_ml > 0 ? `+${odds.home_ml}` : String(odds.home_ml)) : '—';
-  const awayML = odds.away_ml != null ? (odds.away_ml > 0 ? `+${odds.away_ml}` : String(odds.away_ml)) : '—';
-  return `
-    <div style="margin-top:var(--space-3);display:flex;gap:16px;flex-wrap:wrap">
-      <span class="text-muted" style="font-size:11px">📊 DraftKings</span>
-      <span class="mono" style="font-size:11px">Spread <strong>${spread}</strong></span>
-      <span class="mono" style="font-size:11px">O/U <strong>${ou}</strong></span>
-      <span class="mono" style="font-size:11px">DOM <strong>${homeML}</strong></span>
-      <span class="mono" style="font-size:11px">EXT <strong>${awayML}</strong></span>
-    </div>`;
+  // Barre DraftKings supprimée — données ESPN américaines obsolètes depuis Pinnacle
+  return '';
 }
 
 // ── BLOC PROBAS ───────────────────────────────────────────────────────────────
+
+function renderBlocSyntheseSummary(analysis, match) {
+  if (!analysis) return '';
+  const best  = analysis.betting_recommendations?.best ?? null;
+  const score = (() => {
+    const rob  = analysis?.robustness_score;
+    const qual = analysis?.data_quality_score;
+    return (rob != null && qual != null) ? Math.round(((rob + qual) / 2) * 100) : null;
+  })();
+  let fiabLabel, fiabColor;
+  if (score === null)   { fiabLabel = '—';       fiabColor = 'var(--color-muted)'; }
+  else if (score >= 80) { fiabLabel = 'Élevée';  fiabColor = 'var(--color-success)'; }
+  else if (score >= 60) { fiabLabel = 'Moyenne'; fiabColor = 'var(--color-warning)'; }
+  else                  { fiabLabel = 'Faible';  fiabColor = 'var(--color-danger)'; }
+
+  if (!best || best.edge < 5) return '';
+
+  const typeLabel = best.type === 'MONEYLINE' ? 'Vainqueur' : best.type === 'SPREAD' ? 'Handicap' : 'O/U';
+  let sideLabel;
+  if (best.type === 'MONEYLINE') {
+    sideLabel = best.side === 'HOME' ? (match?.home_team?.name ?? 'DOM') : (match?.away_team?.name ?? 'EXT');
+  } else if (best.type === 'SPREAD') {
+    const abbr = best.side === 'HOME' ? (match?.home_team?.abbreviation ?? 'DOM') : (match?.away_team?.abbreviation ?? 'EXT');
+    const line = best.side === 'HOME' ? best.spread_line : -best.spread_line;
+    sideLabel = abbr + ' ' + (line > 0 ? '+' : '') + line;
+  } else {
+    sideLabel = best.side === 'OVER'
+      ? 'Plus de ' + (best.ou_line ?? '—') + ' pts'
+      : 'Moins de ' + (best.ou_line ?? '—') + ' pts';
+  }
+
+  const decOdds  = best.odds_decimal ?? null;
+  const fmtOdds  = decOdds ? Number(decOdds).toFixed(2) : '—';
+  const edgeColor = best.edge >= 12 ? 'var(--color-success)' : best.edge >= 7 ? 'var(--color-warning)' : 'var(--color-muted)';
+  const fiabHtml  = score !== null
+    ? `<div style="text-align:center"><div style="font-size:14px;font-weight:700;color:${fiabColor}">${score}%</div><div style="font-size:9px;color:var(--color-muted)">Fiabilité</div></div>`
+    : '';
+
+  return `
+    <div class="card match-detail__bloc" style="border-left:3px solid ${edgeColor};padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px;min-width:0">
+        <span style="font-size:14px;font-weight:700;color:var(--color-success)">★</span>
+        <div style="min-width:0">
+          <div style="font-size:10px;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">${typeLabel}</div>
+          <div style="font-size:15px;font-weight:700;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sideLabel}</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--color-signal)">${fmtOdds}</div>
+          <div style="font-size:9px;color:var(--color-muted)">Cote</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:${edgeColor}">+${best.edge}%</div>
+          <div style="font-size:9px;color:var(--color-muted)">Edge</div>
+        </div>
+        ${fiabHtml}
+      </div>
+    </div>`;
+}
 
 function renderBlocProbas(analysis, match) {
   if (!analysis || analysis.predictive_score === null) {
@@ -538,12 +589,18 @@ function renderBlocTousLesParis(analysis, match) {
   const bankroll   = (PaperEngine.load().current_bankroll) ?? 500;
 
   const _probPill = (prob, rec) => {
-    // Point vert uniquement si edge réel > 7% + qualité > 80% + pas contrarian
+    // Vert   = moteur conseille de parier (edge >= 7 + qualité >= 0.80 + pas contrarian)
+    // Orange = edge positif mais conditions insuffisantes (risqué)
+    // Gris   = pas de rec ou edge trop faible
+    // Rouge  = edge négatif (book en désaccord fort — ne pas toucher)
     const quality  = analysis?.data_quality_score ?? 0;
     const divFlag  = analysis?.market_divergence?.flag ?? 'low';
-    const isGood   = rec && rec.edge >= 7 && quality >= 0.80 && divFlag !== 'critical' && !rec.is_contrarian;
-    const isOk     = rec && rec.edge >= 5 && rec.edge < 7;
-    const bg = isGood ? '#22c55e' : isOk ? '#f97316' : 'var(--color-border)';
+    const edge     = rec?.edge ?? null;
+    let bg;
+    if (edge !== null && edge < 0)                                                bg = '#ef4444'; // rouge — négatif
+    else if (rec && edge >= 7 && quality >= 0.80 && divFlag !== 'critical' && !rec.is_contrarian) bg = '#22c55e'; // vert — conseillé
+    else if (rec && edge >= 3)                                                    bg = '#f97316'; // orange — risqué
+    else                                                                          bg = 'var(--color-border)'; // gris — passer
     return `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${bg};flex-shrink:0"></span>`;
   };
 
@@ -584,8 +641,8 @@ function renderBlocTousLesParis(analysis, match) {
           <div style="font-size:14px;font-weight:700;color:var(--color-signal)">${oddsDec}</div>
           <div style="font-size:9px;color:var(--color-muted)">${getOddsSource()}</div>
         </div>
-        <div style="text-align:center;min-width:40px">
-          ${edge !== null ? `<div style="font-size:13px;font-weight:700;color:${_edgeColor(edge)}">${edge > 0 ? '+' : ''}${edge}%</div>` : '<div style="color:var(--color-muted);font-size:11px">—</div>'}
+        <div style="text-align:center;min-width:52px">
+          ${edge !== null ? `<div style="font-size:15px;font-weight:800;color:${_edgeColor(edge)};letter-spacing:-0.01em">${edge > 0 ? '+' : ''}${edge}%</div>` : '<div style="color:var(--color-muted);font-size:11px">—</div>'}
           ${kellyEuros ? `<div style="font-size:9px;color:var(--color-muted)">${kellyEuros}€</div>` : ''}
         </div>
         <div>
@@ -835,7 +892,7 @@ function renderBlocFiabiliteEtSynthese(analysis, match) {
       <!-- Fiabilité -->
       <div class="bloc-header" style="margin-bottom:var(--space-2)">
         <span class="bloc-header__title">Fiabilité</span>
-        ${score !== null ? `<span style="font-weight:700;color:${fiabColor}">${fiabLabel}</span>` : ''}
+        ${score !== null ? `<span style="font-weight:700;color:${fiabColor}">${fiabLabel} · ${score}%</span>` : ''}
       </div>
       ${score !== null ? `
         <div style="height:6px;border-radius:3px;overflow:hidden;background:var(--color-border);margin-bottom:6px">
