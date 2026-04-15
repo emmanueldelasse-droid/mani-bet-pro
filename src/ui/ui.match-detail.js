@@ -648,8 +648,6 @@ function renderBlocTousLesParis(analysis, match) {
       ${section('Handicap', sprdRows)}
       ${section('Total de points', ouRows)}
     </div>`;
-      ${validRows.join('')}
-    </div>`;
 }
 
 // ── BLOC STATS & FORME ────────────────────────────────────────────────────────
