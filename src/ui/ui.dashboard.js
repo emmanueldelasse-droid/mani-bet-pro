@@ -549,7 +549,7 @@ function _createMatchCard(match) {
   card.className       = 'match-card';
   card.dataset.matchId = match.id;
 
-  const time         = match.datetime
+  const time          = match.datetime
     ? new Date(match.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
     : '—';
   const countdownHtml = match.datetime ? _renderCountdown(match.datetime) : '';
@@ -561,35 +561,42 @@ function _createMatchCard(match) {
   const awayScore     = match.away_team?.score;
   const showScore     = isFinal && homeScore != null && awayScore != null;
 
-  // Cotes ML depuis market_odds (Pinnacle) ou odds ESPN
-  const marketOdds  = match.market_odds ?? null;
-  const pinnacle    = marketOdds?.bookmakers?.find(b => b.key === 'winamax')
-                   ?? marketOdds?.bookmakers?.find(b => b.key === 'pinnacle')
-                   ?? marketOdds?.bookmakers?.[0]
-                   ?? null;
-  const espnOdds    = match.odds ?? {};
+  // ── Cotes ML en format DÉCIMAL (cotes françaises) ─────────────────────────
+  const marketOdds = match.market_odds ?? null;
+  const espnOdds   = match.odds ?? {};
 
-  function _decToAm(d) { return d >= 2 ? Math.round((d-1)*100) : Math.round(-100/(d-1)); }
-  function _fmtML(am) {
+  // Priorité : market_odds (Pinnacle/Winamax) → conversion depuis ESPN américain
+  const _amToDec = (am) => {
     if (am == null) return null;
-    return am > 0 ? `+${am}` : String(am);
-  }
-  function _amToDec(am) {
-    if (am == null) return null;
-    return am > 0 ? Number((am/100+1).toFixed(2)) : Number((1-100/am).toFixed(2));
-  }
+    const n = Number(am);
+    return n > 0 ? Number((n / 100 + 1).toFixed(2)) : Number((1 - 100 / n).toFixed(2));
+  };
 
-  const homeAmRaw = espnOdds.home_ml ?? (pinnacle?.home_ml != null ? _decToAm(pinnacle.home_ml) : null);
-  const awayAmRaw = espnOdds.away_ml ?? (pinnacle?.away_ml != null ? _decToAm(pinnacle.away_ml) : null);
-  const homeML    = _fmtML(homeAmRaw);
-  const awayML    = _fmtML(awayAmRaw);
-  const oddsSource = pinnacle ? (pinnacle.key === 'winamax' ? 'Winamax' : 'Pinnacle') : (espnOdds.home_ml != null ? 'ESPN' : null);
+  // Chercher la meilleure source de cotes ML décimales
+  const pinnacleBook = marketOdds?.bookmakers?.find(b => b.key === 'pinnacle')
+                    ?? marketOdds?.bookmakers?.find(b => b.key === 'winamax')
+                    ?? marketOdds?.bookmakers?.[0]
+                    ?? null;
 
-  // Spread + O/U pour la ligne d'infos
-  const spread = espnOdds.spread != null ? (espnOdds.spread > 0 ? `+${espnOdds.spread}` : String(espnOdds.spread))
-               : pinnacle?.spread_line != null ? (pinnacle.spread_line > 0 ? `+${pinnacle.spread_line}` : String(pinnacle.spread_line))
-               : null;
-  const ou     = espnOdds.over_under ?? pinnacle?.total_line ?? null;
+  const homeDecRaw = marketOdds?.home_ml_decimal
+                  ?? pinnacleBook?.home_ml
+                  ?? _amToDec(espnOdds.home_ml);
+  const awayDecRaw = marketOdds?.away_ml_decimal
+                  ?? pinnacleBook?.away_ml
+                  ?? _amToDec(espnOdds.away_ml);
+
+  const homeDec    = homeDecRaw != null ? Number(homeDecRaw).toFixed(2) : null;
+  const awayDec    = awayDecRaw != null ? Number(awayDecRaw).toFixed(2) : null;
+  const oddsSource = pinnacleBook
+    ? (pinnacleBook.key === 'winamax' ? 'Winamax' : 'Pinnacle')
+    : (espnOdds.home_ml != null ? 'ESPN' : null);
+
+  // ── O/U en décimal ────────────────────────────────────────────────────────
+  const ou        = espnOdds.over_under ?? marketOdds?.ou_line ?? null;
+  const overDec   = marketOdds?.over_decimal  ?? null;
+  const underDec  = marketOdds?.under_decimal ?? null;
+  const ouOverFmt  = overDec  != null ? Number(overDec).toFixed(2)  : null;
+  const ouUnderFmt = underDec != null ? Number(underDec).toFixed(2) : null;
 
   card.innerHTML = `
     <!-- ── HEADER ── -->
@@ -602,7 +609,7 @@ function _createMatchCard(match) {
       </span>
     </div>
 
-    <!-- ── ÉQUIPES + COTES ── -->
+    <!-- ── ÉQUIPES ── -->
     <div class="mc-teams">
 
       <!-- Équipe domicile -->
@@ -610,11 +617,11 @@ function _createMatchCard(match) {
         <span class="mc-team__abbr">${match.home_team?.abbreviation ?? '—'}</span>
         <span class="mc-team__name">${match.home_team?.name ?? '—'}</span>
         <span class="mc-team__record">${homeRecord}</span>
-        ${homeML ? `
-        <span class="mc-team__odds mc-team__odds--home" id="odds-home-${match.id}">${homeML}</span>
-        ${oddsSource ? `<span class="mc-team__odds-src">${oddsSource}</span>` : ''}
-        ` : `<span class="mc-team__odds" id="odds-home-${match.id}" style="color:var(--color-text-muted)">—</span>`}
-        <!-- prob moteur (cachée — mise à jour par _updateMatchCard) -->
+        <!-- cote ML décimale -->
+        <span class="mc-team__odds" id="odds-home-${match.id}">
+          ${homeDec ? `<strong>${homeDec}</strong>${oddsSource ? `<span class="mc-team__odds-src"> ${oddsSource}</span>` : ''}` : '—'}
+        </span>
+        <!-- prob moteur injectée par _updateMatchCard -->
         <span class="mc-team__prob" id="motor-home-${match.id}" style="display:none"></span>
         <span style="display:none" id="market-home-${match.id}"></span>
       </div>
@@ -625,8 +632,6 @@ function _createMatchCard(match) {
           ? `<div class="mc-vs__score">${homeScore}<br><span style="font-size:10px;color:var(--color-text-muted)">–</span><br>${awayScore}</div>`
           : `<span class="mc-vs__label">VS</span>`
         }
-        ${ou ? `<span style="font-size:9px;color:var(--color-text-muted);margin-top:2px">O/U ${ou}</span>` : ''}
-        ${spread ? `<span style="font-size:9px;color:var(--color-text-muted)">±${spread.replace(/[+-]/g,'')}</span>` : ''}
       </div>
 
       <!-- Équipe extérieure -->
@@ -634,16 +639,16 @@ function _createMatchCard(match) {
         <span class="mc-team__abbr">${match.away_team?.abbreviation ?? '—'}</span>
         <span class="mc-team__name">${match.away_team?.name ?? '—'}</span>
         <span class="mc-team__record">${awayRecord}</span>
-        ${awayML ? `
-        <span class="mc-team__odds mc-team__odds--away" id="odds-away-${match.id}">${awayML}</span>
-        ${oddsSource ? `<span class="mc-team__odds-src">${oddsSource}</span>` : ''}
-        ` : `<span class="mc-team__odds" id="odds-away-${match.id}" style="color:var(--color-text-muted)">—</span>`}
+        <!-- cote ML décimale -->
+        <span class="mc-team__odds" id="odds-away-${match.id}">
+          ${awayDec ? `<strong>${awayDec}</strong>${oddsSource ? `<span class="mc-team__odds-src"> ${oddsSource}</span>` : ''}` : '—'}
+        </span>
         <span class="mc-team__prob" id="motor-away-${match.id}" style="display:none"></span>
         <span style="display:none" id="market-away-${match.id}"></span>
       </div>
     </div>
 
-    <!-- Barre de probabilité (rendue par _updateMatchCard) -->
+    <!-- ── BARRE PROBABILITÉ ── -->
     <div id="proba-bar-${match.id}" style="display:none">
       <div class="mc-proba-bar"><div class="mc-proba-bar__fill" id="proba-fill-${match.id}" style="width:50%"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:2px">
@@ -652,27 +657,38 @@ function _createMatchCard(match) {
       </div>
     </div>
 
-    <!-- Nœuds hérités — conservés pour compatibilité _updateMatchCard -->
+    <!-- ── O/U ── -->
+    ${ou != null ? `
+    <div class="mc-ou" id="ou-${match.id}">
+      <span class="mc-ou__label">O/U ${ou}</span>
+      <div class="mc-ou__odds">
+        ${ouOverFmt  ? `<span class="mc-ou__item"><span class="mc-ou__side">Over</span><span class="mc-ou__val">${ouOverFmt}</span></span>` : ''}
+        ${ouUnderFmt ? `<span class="mc-ou__item"><span class="mc-ou__side">Under</span><span class="mc-ou__val">${ouUnderFmt}</span></span>` : ''}
+        ${!ouOverFmt && !ouUnderFmt && oddsSource ? `<span style="font-size:10px;color:var(--color-text-muted)">cotes indisponibles</span>` : ''}
+      </div>
+    </div>` : ''}
+
+    <!-- Nœuds hérités compatibilité -->
     <div id="proba-${match.id}" style="display:none"></div>
     <div id="edge-${match.id}" style="display:none">
       <span id="edge-val-${match.id}"></span>
       <span id="quality-val-${match.id}"></span>
     </div>
 
-    <!-- Niveau / signal principal (injecté par _updateMatchCard) -->
+    <!-- Niveau / Net Rating -->
     <div id="level-${match.id}" style="display:none"></div>
 
-    <!-- Meilleure recommandation (rendue par _updateMatchCard) -->
+    <!-- Meilleure recommandation -->
     <div id="best-rec-${match.id}" style="display:none"></div>
 
     <!-- Paris recommandés supplémentaires -->
     <div id="recs-${match.id}" class="match-card__recs" style="display:none"></div>
 
-    <!-- Footer : paris en cours + CTA -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px;gap:8px">
+    <!-- Footer -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;gap:8px">
       <div id="bet-indicator-${match.id}"></div>
-      <button class="btn btn--ghost match-card__cta" data-match-id="${match.id}" data-analysis-id=""
-        style="margin-top:0;width:auto;padding:5px 12px;font-size:11px;flex-shrink:0">
+      <button class="btn btn--primary match-card__cta" data-match-id="${match.id}" data-analysis-id=""
+        style="margin-top:0;width:auto;padding:8px 18px;font-size:13px;font-weight:600;flex-shrink:0">
         → Voir analyse
       </button>
     </div>
