@@ -155,13 +155,13 @@ function _renderTDStats(match, teamDetail) {
     const hBetter = !tooClose && (r.better === 'high' ? hNum > aNum : r.better === 'low' ? hNum < aNum : false);
     const aBetter = !tooClose && (r.better === 'high' ? aNum > hNum : r.better === 'low' ? aNum < hNum : false);
 
-    const hColor = tooClose ? 'var(--color-muted)' : hBetter ? 'var(--color-text)' : 'var(--color-muted)';
-    const aColor = tooClose ? 'var(--color-muted)' : aBetter ? 'var(--color-text)' : 'var(--color-muted)';
+    const hColor = hBetter ? 'var(--color-signal)' : 'var(--color-text)';
+    const aColor = aBetter ? 'var(--color-signal)' : 'var(--color-text)';
 
     return `
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-border)">
         <div style="font-size:12px;font-weight:${hBetter ? '700' : '400'};color:${hColor}">${r.hVal ?? '—'}</div>
-        <div style="font-size:10px;color:${tooClose ? 'var(--color-border)' : 'var(--color-muted)'};text-align:center;white-space:nowrap">${r.label}</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);text-align:center;white-space:nowrap">${r.label}</div>
         <div style="font-size:12px;font-weight:${aBetter ? '700' : '400'};color:${aColor};text-align:right">${r.aVal ?? '—'}</div>
       </div>`;
   }).join('');

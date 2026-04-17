@@ -75,7 +75,7 @@ function renderShell(match, analysis, storeInstance) {
           <div class="match-detail__team">
             <div class="match-detail__team-abbr">${match.home_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.home_team?.name ?? '—'}</div>
-            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">⌂ Domicile</div>
+            <div style="display:inline-flex;align-self:flex-start;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">🏠 Domicile</div>
             <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.home_team?.record ?? ''}</div>
           </div>
           <div class="match-detail__separator">
@@ -84,7 +84,7 @@ function renderShell(match, analysis, storeInstance) {
           <div class="match-detail__team match-detail__team--away">
             <div class="match-detail__team-abbr">${match.away_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.away_team?.name ?? '—'}</div>
-            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">↗ Extérieur</div>
+            <div style="display:inline-flex;align-self:flex-end;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">✈️ Extérieur</div>
             <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.away_team?.record ?? ''}</div>
           </div>
         </div>
@@ -806,9 +806,9 @@ export function renderBlocStats(analysis, match, storeInstance) {
     const aW = !isNaN(hN) && !isNaN(aN) && (higherIsBetter ? aN > hN : aN < hN);
     return `
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-border)">
-        <div style="font-size:12px;font-weight:${hW ? '700' : '400'};color:${hW ? 'var(--color-text)' : 'var(--color-text-secondary)'}">${hVal ?? '—'}</div>
+        <div style="font-size:12px;font-weight:${hW ? '700' : '400'};color:${hW ? 'var(--color-signal)' : 'var(--color-text)'}">${hVal ?? '—'}</div>
         <div style="font-size:10px;color:var(--color-text-secondary);text-align:center;white-space:nowrap">${label}</div>
-        <div style="font-size:12px;font-weight:${aW ? '700' : '400'};color:${aW ? 'var(--color-text)' : 'var(--color-text-secondary)'};text-align:right">${aVal ?? '—'}</div>
+        <div style="font-size:12px;font-weight:${aW ? '700' : '400'};color:${aW ? 'var(--color-signal)' : 'var(--color-text)'};text-align:right">${aVal ?? '—'}</div>
       </div>`;
   };
 
