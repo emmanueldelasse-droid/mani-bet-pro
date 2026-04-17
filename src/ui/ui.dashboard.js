@@ -91,7 +91,7 @@ function _injectStyles() {
     }
     .mc-team__record {
       font-family: var(--font-mono);
-      font-size: 10px; color: var(--color-text-muted);
+      font-size: 10px; color: var(--color-text-secondary);
     }
     .mc-team__odds {
       font-family: var(--font-mono);
@@ -102,12 +102,12 @@ function _injectStyles() {
     .mc-team__odds--away { color: var(--color-text-primary); }
     .mc-team__odds-src {
       font-size: 9px; font-weight: 400;
-      color: var(--color-text-muted);
+      color: var(--color-text-secondary);
       display: block; margin-top: 1px;
     }
     .mc-team__prob {
       font-size: 11px; font-weight: 700;
-      color: var(--color-text-muted);
+      color: var(--color-text-secondary);
       margin-top: 2px;
     }
     .mc-team__prob--fav { color: var(--color-signal); }
@@ -122,7 +122,7 @@ function _injectStyles() {
     .mc-vs__label {
       font-family: var(--font-mono);
       font-size: 10px; font-weight: 700;
-      color: var(--color-text-muted);
+      color: var(--color-text-secondary);
       letter-spacing: 0.12em;
     }
     .mc-vs__score {
@@ -176,7 +176,7 @@ function _injectStyles() {
       color: var(--color-success);
     }
     .mc-best-rec__label {
-      font-size: 10px; color: var(--color-text-muted);
+      font-size: 10px; color: var(--color-text-secondary);
       flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.04em;
     }
     .mc-best-rec__side {
@@ -234,7 +234,7 @@ function _injectStyles() {
     .mc-market-row__label {
       font-family: var(--font-mono);
       font-size: 10px; font-weight: 700;
-      color: var(--color-text-muted);
+      color: var(--color-text-secondary);
       text-transform: uppercase; letter-spacing: 0.05em;
       min-width: 42px; flex-shrink: 0;
     }
@@ -248,7 +248,7 @@ function _injectStyles() {
       color: var(--color-text-secondary);
       white-space: nowrap;
     }
-    .mc-pill__side { color: var(--color-text-muted); font-weight: 400; }
+    .mc-pill__side { color: var(--color-text-secondary); font-weight: 400; }
     .mc-pill__val  { font-family: var(--font-mono); font-weight: 700; color: var(--color-text-primary); }
     .mc-pill--line {
       background: transparent; border-color: transparent; padding-left: 0;
@@ -257,14 +257,14 @@ function _injectStyles() {
     .mc-source {
       display: inline-flex; align-items: center;
       font-size: 9px; font-weight: 600;
-      color: var(--color-text-muted);
+      color: var(--color-text-secondary);
       background: var(--color-bg-elevated);
       border: 1px solid var(--color-border-default);
       border-radius: 3px; padding: 1px 5px;
       letter-spacing: 0.03em; margin-left: auto; flex-shrink: 0;
     }
     .mc-header-date {
-      font-size: 11px; color: var(--color-text-muted);
+      font-size: 11px; color: var(--color-text-secondary);
       font-variant-numeric: tabular-nums;
     }
     .mc-footer__cta {
@@ -535,7 +535,7 @@ function _renderShell(selectedDate) {
           <div class="page-header__title">Dashboard</div>
           <div class="page-header__sub">${displayDate}</div>
         </div>
-        <button id="refresh-btn" style="font-size:11px;padding:5px 10px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg);color:var(--color-muted);cursor:pointer;margin-top:4px;flex-shrink:0">⟳ Actualiser</button>
+        <button id="refresh-btn" style="font-size:11px;padding:5px 10px;border-radius:6px;border:1px solid var(--color-border);background:var(--color-bg);color:var(--color-text-secondary);cursor:pointer;margin-top:4px;flex-shrink:0">⟳ Actualiser</button>
       </div>
 
       <div class="date-selector filter-chips" id="date-selector">
@@ -688,7 +688,7 @@ function _createMatchCard(match) {
       <!-- Séparateur central -->
       <div class="mc-vs">
         ${showScore
-          ? `<div class="mc-vs__score">${homeScore}<br><span style="font-size:10px;color:var(--color-text-muted)">–</span><br>${awayScore}</div>`
+          ? `<div class="mc-vs__score">${homeScore}<br><span style="font-size:10px;color:var(--color-text-secondary)">–</span><br>${awayScore}</div>`
           : `<span class="mc-vs__label">VS</span>`
         }
         ${oddsSource ? `<span class="mc-source">${oddsSource}</span>` : ''}
@@ -711,8 +711,8 @@ function _createMatchCard(match) {
     <div id="proba-bar-${match.id}" style="display:none">
       <div class="mc-proba-bar"><div class="mc-proba-bar__fill" id="proba-fill-${match.id}" style="width:50%"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:2px">
-        <span id="prob-label-home-${match.id}" style="font-size:9px;color:var(--color-text-muted)"></span>
-        <span id="prob-label-away-${match.id}" style="font-size:9px;color:var(--color-text-muted)"></span>
+        <span id="prob-label-home-${match.id}" style="font-size:9px;color:var(--color-text-secondary)"></span>
+        <span id="prob-label-away-${match.id}" style="font-size:9px;color:var(--color-text-secondary)"></span>
       </div>
     </div>
 
@@ -1060,13 +1060,13 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
           <div style="font-size:15px;font-weight:700">
             ${bestMatch.home_team?.abbreviation} vs ${bestMatch.away_team?.abbreviation}
           </div>
-          <div style="font-size:12px;color:var(--color-muted);margin-top:3px">
+          <div style="font-size:12px;color:var(--color-text-secondary);margin-top:3px">
             Parier sur <strong style="color:var(--color-text)">${sideLabel}</strong> · cote <strong style="color:var(--color-signal)">${oddsDecimal}</strong>${gainPour100 ? ` <span style="color:var(--color-muted)">(+${gainPour100}€ / 100€)</span>` : ''}
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
           <div style="font-size:26px;font-weight:700;color:var(--color-success);line-height:1">+${bestEdge}%</div>
-          <div style="font-size:10px;color:var(--color-muted)">avantage estimé</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">avantage estimé</div>
         </div>
       </div>
     </div>

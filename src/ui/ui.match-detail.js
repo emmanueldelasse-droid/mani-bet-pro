@@ -75,7 +75,7 @@ function renderShell(match, analysis, storeInstance) {
           <div class="match-detail__team">
             <div class="match-detail__team-abbr">${match.home_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.home_team?.name ?? '—'}</div>
-            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-muted);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">🏠 Domicile</div>
+            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">🏠 Domicile</div>
             <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.home_team?.record ?? ''}</div>
           </div>
           <div class="match-detail__separator">
@@ -84,7 +84,7 @@ function renderShell(match, analysis, storeInstance) {
           <div class="match-detail__team match-detail__team--away">
             <div class="match-detail__team-abbr">${match.away_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.away_team?.name ?? '—'}</div>
-            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-muted);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">✈️ Extérieur</div>
+            <div style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">✈️ Extérieur</div>
             <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.away_team?.record ?? ''}</div>
           </div>
         </div>
@@ -207,7 +207,7 @@ function renderBlocProbas(analysis, match) {
           <div style="font-size:28px;font-weight:700;color:${homeProb >= awayProb ? 'var(--color-signal)' : 'var(--color-muted)'}">${homeProb}%</div>
           <div style="font-size:10px;color:var(--color-text-secondary)">Cote juste : ${fairHome}</div>
         </div>
-        <div style="text-align:center;color:var(--color-muted);font-size:13px">vs</div>
+        <div style="text-align:center;color:var(--color-text-secondary);font-size:13px">vs</div>
         <div style="text-align:right">
           <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px">${awayName}</div>
           <div style="font-size:28px;font-weight:700;color:${awayProb > homeProb ? 'var(--color-signal)' : 'var(--color-muted)'}">${awayProb}%</div>
@@ -221,11 +221,11 @@ function renderBlocProbas(analysis, match) {
         <div style="border-left:3px solid ${decisionColor};padding:8px 12px;border-radius:4px;background:var(--color-bg);font-size:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
           <div>
             <span style="font-weight:700;color:${decisionColor}">${decisionLabel}</span>
-            <span style="color:var(--color-muted);margin-left:8px">Cote sous-évaluée de ${edge}%</span>
+            <span style="color:var(--color-text-secondary);margin-left:8px">Cote sous-évaluée de ${edge}%</span>
           </div>
           ${phaseBadge ? `<span style="font-size:10px;font-weight:700;color:${phaseBadge.color};border:1px solid ${phaseBadge.color};border-radius:4px;padding:2px 7px">${phaseBadge.label} · poids ajustés</span>` : ''}
         </div>
-      ` : `<div style="font-size:12px;color:var(--color-muted)">Aucun avantage suffisant détecté sur ce match.${phaseBadge ? ` <span style="color:${phaseBadge.color};font-weight:600">${phaseBadge.label}</span>` : ''}</div>`}
+      ` : `<div style="font-size:12px;color:var(--color-text-secondary)">Aucun avantage suffisant détecté sur ce match.${phaseBadge ? ` <span style="color:${phaseBadge.color};font-weight:600">${phaseBadge.label}</span>` : ''}</div>`}
     </div>`;
 }
 
@@ -302,7 +302,7 @@ export function renderBlocParis(analysis, match) {
             ${kellyEuros ? `<div style="font-size:10px;color:var(--color-text-secondary)">Mise conseillée : ${kellyEuros}€</div>` : ''}
           </div>
         </div>
-        <div style="font-size:12px;color:var(--color-muted);line-height:1.6;padding:8px 10px;background:var(--color-card);border-radius:6px;margin-bottom:${gapHtml ? '6px' : '10px'}">${whyText}</div>
+        <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6;padding:8px 10px;background:var(--color-card);border-radius:6px;margin-bottom:${gapHtml ? '6px' : '10px'}">${whyText}</div>
         ${gapHtml}
         <button class="btn btn--primary paper-bet-btn" style="width:100%;padding:10px;font-size:13px;font-weight:600"
           data-market="${r.type}" data-side="${r.side}" data-side-label="${sideDisplay}"
@@ -374,7 +374,7 @@ function renderBlocPourquoi(analysis, match, storeInstance) {
     if (awayOverPct !== null) parts.push(`${awayAbbr} Over ${awayOU.over}/${awayOU.total} (${awayOverPct}%)`);
 
     return `
-      <div style="margin-top:10px;font-size:12px;padding:8px 12px;background:rgba(34,197,94,0.06);border-left:3px solid ${color};border-radius:6px;color:var(--color-muted)">
+      <div style="margin-top:10px;font-size:12px;padding:8px 12px;background:rgba(34,197,94,0.06);border-left:3px solid ${color};border-radius:6px;color:var(--color-text-secondary)">
         ${icon} <strong style="color:${color}">Trend O/U ${ouLine}</strong> sur les 10 derniers matchs — ${parts.join(' · ')}
       </div>`;
   })();
@@ -397,22 +397,22 @@ function renderBlocPourquoi(analysis, match, storeInstance) {
                   <span style="font-size:15px;color:${color};font-weight:700">${icon}</span>
                   <div style="font-size:13px;font-weight:600">${_simplifyLabel(s.label, s.variable)}</div>
                 </div>
-                ${detail ? `<div style="font-size:12px;color:var(--color-muted);line-height:1.5;padding-left:23px">${detail}</div>` : ''}
+                ${detail ? `<div style="font-size:12px;color:var(--color-text-secondary);line-height:1.5;padding-left:23px">${detail}</div>` : ''}
               </div>`;
           }).join('')}
         </div>`}
       ${ouTrendHtml}
       ${homeCtx || awayCtx ? `
         <div style="margin-top:10px;display:grid;gap:8px">
-          ${homeCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;color:var(--color-muted)">
+          ${homeCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;color:var(--color-text-secondary)">
             <strong style="color:var(--color-text)">${homeName}</strong> — ${homeCtx}
           </div>` : ''}
-          ${awayCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;color:var(--color-muted)">
+          ${awayCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;color:var(--color-text-secondary)">
             <strong style="color:var(--color-text)">${awayName}</strong> — ${awayCtx}
           </div>` : ''}
         </div>` : ''}
       ${marketSig?.movement ? `
-        <div style="margin-top:8px;font-size:12px;padding:8px 12px;background:rgba(99,179,237,0.06);border-left:3px solid var(--color-signal);border-radius:6px;color:var(--color-muted)">
+        <div style="margin-top:8px;font-size:12px;padding:8px 12px;background:rgba(99,179,237,0.06);border-left:3px solid var(--color-signal);border-radius:6px;color:var(--color-text-secondary)">
           📈 <strong style="color:var(--color-signal)">Mouvement de ligne</strong> — ${marketSig.detail ?? ''}
         </div>` : ''}
     </div>`;
@@ -571,7 +571,7 @@ function _buildGapExplanation(rec, analysis, match) {
 
   return `
     <div style="padding:8px 10px;background:rgba(255,165,0,0.05);border:1px solid rgba(255,165,0,0.2);border-radius:6px;margin-bottom:10px">
-      <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Pourquoi cet écart ?</div>
+      <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Pourquoi cet écart ?</div>
       ${items}
     </div>`;
 }
@@ -686,7 +686,7 @@ function renderBlocTousLesParis(analysis, match) {
   const ouRows     = validRows.filter(r => r.includes('data-market="OVER_UNDER"'));
 
   const section = (title, rowsArr) => rowsArr.length ? `
-    <div style="font-size:9px;font-weight:700;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px 2px">${title}</div>
+    <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px 2px">${title}</div>
     ${rowsArr.join('')}` : '';
 
   // ── Sélecteur de lignes O/U alternatives (v6.34) ─────────────────────────
@@ -713,7 +713,7 @@ function renderBlocTousLesParis(analysis, match) {
 
     return `
       <div style="padding:8px 10px 4px;border-top:1px solid var(--color-border);margin-top:4px">
-        <div style="font-size:9px;font-weight:700;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">
+        <div style="font-size:9px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">
           Lignes alternatives O/U
         </div>
         <div class="ou-alt-selector" style="display:flex;flex-wrap:wrap;gap:4px">
@@ -727,7 +727,7 @@ function renderBlocTousLesParis(analysis, match) {
     <div class="card match-detail__bloc">
       <div class="bloc-header" style="margin-bottom:var(--space-2)">
         <span class="bloc-header__title">Marchés</span>
-        <span class="text-muted" style="font-size:10px">% analyse · book = prob. bookmaker</span>
+        <span style="font-size:10px;color:var(--color-text-secondary)">% analyse · book = prob. bookmaker</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:4px;padding:0 10px 4px">
         <div></div>
@@ -806,9 +806,9 @@ export function renderBlocStats(analysis, match, storeInstance) {
     const aW = !isNaN(hN) && !isNaN(aN) && (higherIsBetter ? aN > hN : aN < hN);
     return `
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-border)">
-        <div style="font-size:12px;font-weight:${hW ? '700' : '400'};color:${hW ? 'var(--color-text)' : 'var(--color-muted)'}">${hVal ?? '—'}</div>
+        <div style="font-size:12px;font-weight:${hW ? '700' : '400'};color:${hW ? 'var(--color-text)' : 'var(--color-text-secondary)'}">${hVal ?? '—'}</div>
         <div style="font-size:10px;color:var(--color-text-secondary);text-align:center;white-space:nowrap">${label}</div>
-        <div style="font-size:12px;font-weight:${aW ? '700' : '400'};color:${aW ? 'var(--color-text)' : 'var(--color-muted)'};text-align:right">${aVal ?? '—'}</div>
+        <div style="font-size:12px;font-weight:${aW ? '700' : '400'};color:${aW ? 'var(--color-text)' : 'var(--color-text-secondary)'};text-align:right">${aVal ?? '—'}</div>
       </div>`;
   };
 
@@ -887,17 +887,17 @@ export function renderBlocAbsences(analysis, match, storeInstance) {
       ${(homeInj.length || awayInj.length) ? `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:${(homeCtx || awayCtx || marketSig) ? '12px' : '0'}">
           <div>
-            <div style="font-size:11px;font-weight:600;color:var(--color-muted);margin-bottom:6px">${match?.home_team?.abbreviation ?? 'DOM'}</div>
+            <div style="font-size:11px;font-weight:600;color:var(--color-text-secondary);margin-bottom:6px">${match?.home_team?.abbreviation ?? 'DOM'}</div>
             ${renderPlayerList(homeInj)}
           </div>
           <div>
-            <div style="font-size:11px;font-weight:600;color:var(--color-muted);margin-bottom:6px">${match?.away_team?.abbreviation ?? 'EXT'}</div>
+            <div style="font-size:11px;font-weight:600;color:var(--color-text-secondary);margin-bottom:6px">${match?.away_team?.abbreviation ?? 'EXT'}</div>
             ${renderPlayerList(awayInj)}
           </div>
         </div>` : ''}
-      ${homeCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;margin-bottom:6px;color:var(--color-muted)"><strong style="color:var(--color-text)">${homeName}</strong> — ${homeCtx}</div>` : ''}
-      ${awayCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;margin-bottom:6px;color:var(--color-muted)"><strong style="color:var(--color-text)">${awayName}</strong> — ${awayCtx}</div>` : ''}
-      ${marketSig?.movement ? `<div style="font-size:12px;padding:8px 12px;background:rgba(99,179,237,0.06);border-left:3px solid var(--color-signal);border-radius:6px;color:var(--color-muted)">📈 <strong style="color:var(--color-signal)">Mouvement de ligne</strong> — ${marketSig.detail ?? ''}</div>` : ''}
+      ${homeCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;margin-bottom:6px;color:var(--color-text-secondary)"><strong style="color:var(--color-text)">${homeName}</strong> — ${homeCtx}</div>` : ''}
+      ${awayCtx ? `<div style="font-size:12px;padding:8px 12px;background:rgba(255,165,0,0.06);border-left:3px solid var(--color-warning);border-radius:6px;margin-bottom:6px;color:var(--color-text-secondary)"><strong style="color:var(--color-text)">${awayName}</strong> — ${awayCtx}</div>` : ''}
+      ${marketSig?.movement ? `<div style="font-size:12px;padding:8px 12px;background:rgba(99,179,237,0.06);border-left:3px solid var(--color-signal);border-radius:6px;color:var(--color-text-secondary)">📈 <strong style="color:var(--color-signal)">Mouvement de ligne</strong> — ${marketSig.detail ?? ''}</div>` : ''}
     </div>`;
 }
 
@@ -938,7 +938,7 @@ function renderBlocFiabiliteEtSynthese(analysis, match) {
 
       <!-- Sources visibles -->
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:14px">
-        ${sourcesList.map(s => `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--color-bg);border:1px solid var(--color-border);color:var(--color-muted)">${s}</span>`).join('')}
+        ${sourcesList.map(s => `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--color-bg);border:1px solid var(--color-border);color:var(--color-text-secondary)">${s}</span>`).join('')}
       </div>
 
       <!-- Séparateur -->
@@ -954,7 +954,7 @@ function renderBlocFiabiliteEtSynthese(analysis, match) {
 }
 
 function _buildSynthese(analysis, match) {
-  if (!analysis) return '<span style="color:var(--color-muted)">Analyse non disponible.</span>';
+  if (!analysis) return '<span style="color:var(--color-text-secondary)">Analyse non disponible.</span>';
 
   const home       = match?.home_team?.name ?? 'Domicile';
   const away       = match?.away_team?.name ?? 'Extérieur';
@@ -1015,7 +1015,7 @@ async function _loadAndRenderMultiBookOdds(container, match, analysis) {
       const homeOdds = isFlipped ? bk.away_ml : bk.home_ml;
       const awayOdds = isFlipped ? bk.home_ml : bk.away_ml;
       const label    = BOOK_LABELS[bk.key] ?? bk.title;
-      return `<tr style="border-bottom:1px solid var(--color-border)"><td style="padding:6px 8px;font-size:12px;color:var(--color-muted)">${label}</td><td style="padding:6px 8px;font-size:12px;text-align:center;font-weight:${homeOdds === matchOdds.best_home_ml ? '700' : '400'};color:${homeOdds === matchOdds.best_home_ml ? 'var(--color-success)' : 'var(--color-text)'}">${homeOdds?.toFixed(2) ?? '—'}</td><td style="padding:6px 8px;font-size:12px;text-align:center;font-weight:${awayOdds === matchOdds.best_away_ml ? '700' : '400'};color:${awayOdds === matchOdds.best_away_ml ? 'var(--color-success)' : 'var(--color-text)'}">${awayOdds?.toFixed(2) ?? '—'}</td></tr>`;
+      return `<tr style="border-bottom:1px solid var(--color-border)"><td style="padding:6px 8px;font-size:12px;color:var(--color-text-secondary)">${label}</td><td style="padding:6px 8px;font-size:12px;text-align:center;font-weight:${homeOdds === matchOdds.best_home_ml ? '700' : '400'};color:${homeOdds === matchOdds.best_home_ml ? 'var(--color-success)' : 'var(--color-text)'}">${homeOdds?.toFixed(2) ?? '—'}</td><td style="padding:6px 8px;font-size:12px;text-align:center;font-weight:${awayOdds === matchOdds.best_away_ml ? '700' : '400'};color:${awayOdds === matchOdds.best_away_ml ? 'var(--color-success)' : 'var(--color-text)'}">${awayOdds?.toFixed(2) ?? '—'}</td></tr>`;
     }).join('');
 
     const table = document.createElement('div');
@@ -1064,7 +1064,7 @@ function _checkBetterOddsAlert(bloc7, matchOdds, match, analysis) {
   const alert = document.createElement('div');
   alert.className   = 'better-odds-alert';
   alert.style.cssText = 'margin-top:10px;padding:10px 12px;background:rgba(72,199,142,0.1);border-left:3px solid var(--color-success);border-radius:6px;font-size:12px;';
-  alert.innerHTML   = `<div style="color:var(--color-success);font-weight:700;margin-bottom:2px">💡 Meilleure cote disponible</div><div style="color:var(--color-muted)">${bestBook} propose <strong style="color:var(--color-text)">${bestExternal.toFixed(2)}</strong> au lieu de ${draftKings} — misez sur ${bestBook}.</div>`;
+  alert.innerHTML   = `<div style="color:var(--color-success);font-weight:700;margin-bottom:2px">💡 Meilleure cote disponible</div><div style="color:var(--color-text-secondary)">${bestBook} propose <strong style="color:var(--color-text)">${bestExternal.toFixed(2)}</strong> au lieu de ${draftKings} — misez sur ${bestBook}.</div>`;
   bloc7.appendChild(alert);
 }
 
@@ -1211,7 +1211,7 @@ function _openBetModal(btn, match, analysis, storeInstance) {
         </div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <span style="font-size:12px;color:var(--color-muted)">Bankroll disponible</span>
+        <span style="font-size:12px;color:var(--color-text-secondary)">Bankroll disponible</span>
         <span style="font-size:15px;font-weight:700">${bankroll.toFixed(2)} €</span>
       </div>
       <div style="margin-bottom:12px">

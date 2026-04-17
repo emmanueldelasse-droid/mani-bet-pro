@@ -32,7 +32,7 @@ export async function loadAndRenderTeamDetail(container, match, storeInstance) {
     if (!teamDetail) {
       detailEl.innerHTML = `
         <div class="card match-detail__bloc" style="text-align:center;padding:22px 16px">
-          <div style="font-size:13px;color:var(--color-muted);line-height:1.7">
+          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7">
             Les stats avancées d'équipe sont chargées pendant la synchronisation de 12h, 23h ou via le refresh manuel du dashboard.
           </div>
         </div>`;
@@ -47,7 +47,7 @@ export async function loadAndRenderTeamDetail(container, match, storeInstance) {
     Logger.warn('TEAM_DETAIL_RENDER_FAILED', { message: err.message });
     detailEl.innerHTML = `
       <div class="card match-detail__bloc">
-        <div style="font-size:12px;color:var(--color-muted);padding:8px 0">
+        <div style="font-size:12px;color:var(--color-text-secondary);padding:8px 0">
           Stats avancées temporairement indisponibles — actualise le dashboard pour recharger.
         </div>
       </div>`;
@@ -57,7 +57,7 @@ export async function loadAndRenderTeamDetail(container, match, storeInstance) {
 export function renderBlocTeamDetailSkeleton() {
   return `
     <div class="card match-detail__bloc" id="team-detail-skeleton" style="padding:20px;text-align:center">
-      <div style="font-size:12px;color:var(--color-muted)">Chargement des stats équipes…</div>
+      <div style="font-size:12px;color:var(--color-text-secondary)">Chargement des stats équipes…</div>
     </div>`;
 }
 
@@ -104,7 +104,7 @@ function _momentumBadge(momentum) {
   const { last3W } = momentum;
   if (last3W >= 2) return `<span style="color:#22c55e;font-size:11px">🔥 ${last3W}/3 derniers</span>`;
   if (last3W === 0) return `<span style="color:#ef4444;font-size:11px">❄️ ${last3W}/3 derniers</span>`;
-  return `<span style="color:var(--color-muted);font-size:11px">→ ${last3W}/3 derniers</span>`;
+  return `<span style="color:var(--color-text-secondary);font-size:11px">→ ${last3W}/3 derniers</span>`;
 }
 
 // Format date français : YYYYMMDD → "9 jan."
@@ -173,7 +173,7 @@ function _renderTDStats(match, teamDetail) {
         <span class="bloc-header__title">📈 Stats équipes</span>
         <div style="display:flex;gap:6px;align-items:center;font-size:11px">
           <strong>${homeAbv}</strong>${_restBadge(hDetail.restDays)}
-          <span style="color:var(--color-muted)">vs</span>
+          <span style="color:var(--color-text-secondary)">vs</span>
           <strong>${awayAbv}</strong>${_restBadge(aDetail.restDays)}
         </div>
       </div>
@@ -255,11 +255,11 @@ function _renderTDAbsents(match, injReport) {
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
+          <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
           ${renderList(homeList)}
         </div>
         <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
+          <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
           ${renderList(awayList)}
         </div>
       </div>
@@ -315,18 +315,18 @@ function _renderTDTop10(match, teamDetail, injReport) {
   };
 
   const renderTable = (players, absentMap) => {
-    if (!players?.length) return `<div style="font-size:12px;color:var(--color-muted);padding:8px">Données indisponibles</div>`;
+    if (!players?.length) return `<div style="font-size:12px;color:var(--color-text-secondary);padding:8px">Données indisponibles</div>`;
     return `
       <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead>
           <tr style="border-bottom:1px solid var(--color-border)">
-            <th style="padding:5px 6px;text-align:left;color:var(--color-muted);font-weight:600">Joueur</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">PPG</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">L5</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">REB</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">AST</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">STL</th>
-            <th style="padding:5px 4px;text-align:center;color:var(--color-muted);font-weight:600">BLK</th>
+            <th style="padding:5px 6px;text-align:left;color:var(--color-text-secondary);font-weight:600">Joueur</th>
+            <th style="padding:5px 4px;text-align:center;color:var(--color-text-secondary);font-weight:600">PPG</th>
+            <th style="padding:5px 4px;text-align:center;color:var(--color-text-secondary);font-weight:600">L5</th>
+            <th style="padding:5px 4px;text-align:center;color:var(--color-text-secondary);font-weight:600">REB</th>
+            <th style="padding:5px 4px;text-align:center;color:var(--color-text-secondary);font-weight:600">AST</th>
+            <th style="padding:5px 4px;text-align:center;color:var(--color-text-secondary);font-weight:600">STL</th>
+            <th style="padding:5px 4px;text-align:center;color:var(--color-text-secondary);font-weight:600">BLK</th>
           </tr>
         </thead>
         <tbody>
@@ -343,10 +343,10 @@ function _renderTDTop10(match, teamDetail, injReport) {
                 </td>
                 <td style="padding:6px 4px;text-align:center;font-weight:600">${p.pts?.toFixed(1) ?? '—'}</td>
                 <td style="padding:6px 4px;text-align:center;font-size:10px">${_l5Display(p.pts, p.last5pts)}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.reb?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.ast?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.stl?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;color:var(--color-muted)">${p.blk?.toFixed(1) ?? '—'}</td>
+                <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.reb?.toFixed(1) ?? '—'}</td>
+                <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.ast?.toFixed(1) ?? '—'}</td>
+                <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.stl?.toFixed(1) ?? '—'}</td>
+                <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.blk?.toFixed(1) ?? '—'}</td>
               </tr>`;
           }).join('')}
         </tbody>
@@ -363,14 +363,14 @@ function _renderTDTop10(match, teamDetail, injReport) {
           document.getElementById('${uid}_H').style.display='block';
           document.getElementById('${uid}_A').style.display='none';
           this.style.background='rgba(99,102,241,0.2)';this.style.color='var(--color-signal)';
-          document.getElementById('${uid}_btnA').style.background='var(--color-bg)';document.getElementById('${uid}_btnA').style.color='var(--color-muted)';
+          document.getElementById('${uid}_btnA').style.background='var(--color-bg)';document.getElementById('${uid}_btnA').style.color='var(--color-text-secondary)';
         " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:rgba(99,102,241,0.2);color:var(--color-signal)">${homeAbv}</button>
         <button id="${uid}_btnA" onclick="
           document.getElementById('${uid}_A').style.display='block';
           document.getElementById('${uid}_H').style.display='none';
           this.style.background='rgba(99,102,241,0.2)';this.style.color='var(--color-signal)';
-          document.getElementById('${uid}_btnH').style.background='var(--color-bg)';document.getElementById('${uid}_btnH').style.color='var(--color-muted)';
-        " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:var(--color-bg);color:var(--color-muted)">${awayAbv}</button>
+          document.getElementById('${uid}_btnH').style.background='var(--color-bg)';document.getElementById('${uid}_btnH').style.color='var(--color-text-secondary)';
+        " style="padding:4px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;background:var(--color-bg);color:var(--color-text-secondary)">${awayAbv}</button>
       </div>
       <div id="${uid}_H" style="display:block;overflow-x:auto">${renderTable(teamDetail?.home?.top10scorers, homeAbsentMap)}</div>
       <div id="${uid}_A" style="display:none;overflow-x:auto">${renderTable(teamDetail?.away?.top10scorers, awayAbsentMap)}</div>
@@ -421,11 +421,11 @@ function _renderTDLast10(match, teamDetail) {
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
+          <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px;text-transform:uppercase">${homeAbv}</div>
           ${renderTimeline(teamDetail?.home?.last10, homeAbv, homeName, teamDetail?.home?.boxScores)}
         </div>
         <div>
-          <div style="font-size:10px;font-weight:700;color:var(--color-muted);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
+          <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);margin-bottom:6px;text-transform:uppercase">${awayAbv}</div>
           ${renderTimeline(teamDetail?.away?.last10, awayAbv, awayName, teamDetail?.away?.boxScores)}
         </div>
       </div>
@@ -457,7 +457,7 @@ function _renderTDH2H_OU(match, teamDetail) {
     return `
       <div style="margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
-          <span style="font-size:10px;font-weight:700;color:var(--color-muted)">${label}</span>
+          <span style="font-size:10px;font-weight:700;color:var(--color-text-secondary)">${label}</span>
           <span style="font-size:10px;color:var(--color-text-secondary)">${ou.total} matchs · moy. ${ou.avg} pts</span>
         </div>
         <div style="height:8px;border-radius:4px;overflow:hidden;background:var(--color-border)">
@@ -491,9 +491,9 @@ function _renderTDH2H_OU(match, teamDetail) {
             </div>
             <div style="font-size:11px;font-weight:600;text-align:center">
               <span style="color:${won ? 'var(--color-success)' : 'var(--color-muted)'}">${homeAbv}</span>
-              <span style="color:var(--color-muted);margin:0 4px">·</span>
+              <span style="color:var(--color-text-secondary);margin:0 4px">·</span>
               <span style="font-weight:700">${teamPts} – ${oppPts}</span>
-              <span style="color:var(--color-muted);margin:0 4px">·</span>
+              <span style="color:var(--color-text-secondary);margin:0 4px">·</span>
               <span style="color:${won ? 'var(--color-muted)' : 'var(--color-danger)'}">${g.opponent ?? awayAbv}</span>
             </div>
             <div style="font-size:9px;color:${color};font-weight:700;text-align:right;min-width:28px">${ecart}</div>
@@ -612,34 +612,34 @@ function _openGameModal(gameID, teamAbv, teamName, box, game) {
           <div style="font-size:14px;font-weight:700">${teamName} · ${dateStr}</div>
           <div style="display:flex;gap:10px;margin-top:4px">
             <span style="font-size:12px;font-weight:700;color:${resColor}">${won ? '✓ Victoire' : '✗ Défaite'}</span>
-            <span style="font-size:12px;color:var(--color-muted)">${score}</span>
+            <span style="font-size:12px;color:var(--color-text-secondary)">${score}</span>
             <span style="font-size:11px;color:var(--color-text-secondary)">${venue}</span>
           </div>
         </div>
-        <button id="close-game-modal" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--color-muted);padding:0 4px">✕</button>
+        <button id="close-game-modal" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--color-text-secondary);padding:0 4px">✕</button>
       </div>
       ${teamPlayers.length ? `
         <div style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="border-bottom:2px solid var(--color-border)">
-                <th style="padding:4px 6px;text-align:left;color:var(--color-muted);font-size:10px">Joueur</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">MIN</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">PTS</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">REB</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">AST</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">STL</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">BLK</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">TOV</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">TIR</th>
-                <th style="padding:4px 4px;text-align:center;color:var(--color-muted);font-size:10px">3PT</th>
+                <th style="padding:4px 6px;text-align:left;color:var(--color-text-secondary);font-size:10px">Joueur</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">MIN</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">PTS</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">REB</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">AST</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">STL</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">BLK</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">TOV</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">TIR</th>
+                <th style="padding:4px 4px;text-align:center;color:var(--color-text-secondary);font-size:10px">3PT</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
         <div style="font-size:10px;color:var(--color-text-secondary);margin-top:8px">Source : Tank01 · 5 derniers matchs uniquement</div>
-      ` : `<div style="font-size:12px;color:var(--color-muted);padding:16px 0">Boxscore non disponible.</div>`}
+      ` : `<div style="font-size:12px;color:var(--color-text-secondary);padding:16px 0">Boxscore non disponible.</div>`}
     </div>`;
 
   document.body.appendChild(modal);
@@ -709,14 +709,14 @@ function _openTeamModal(teamAbv, teamName, record, stats, detail, top10, last10,
         <div>
           <div style="font-size:28px;font-weight:800;font-family:var(--font-mono);color:var(--color-signal)">${teamAbv}</div>
           <div style="font-size:14px;font-weight:600;color:var(--color-text)">${teamName}</div>
-          <div style="font-size:12px;color:var(--color-muted);margin-top:2px">${record} · ${winPct} win</div>
+          <div style="font-size:12px;color:var(--color-text-secondary);margin-top:2px">${record} · ${winPct} win</div>
         </div>
-        <button id="close-team-modal" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--color-muted);padding:0">✕</button>
+        <button id="close-team-modal" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--color-text-secondary);padding:0">✕</button>
       </div>
 
       <!-- Stats saison -->
       <div style="background:var(--color-bg);border-radius:10px;padding:12px;margin-bottom:14px">
-        <div style="font-size:10px;font-weight:700;color:var(--color-muted);text-transform:uppercase;margin-bottom:8px">Saison régulière 2025-26</div>
+        <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;margin-bottom:8px">Saison régulière 2025-26</div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
           ${_statPill('Pts marqués', avgPts)}
           ${_statPill('Pts encaissés', encaisse)}
@@ -729,8 +729,8 @@ function _openTeamModal(teamAbv, teamName, record, stats, detail, top10, last10,
 
       <!-- Playoffs -->
       <div style="background:var(--color-bg);border-radius:10px;padding:12px;margin-bottom:14px">
-        <div style="font-size:10px;font-weight:700;color:var(--color-muted);text-transform:uppercase;margin-bottom:8px">🏆 Playoffs 2026</div>
-        <div style="font-size:12px;color:var(--color-muted)">
+        <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;margin-bottom:8px">🏆 Playoffs 2026</div>
+        <div style="font-size:12px;color:var(--color-text-secondary)">
           ${detail.playoffRecord
             ? `<strong style="color:var(--color-text)">${detail.playoffRecord}</strong>`
             : 'Pas encore commencé · débute le 18 avril'}
@@ -739,13 +739,13 @@ function _openTeamModal(teamAbv, teamName, record, stats, detail, top10, last10,
 
       <!-- Forme récente -->
       <div style="margin-bottom:14px">
-        <div style="font-size:10px;font-weight:700;color:var(--color-muted);text-transform:uppercase;margin-bottom:6px">Forme récente (10 derniers)</div>
+        <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;margin-bottom:6px">Forme récente (10 derniers)</div>
         <div style="display:flex;gap:3px;flex-wrap:wrap">${formeHtml || '<span style="font-size:11px;color:var(--color-text-secondary)">Données indisponibles</span>'}</div>
       </div>
 
       <!-- Top 5 scoreurs -->
       <div>
-        <div style="font-size:10px;font-weight:700;color:var(--color-muted);text-transform:uppercase;margin-bottom:6px">Top scoreurs</div>
+        <div style="font-size:10px;font-weight:700;color:var(--color-text-secondary);text-transform:uppercase;margin-bottom:6px">Top scoreurs</div>
         ${top5Html || '<div style="font-size:11px;color:var(--color-text-secondary)">Données indisponibles</div>'}
       </div>
 

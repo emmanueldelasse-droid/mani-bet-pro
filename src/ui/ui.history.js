@@ -77,22 +77,22 @@ function _renderBankrollCard(state, pendingStake, trueCapital) {
 
     // Initiale
     '<div>',
-    '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Initiale</div>',
+    '<div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">Initiale</div>',
     '<div style="font-size:16px;font-weight:600">' + state.initial_bankroll.toFixed(0) + ' \u20ac</div>',
     '</div>',
 
     // Disponible (current_bankroll = déjà déduit des mises PENDING au placement)
     '<div>',
-    '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Disponible</div>',
+    '<div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">Disponible</div>',
     '<div style="font-size:16px;font-weight:600">' + state.current_bankroll.toFixed(2) + ' \u20ac</div>',
     pendingStake > 0
       ? '<div style="font-size:10px;color:var(--color-warning)">' + pendingStake.toFixed(2) + ' \u20ac engag\u00e9s</div>'
-      : '<div style="font-size:10px;color:var(--color-muted)">Aucun pari en attente</div>',
+      : '<div style="font-size:10px;color:var(--color-text-secondary)">Aucun pari en attente</div>',
     '</div>',
 
     // P&L
     '<div>',
-    '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">P&L total</div>',
+    '<div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">P&L total</div>',
     '<div style="font-size:16px;font-weight:600;color:' + pnlColor + '">',
     pnlSign + pnl.toFixed(2) + ' \u20ac',
     roiRaw !== null ? '<span style="font-size:11px;opacity:0.7"> (' + (roiRaw > 0 ? '+' : '') + roiRaw + '%)</span>' : '',
@@ -153,7 +153,7 @@ function _renderBankrollChart(state) {
     '<line x1="0" y1="' + refY + '" x2="' + W + '" y2="' + refY + '" stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-dasharray="4,4"/>',
     '<circle cx="' + toX(points.length - 1).toFixed(1) + '" cy="' + toY(lastY).toFixed(1) + '" r="3" fill="' + color + '"/>',
     '</svg>',
-    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-muted);margin-top:4px">',
+    '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-secondary);margin-top:4px">',
     '<span>D\u00e9part : ' + state.initial_bankroll + ' \u20ac</span>',
     '<span>Actuel : ' + lastY.toFixed(2) + ' \u20ac</span>',
     '</div>',
@@ -165,7 +165,7 @@ function _renderBankrollChart(state) {
 
 function _renderMetricsCard(metrics, totalBets, pendingCount) {
   if (metrics.total_bets === 0 && totalBets === 0) {
-    return '<div class="card" style="margin-bottom:var(--space-4);text-align:center;padding:var(--space-6)"><div style="font-size:24px;margin-bottom:var(--space-2)">&#128203;</div><div style="color:var(--color-muted);font-size:13px">Aucun pari enregistr\u00e9.<br>Ouvre une fiche match et clique sur <strong>"Enregistrer ce pari"</strong>.</div></div>';
+    return '<div class="card" style="margin-bottom:var(--space-4);text-align:center;padding:var(--space-6)"><div style="font-size:24px;margin-bottom:var(--space-2)">&#128203;</div><div style="color:var(--color-text-secondary);font-size:13px">Aucun pari enregistr\u00e9.<br>Ouvre une fiche match et clique sur <strong>"Enregistrer ce pari"</strong>.</div></div>';
   }
 
   const hitColor   = metrics.hit_rate !== null ? (metrics.hit_rate >= 55 ? 'var(--color-success)' : metrics.hit_rate >= 45 ? 'var(--color-warning)' : 'var(--color-danger)') : 'var(--color-muted)';
@@ -179,7 +179,7 @@ function _renderMetricsCard(metrics, totalBets, pendingCount) {
 
   const edgeBuckets = Object.entries(metrics.hit_by_edge || {}).map(function(entry) {
     const bucket = entry[0], data = entry[1];
-    return '<div style="background:var(--color-bg);border-radius:6px;padding:var(--space-2);text-align:center"><div style="font-size:10px;color:var(--color-muted)">' + bucket + '</div><div style="font-size:14px;font-weight:600;color:var(--color-text)">' + (data && data.hit_rate !== null ? data.hit_rate + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-muted)">' + (data ? data.total : 0) + ' paris</div></div>';
+    return '<div style="background:var(--color-bg);border-radius:6px;padding:var(--space-2);text-align:center"><div style="font-size:10px;color:var(--color-text-secondary)">' + bucket + '</div><div style="font-size:14px;font-weight:600;color:var(--color-text)">' + (data && data.hit_rate !== null ? data.hit_rate + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-text-secondary)">' + (data ? data.total : 0) + ' paris</div></div>';
   }).join('');
 
   return [
@@ -203,7 +203,7 @@ function _renderMetricsCard(metrics, totalBets, pendingCount) {
     _metricCell('Brier Score', metrics.brier_score !== null ? metrics.brier_score.toFixed(4) : '\u2014', 'var(--color-muted)', brierLabel),
 
     '</div>',
-    '<div style="font-size:11px;color:var(--color-muted);margin-bottom:var(--space-2)">Hit rate par niveau d\'edge</div>',
+    '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:var(--space-2)">Hit rate par niveau d\'edge</div>',
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-2)">',
     edgeBuckets,
     '</div>',
@@ -222,9 +222,9 @@ function _renderStrategyCard(metrics) {
   const rows = Object.entries(STRATEGIES).map(function(entry) {
     const key = entry[0], strat = entry[1];
     const data = strategies[key];
-    if (!data) return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-muted)">Strat\u00e9gie ' + key + '</div></div><span style="font-size:11px;color:var(--color-muted)">Pas de donn\u00e9es</span></div>';
+    if (!data) return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-text-secondary)">Strat\u00e9gie ' + key + '</div></div><span style="font-size:11px;color:var(--color-text-secondary)">Pas de donn\u00e9es</span></div>';
     const roiColor = data.roi > 0 ? 'var(--color-success)' : 'var(--color-danger)';
-    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-muted)">Strat\u00e9gie ' + key + ' \u00b7 ' + data.total + ' paris</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:' + roiColor + '">ROI ' + (data.roi !== null ? (data.roi > 0 ? '+' : '') + data.roi + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-muted)">' + data.hit_rate + '% hit rate</div></div></div>';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-2) 0;border-bottom:1px solid var(--color-border)"><div><div style="font-size:12px;font-weight:600">' + strat.label + '</div><div style="font-size:10px;color:var(--color-text-secondary)">Strat\u00e9gie ' + key + ' \u00b7 ' + data.total + ' paris</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:' + roiColor + '">ROI ' + (data.roi !== null ? (data.roi > 0 ? '+' : '') + data.roi + '%' : '\u2014') + '</div><div style="font-size:10px;color:var(--color-text-secondary)">' + data.hit_rate + '% hit rate</div></div></div>';
   }).join('');
 
   return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-3)">Comparaison strat\u00e9gies</div><div style="display:flex;flex-direction:column;gap:var(--space-2)">' + rows + '</div></div>';
@@ -235,7 +235,7 @@ function _renderStrategyCard(metrics) {
 function _renderBiasCard(metrics) {
   const bias = metrics.bias;
   if (!bias || bias.insufficient_data) {
-    return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-2)">D\u00e9tection de biais</div><div style="font-size:12px;color:var(--color-muted)">' + (bias ? bias.min_required : 10) + ' paris minimum requis pour d\u00e9tecter les biais. Actuellement : ' + metrics.total_bets + ' paris cl\u00f4tur\u00e9s.</div></div>';
+    return '<div class="card" style="margin-bottom:var(--space-4)"><div style="font-weight:600;font-size:14px;margin-bottom:var(--space-2)">D\u00e9tection de biais</div><div style="font-size:12px;color:var(--color-text-secondary)">' + (bias ? bias.min_required : 10) + ' paris minimum requis pour d\u00e9tecter les biais. Actuellement : ' + metrics.total_bets + ' paris cl\u00f4tur\u00e9s.</div></div>';
   }
 
   return [
@@ -304,12 +304,12 @@ function _renderBetRow(bet, isFirstInGroup, groupSize) {
 
   // Heure du match si disponible (PENDING uniquement)
   const timeStr = (isPending && bet.match_time)
-    ? '<span style="font-size:10px;color:var(--color-muted);margin-left:6px">\u23f0 ' + bet.match_time + '</span>'
+    ? '<span style="font-size:10px;color:var(--color-text-secondary);margin-left:6px">\u23f0 ' + bet.match_time + '</span>'
     : '';
 
   // Signal dominant
   const signalStr = bet.top_signal
-    ? '<span style="font-size:10px;color:var(--color-muted);margin-left:6px">\u2022 ' + bet.top_signal + '</span>'
+    ? '<span style="font-size:10px;color:var(--color-text-secondary);margin-left:6px">\u2022 ' + bet.top_signal + '</span>'
     : '';
 
   // Bordure top si premier du groupe multi-paris
@@ -324,7 +324,7 @@ function _renderBetRow(bet, isFirstInGroup, groupSize) {
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">',
     '<div>',
     '<div style="font-size:12px;font-weight:600">' + (bet.home || '') + ' vs ' + (bet.away || '') + scoreStr + '</div>',
-    '<div style="font-size:10px;color:var(--color-muted)">' + _formatDate(bet.date) + ' \u00b7 ' + (marketLabel[bet.market] || bet.market) + timeStr + signalStr + '</div>',
+    '<div style="font-size:10px;color:var(--color-text-secondary)">' + _formatDate(bet.date) + ' \u00b7 ' + (marketLabel[bet.market] || bet.market) + timeStr + signalStr + '</div>',
     '</div>',
     '<span style="font-size:11px;font-weight:600;color:' + resultColor + '">' + (resultLabel[bet.result] || bet.result) + '</span>',
     '</div>',
@@ -332,15 +332,15 @@ function _renderBetRow(bet, isFirstInGroup, groupSize) {
     // Details
     '<div style="display:flex;gap:12px;font-size:11px;margin-bottom:4px;flex-wrap:wrap">',
     '<span><strong>' + (bet.side_label || '') + '</strong> ' + (oddsDecimal ? oddsDecimal.toFixed(2) : '') + '</span>',
-    '<span style="color:var(--color-muted)">Mise : ' + bet.stake.toFixed(2) + ' \u20ac</span>',
-    '<span style="color:var(--color-muted)">Edge : ' + bet.edge + '%</span>',
+    '<span style="color:var(--color-text-secondary)">Mise : ' + bet.stake.toFixed(2) + ' \u20ac</span>',
+    '<span style="color:var(--color-text-secondary)">Edge : ' + bet.edge + '%</span>',
     bet.pnl !== null ? '<span style="color:' + (bet.pnl >= 0 ? 'var(--color-success)' : 'var(--color-danger)') + '">P&L : ' + (bet.pnl >= 0 ? '+' : '') + bet.pnl.toFixed(2) + ' \u20ac</span>' : '',
-    bet.clv !== null ? '<span style="color:var(--color-muted)">CLV : ' + (bet.clv > 0 ? '+' : '') + bet.clv + '%</span>' : '',
+    bet.clv !== null ? '<span style="color:var(--color-text-secondary)">CLV : ' + (bet.clv > 0 ? '+' : '') + bet.clv + '%</span>' : '',
     '</div>',
 
     // Settler automatique actif — pas de boutons manuels sauf via modal
     isPending
-      ? '<div style="font-size:10px;color:var(--color-muted);margin-top:2px">\u21bb Cl\u00f4ture automatique en cours \u00b7 <span style="text-decoration:underline;cursor:pointer" class="manual-settle-hint" data-bet-id="' + bet.bet_id + '">Forcer manuellement</span></div>'
+      ? '<div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px">\u21bb Cl\u00f4ture automatique en cours \u00b7 <span style="text-decoration:underline;cursor:pointer" class="manual-settle-hint" data-bet-id="' + bet.bet_id + '">Forcer manuellement</span></div>'
       : '',
 
     '</div>',
@@ -355,7 +355,7 @@ function _renderBetModal() {
     '<div style="background:var(--color-card);border-radius:12px;max-width:480px;width:100%;max-height:90vh;overflow-y:auto;padding:var(--space-5)">',
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4)">',
     '<span style="font-weight:700;font-size:15px">D\u00e9tail du pari</span>',
-    '<button id="close-bet-modal" style="background:none;border:none;color:var(--color-muted);font-size:20px;cursor:pointer;padding:0">&times;</button>',
+    '<button id="close-bet-modal" style="background:none;border:none;color:var(--color-text-secondary);font-size:20px;cursor:pointer;padding:0">&times;</button>',
     '</div>',
     '<div id="bet-detail-content"></div>',
     '</div>',
@@ -404,7 +404,7 @@ function _renderBetDetail(bet) {
   // Boutons settle manuels accessibles uniquement depuis le modal
   const manualSettle = bet.result === 'PENDING' ? [
     '<div style="margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--color-border)">',
-    '<div style="font-size:11px;color:var(--color-muted);margin-bottom:var(--space-2)">Forcer le r\u00e9sultat manuellement :</div>',
+    '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:var(--space-2)">Forcer le r\u00e9sultat manuellement :</div>',
     '<div style="display:flex;gap:8px">',
     '<button class="btn btn--sm modal-settle-btn" style="background:var(--color-success);color:#000;font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="WIN">\u2713 Gagn\u00e9</button>',
     '<button class="btn btn--sm modal-settle-btn" style="background:var(--color-danger);color:#fff;font-size:11px" data-bet-id="' + bet.bet_id + '" data-result="LOSS">\u2717 Perdu</button>',
@@ -419,7 +419,7 @@ function _renderBetDetail(bet) {
 function _detailRow(label, value, color) {
   return [
     '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--color-border)">',
-    '<span style="font-size:12px;color:var(--color-muted)">' + label + '</span>',
+    '<span style="font-size:12px;color:var(--color-text-secondary)">' + label + '</span>',
     '<span style="font-size:12px;font-weight:600' + (color ? ';color:' + color : '') + '">' + value + '</span>',
     '</div>',
   ].join('');
@@ -430,7 +430,7 @@ function _detailRow(label, value, color) {
 function _renderDangerZone(state) {
   return [
     '<div class="card" style="margin-bottom:var(--space-4);border-color:var(--color-border)">',
-    '<div style="font-weight:600;font-size:13px;margin-bottom:var(--space-3);color:var(--color-muted)">Gestion</div>',
+    '<div style="font-weight:600;font-size:13px;margin-bottom:var(--space-3);color:var(--color-text-secondary)">Gestion</div>',
     '<div style="display:flex;gap:8px;flex-wrap:wrap">',
     '<button class="btn btn--ghost btn--sm" id="export-bets">&#128205; Exporter CSV</button>',
     '<button class="btn btn--ghost btn--sm" id="reset-paper" style="color:var(--color-danger)">\u26a0 R\u00e9initialiser</button>',
@@ -572,9 +572,9 @@ function _exportCSV(bets) {
 function _metricCell(label, value, color, subtitle) {
   return [
     '<div style="text-align:center;padding:var(--space-2);background:var(--color-bg);border-radius:6px">',
-    '<div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">' + label + '</div>',
+    '<div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">' + label + '</div>',
     '<div style="font-size:15px;font-weight:600;color:' + color + '">' + value + '</div>',
-    subtitle ? '<div style="font-size:9px;color:var(--color-muted);margin-top:1px">' + subtitle + '</div>' : '',
+    subtitle ? '<div style="font-size:9px;color:var(--color-text-secondary);margin-top:1px">' + subtitle + '</div>' : '',
     '</div>',
   ].join('');
 }
