@@ -180,19 +180,19 @@ function _renderTDStats(match, teamDetail) {
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:4px;align-items:center;margin-bottom:8px">
         <button class="team-name-btn" data-team-side="home"
           style="font-size:12px;font-weight:700;color:var(--color-signal);background:none;border:none;cursor:pointer;text-align:left;padding:0;text-decoration:underline dotted">${homeName}</button>
-        <div style="font-size:9px;color:var(--color-muted);text-align:center">Saison</div>
+        <div style="font-size:9px;color:var(--color-text-secondary);text-align:center">Saison</div>
         <button class="team-name-btn" data-team-side="away"
           style="font-size:12px;font-weight:700;color:var(--color-signal);background:none;border:none;cursor:pointer;text-align:right;padding:0;text-decoration:underline dotted">${awayName}</button>
       </div>
       ${rowsHtml}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
         <div style="background:var(--color-bg);border-radius:8px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:3px">${homeAbv} — Dom/Ext</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:3px">${homeAbv} — Dom/Ext</div>
           <div style="font-size:11px">🏠 ${hDetail.homeSplit ? `${hDetail.homeSplit.wins}-${hDetail.homeSplit.losses}` : '—'} · ✈️ ${hDetail.awaySplit ? `${hDetail.awaySplit.wins}-${hDetail.awaySplit.losses}` : '—'}</div>
           <div style="margin-top:3px">${_momentumBadge(hDetail.momentum)}</div>
         </div>
         <div style="background:var(--color-bg);border-radius:8px;padding:8px 10px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:3px">${awayAbv} — Dom/Ext</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:3px">${awayAbv} — Dom/Ext</div>
           <div style="font-size:11px">🏠 ${aDetail.homeSplit ? `${aDetail.homeSplit.wins}-${aDetail.homeSplit.losses}` : '—'} · ✈️ ${aDetail.awaySplit ? `${aDetail.awaySplit.wins}-${aDetail.awaySplit.losses}` : '—'}</div>
           <div style="margin-top:3px">${_momentumBadge(aDetail.momentum)}</div>
         </div>
@@ -251,7 +251,7 @@ function _renderTDAbsents(match, injReport) {
     <div class="card match-detail__bloc">
       <div class="bloc-header" style="margin-bottom:var(--space-3)">
         <span class="bloc-header__title">🏥 Absences</span>
-        <span style="font-size:10px;color:var(--color-muted)">triées par PPG</span>
+        <span style="font-size:10px;color:var(--color-text-secondary)">triées par PPG</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
@@ -386,7 +386,7 @@ function _renderTDLast10(match, teamDetail) {
   const awayName = match?.away_team?.name ?? awayAbv;
 
   const renderTimeline = (games, teamAbv, teamName, boxScores) => {
-    if (!games?.length) return `<div style="font-size:11px;color:var(--color-muted)">Données indisponibles</div>`;
+    if (!games?.length) return `<div style="font-size:11px;color:var(--color-text-secondary)">Données indisponibles</div>`;
     return games.map(g => {
       const dateStr     = _fmtDateFR(g.date);
       const locIcon     = g.homeAway === 'home' ? '🏠' : '✈️';
@@ -405,9 +405,9 @@ function _renderTDLast10(match, teamDetail) {
           style="display:flex;align-items:center;gap:6px;padding:5px 7px;border-radius:6px;background:var(--color-bg);margin-bottom:4px;border-left:3px solid ${color};${hasBoxscore ? 'cursor:pointer' : ''}"
           ${hasBoxscore ? `data-game-id="${g.gameID}" data-team-abv="${teamAbv}" data-team-name="${_escapeAttr(teamName)}"` : ''}>
           <span style="font-size:9px;font-weight:700;color:${color};width:12px">${won ? 'V' : 'D'}</span>
-          <span style="font-size:10px;color:var(--color-muted);width:38px;flex-shrink:0">${dateStr}</span>
+          <span style="font-size:10px;color:var(--color-text-secondary);width:38px;flex-shrink:0">${dateStr}</span>
           <span style="font-size:10px">${locIcon}</span>
-          <span style="font-size:11px;color:var(--color-muted);margin-left:auto;font-variant-numeric:tabular-nums">${scoreStr}</span>
+          <span style="font-size:11px;color:var(--color-text-secondary);margin-left:auto;font-variant-numeric:tabular-nums">${scoreStr}</span>
           ${hasBoxscore ? `<span style="font-size:9px;color:var(--color-signal);margin-left:4px">▸</span>` : ''}
         </div>`;
     }).join('');
@@ -417,7 +417,7 @@ function _renderTDLast10(match, teamDetail) {
     <div class="card match-detail__bloc" id="last10-bloc">
       <div class="bloc-header" style="margin-bottom:var(--space-3)">
         <span class="bloc-header__title">📅 Forme récente</span>
-        <span style="font-size:10px;color:var(--color-muted)">▸ = boxscore disponible</span>
+        <span style="font-size:10px;color:var(--color-text-secondary)">▸ = boxscore disponible</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
@@ -451,14 +451,14 @@ function _renderTDH2H_OU(match, teamDetail) {
   };
 
   const ouBar = (ou, label) => {
-    if (!ou) return `<div style="font-size:11px;color:var(--color-muted)">${label} : ligne O/U indisponible</div>`;
+    if (!ou) return `<div style="font-size:11px;color:var(--color-text-secondary)">${label} : ligne O/U indisponible</div>`;
     const overPct  = Math.round((ou.over  / ou.total) * 100);
     const underPct = Math.round((ou.under / ou.total) * 100);
     return `
       <div style="margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
           <span style="font-size:10px;font-weight:700;color:var(--color-muted)">${label}</span>
-          <span style="font-size:10px;color:var(--color-muted)">${ou.total} matchs · moy. ${ou.avg} pts</span>
+          <span style="font-size:10px;color:var(--color-text-secondary)">${ou.total} matchs · moy. ${ou.avg} pts</span>
         </div>
         <div style="height:8px;border-radius:4px;overflow:hidden;background:var(--color-border)">
           <div style="width:${overPct}%;height:100%;background:#22c55e;float:left"></div>
@@ -486,7 +486,7 @@ function _renderTDH2H_OU(match, teamDetail) {
           <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px;align-items:center;padding:6px 8px;border-radius:6px;background:var(--color-bg);margin-bottom:4px;border-left:3px solid ${color}">
             <div style="display:flex;align-items:center;gap:4px">
               <span style="font-size:9px;font-weight:700;color:${color};width:12px">${won ? 'V' : 'D'}</span>
-              <span style="font-size:10px;color:var(--color-muted)">${dateStr}</span>
+              <span style="font-size:10px;color:var(--color-text-secondary)">${dateStr}</span>
               <span style="font-size:10px">${venue}</span>
             </div>
             <div style="font-size:11px;font-weight:600;text-align:center">
@@ -499,12 +499,12 @@ function _renderTDH2H_OU(match, teamDetail) {
             <div style="font-size:9px;color:${color};font-weight:700;text-align:right;min-width:28px">${ecart}</div>
           </div>`;
       }).join('')
-    : `<div style="font-size:11px;color:var(--color-muted)">Pas de confrontation cette saison</div>`;
+    : `<div style="font-size:11px;color:var(--color-text-secondary)">Pas de confrontation cette saison</div>`;
 
   const h2hWins  = h2h.filter(g => g.result === 'W').length;
   const h2hTotal = Math.min(h2h.length, 5);
   const h2hBilan = h2hTotal > 0
-    ? `<div style="font-size:11px;color:var(--color-muted);margin-bottom:8px">${homeAbv} : <strong style="color:var(--color-text)">${h2hWins}V / ${h2hTotal - h2hWins}D</strong> cette saison</div>`
+    ? `<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:8px">${homeAbv} : <strong style="color:var(--color-text)">${h2hWins}V / ${h2hTotal - h2hWins}D</strong> cette saison</div>`
     : '';
 
   return `
@@ -591,15 +591,15 @@ function _openGameModal(gameID, teamAbv, teamName, box, game) {
     return `
       <tr style="border-bottom:1px solid var(--color-border)${isTop ? ';background:rgba(34,197,94,0.04)' : ''}">
         <td style="padding:5px 6px;font-size:11px;font-weight:${isTop ? '700' : '400'};white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis">${p.name}</td>
-        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.min}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${p.min}</td>
         <td style="padding:5px 4px;text-align:center;font-size:12px;font-weight:${isTop ? '700' : '600'};color:${isTop ? '#22c55e' : 'var(--color-text)'}">${p.pts}</td>
         <td style="padding:5px 4px;text-align:center;font-size:11px">${p.reb}</td>
         <td style="padding:5px 4px;text-align:center;font-size:11px">${p.ast}</td>
-        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.stl}</td>
-        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.blk}</td>
-        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.tov}</td>
-        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${fgStr}</td>
-        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-muted)">${p.tpm > 0 ? p.tpm : '—'}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${p.stl}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${p.blk}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${p.tov}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${fgStr}</td>
+        <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${p.tpm > 0 ? p.tpm : '—'}</td>
       </tr>`;
   }).join('');
 
@@ -613,7 +613,7 @@ function _openGameModal(gameID, teamAbv, teamName, box, game) {
           <div style="display:flex;gap:10px;margin-top:4px">
             <span style="font-size:12px;font-weight:700;color:${resColor}">${won ? '✓ Victoire' : '✗ Défaite'}</span>
             <span style="font-size:12px;color:var(--color-muted)">${score}</span>
-            <span style="font-size:11px;color:var(--color-muted)">${venue}</span>
+            <span style="font-size:11px;color:var(--color-text-secondary)">${venue}</span>
           </div>
         </div>
         <button id="close-game-modal" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--color-muted);padding:0 4px">✕</button>
@@ -638,7 +638,7 @@ function _openGameModal(gameID, teamAbv, teamName, box, game) {
             <tbody>${rows}</tbody>
           </table>
         </div>
-        <div style="font-size:10px;color:var(--color-muted);margin-top:8px">Source : Tank01 · 5 derniers matchs uniquement</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);margin-top:8px">Source : Tank01 · 5 derniers matchs uniquement</div>
       ` : `<div style="font-size:12px;color:var(--color-muted);padding:16px 0">Boxscore non disponible.</div>`}
     </div>`;
 
@@ -740,16 +740,16 @@ function _openTeamModal(teamAbv, teamName, record, stats, detail, top10, last10,
       <!-- Forme récente -->
       <div style="margin-bottom:14px">
         <div style="font-size:10px;font-weight:700;color:var(--color-muted);text-transform:uppercase;margin-bottom:6px">Forme récente (10 derniers)</div>
-        <div style="display:flex;gap:3px;flex-wrap:wrap">${formeHtml || '<span style="font-size:11px;color:var(--color-muted)">Données indisponibles</span>'}</div>
+        <div style="display:flex;gap:3px;flex-wrap:wrap">${formeHtml || '<span style="font-size:11px;color:var(--color-text-secondary)">Données indisponibles</span>'}</div>
       </div>
 
       <!-- Top 5 scoreurs -->
       <div>
         <div style="font-size:10px;font-weight:700;color:var(--color-muted);text-transform:uppercase;margin-bottom:6px">Top scoreurs</div>
-        ${top5Html || '<div style="font-size:11px;color:var(--color-muted)">Données indisponibles</div>'}
+        ${top5Html || '<div style="font-size:11px;color:var(--color-text-secondary)">Données indisponibles</div>'}
       </div>
 
-      <div style="font-size:10px;color:var(--color-muted);margin-top:12px;text-align:center">Source : Tank01 · ESPN · données saison en cours</div>
+      <div style="font-size:10px;color:var(--color-text-secondary);margin-top:12px;text-align:center">Source : Tank01 · ESPN · données saison en cours</div>
     </div>`;
 
   document.body.appendChild(modal);
@@ -761,6 +761,6 @@ function _statPill(label, value) {
   return `
     <div style="text-align:center;padding:8px;background:var(--color-card);border-radius:8px">
       <div style="font-size:16px;font-weight:700;color:var(--color-text)">${value}</div>
-      <div style="font-size:9px;color:var(--color-muted);margin-top:2px">${label}</div>
+      <div style="font-size:9px;color:var(--color-text-secondary);margin-top:2px">${label}</div>
     </div>`;
 }

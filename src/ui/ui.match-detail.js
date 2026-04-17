@@ -143,7 +143,7 @@ function renderBlocSyntheseSummary(analysis, match) {
   const fmtOdds  = decOdds ? Number(decOdds).toFixed(2) : '—';
   const edgeColor = best.edge >= 12 ? 'var(--color-success)' : best.edge >= 7 ? 'var(--color-warning)' : 'var(--color-muted)';
   const fiabHtml  = score !== null
-    ? `<div style="text-align:center"><div style="font-size:14px;font-weight:700;color:${fiabColor}">${score}%</div><div style="font-size:9px;color:var(--color-muted)">Fiabilité</div></div>`
+    ? `<div style="text-align:center"><div style="font-size:14px;font-weight:700;color:${fiabColor}">${score}%</div><div style="font-size:9px;color:var(--color-text-secondary)">Fiabilité</div></div>`
     : '';
 
   return `
@@ -151,18 +151,18 @@ function renderBlocSyntheseSummary(analysis, match) {
       <div style="display:flex;align-items:center;gap:10px;min-width:0">
         <span style="font-size:14px;font-weight:700;color:var(--color-success)">★</span>
         <div style="min-width:0">
-          <div style="font-size:10px;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">${typeLabel}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">${typeLabel}</div>
           <div style="font-size:15px;font-weight:700;color:var(--color-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sideLabel}</div>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
         <div style="text-align:center">
           <div style="font-size:18px;font-weight:700;color:var(--color-signal)">${fmtOdds}</div>
-          <div style="font-size:9px;color:var(--color-muted)">Cote</div>
+          <div style="font-size:9px;color:var(--color-text-secondary)">Cote</div>
         </div>
         <div style="text-align:center">
           <div style="font-size:18px;font-weight:700;color:${edgeColor}">+${best.edge}%</div>
-          <div style="font-size:9px;color:var(--color-muted)">Edge</div>
+          <div style="font-size:9px;color:var(--color-text-secondary)">Edge</div>
         </div>
         ${fiabHtml}
       </div>
@@ -203,15 +203,15 @@ function renderBlocProbas(analysis, match) {
     <div class="card match-detail__bloc">
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:12px">
         <div>
-          <div style="font-size:11px;color:var(--color-muted);margin-bottom:2px">${homeName}</div>
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px">${homeName}</div>
           <div style="font-size:28px;font-weight:700;color:${homeProb >= awayProb ? 'var(--color-signal)' : 'var(--color-muted)'}">${homeProb}%</div>
-          <div style="font-size:10px;color:var(--color-muted)">Cote juste : ${fairHome}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">Cote juste : ${fairHome}</div>
         </div>
         <div style="text-align:center;color:var(--color-muted);font-size:13px">vs</div>
         <div style="text-align:right">
-          <div style="font-size:11px;color:var(--color-muted);margin-bottom:2px">${awayName}</div>
+          <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:2px">${awayName}</div>
           <div style="font-size:28px;font-weight:700;color:${awayProb > homeProb ? 'var(--color-signal)' : 'var(--color-muted)'}">${awayProb}%</div>
-          <div style="font-size:10px;color:var(--color-muted)">Cote juste : ${fairAway}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">Cote juste : ${fairAway}</div>
         </div>
       </div>
       <div style="height:6px;border-radius:3px;overflow:hidden;background:var(--color-border);margin-bottom:12px">
@@ -286,20 +286,20 @@ export function renderBlocParis(analysis, match) {
       <div style="background:var(--color-bg);border-radius:10px;padding:14px;margin-bottom:10px;border:1px solid ${isBest ? 'var(--color-success)' : 'var(--color-border)'}">
         ${isBest ? '<div style="font-size:10px;color:var(--color-success);font-weight:700;margin-bottom:8px;letter-spacing:0.05em">★ MEILLEUR PARI</div>' : ''}
         <div style="margin-bottom:10px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">${marketLabel}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">${marketLabel}</div>
           <div style="font-size:17px;font-weight:700">${sideDisplay}</div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <div>
-            <div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Cote</div>
+            <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">Cote</div>
             <div style="font-size:22px;font-weight:700;color:var(--color-signal)">${oddsDecimal ?? '—'}</div>
-            ${gainPour100 ? `<div style="font-size:10px;color:var(--color-muted)">+${gainPour100}€ pour 100€ misés</div>` : ''}
-            ${r.odds_source ? `<div style="font-size:9px;color:var(--color-muted);text-transform:uppercase">${r.odds_source}</div>` : ''}
+            ${gainPour100 ? `<div style="font-size:10px;color:var(--color-text-secondary)">+${gainPour100}€ pour 100€ misés</div>` : ''}
+            ${r.odds_source ? `<div style="font-size:9px;color:var(--color-text-secondary);text-transform:uppercase">${r.odds_source}</div>` : ''}
           </div>
           <div style="text-align:right">
-            <div style="font-size:10px;color:var(--color-muted);margin-bottom:2px">Cote sous-évaluée</div>
+            <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:2px">Cote sous-évaluée</div>
             <div style="font-size:22px;font-weight:700;color:${edgeColor}">+${r.edge}%</div>
-            ${kellyEuros ? `<div style="font-size:10px;color:var(--color-muted)">Mise conseillée : ${kellyEuros}€</div>` : ''}
+            ${kellyEuros ? `<div style="font-size:10px;color:var(--color-text-secondary)">Mise conseillée : ${kellyEuros}€</div>` : ''}
           </div>
         </div>
         <div style="font-size:12px;color:var(--color-muted);line-height:1.6;padding:8px 10px;background:var(--color-card);border-radius:6px;margin-bottom:${gapHtml ? '6px' : '10px'}">${whyText}</div>
@@ -565,7 +565,7 @@ function _buildGapExplanation(rec, analysis, match) {
       <span style="flex-shrink:0;font-size:13px">${r.icon}</span>
       <div style="min-width:0">
         <span style="font-size:11px;font-weight:700;color:${r.color}">${r.label}</span>
-        <span style="font-size:11px;color:var(--color-muted);margin-left:6px">${r.detail}</span>
+        <span style="font-size:11px;color:var(--color-text-secondary);margin-left:6px">${r.detail}</span>
       </div>
     </div>`).join('');
 
@@ -634,16 +634,16 @@ function renderBlocTousLesParis(analysis, match) {
           ${_probPill(prob, rec)}
           <div style="min-width:0">
             <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
-            <div style="font-size:10px;color:var(--color-muted)">${prob !== null ? prob + '% analyse' : '—'} · book ${impliedProb}%</div>
+            <div style="font-size:10px;color:var(--color-text-secondary)">${prob !== null ? prob + '% analyse' : '—'} · book ${impliedProb}%</div>
           </div>
         </div>
         <div style="text-align:center;min-width:42px">
           <div style="font-size:14px;font-weight:700;color:var(--color-signal)">${oddsDec}</div>
-          <div style="font-size:9px;color:var(--color-muted)">${getOddsSource()}</div>
+          <div style="font-size:9px;color:var(--color-text-secondary)">${getOddsSource()}</div>
         </div>
         <div style="text-align:center;min-width:52px">
           ${edge !== null ? `<div style="font-size:15px;font-weight:800;color:${_edgeColor(edge)};letter-spacing:-0.01em">${edge > 0 ? '+' : ''}${edge}%</div>` : '<div style="color:var(--color-muted);font-size:11px">—</div>'}
-          ${kellyEuros ? `<div style="font-size:9px;color:var(--color-muted)">${kellyEuros}€</div>` : ''}
+          ${kellyEuros ? `<div style="font-size:9px;color:var(--color-text-secondary)">${kellyEuros}€</div>` : ''}
         </div>
         <div>
           <button class="paper-bet-btn" ${betData} style="font-size:12px;padding:8px 12px;border-radius:8px;border:1px solid var(--color-border);background:var(--color-card);color:var(--color-text);cursor:pointer;white-space:nowrap;min-width:40px">📋</button>
@@ -731,8 +731,8 @@ function renderBlocTousLesParis(analysis, match) {
       </div>
       <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:4px;padding:0 10px 4px">
         <div></div>
-        <div style="font-size:10px;color:var(--color-muted);text-align:center">Cote</div>
-        <div style="font-size:10px;color:var(--color-muted);text-align:center">Cote s/évaluée</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);text-align:center">Cote</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);text-align:center">Cote s/évaluée</div>
         <div></div>
       </div>
       ${section('Vainqueur', mlRows)}
@@ -789,7 +789,7 @@ export function renderBlocStats(analysis, match, storeInstance) {
   const awayFormSum = buildFormSummary(awayForm);
 
   const renderWL = (form) => {
-    if (!form?.matches?.length) return `<div style="font-size:11px;color:var(--color-muted)">Données indisponibles</div>`;
+    if (!form?.matches?.length) return `<div style="font-size:11px;color:var(--color-text-secondary)">Données indisponibles</div>`;
     return `<div style="display:flex;gap:3px;flex-wrap:wrap">
       ${form.matches.slice(0, 10).map(m => {
         const color = m.won ? '#22c55e' : '#ef4444';
@@ -807,7 +807,7 @@ export function renderBlocStats(analysis, match, storeInstance) {
     return `
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--color-border)">
         <div style="font-size:12px;font-weight:${hW ? '700' : '400'};color:${hW ? 'var(--color-text)' : 'var(--color-muted)'}">${hVal ?? '—'}</div>
-        <div style="font-size:10px;color:var(--color-muted);text-align:center;white-space:nowrap">${label}</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);text-align:center;white-space:nowrap">${label}</div>
         <div style="font-size:12px;font-weight:${aW ? '700' : '400'};color:${aW ? 'var(--color-text)' : 'var(--color-muted)'};text-align:right">${aVal ?? '—'}</div>
       </div>`;
   };
@@ -819,7 +819,7 @@ export function renderBlocStats(analysis, match, storeInstance) {
       </div>
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:4px;align-items:center;margin-bottom:10px">
         <div style="font-size:12px;font-weight:700;color:var(--color-signal)">${homeAbbr}</div>
-        <div style="font-size:10px;color:var(--color-muted);text-align:center">Saison</div>
+        <div style="font-size:10px;color:var(--color-text-secondary);text-align:center">Saison</div>
         <div style="font-size:12px;font-weight:700;color:var(--color-signal);text-align:right">${awayAbbr}</div>
       </div>
       ${statRow('Pts marqués/match', homePPG?.toFixed(1) ?? null, awayPPG?.toFixed(1) ?? null)}
@@ -828,13 +828,13 @@ export function renderBlocStats(analysis, match, storeInstance) {
       ${statRow('Win %', homeWinPct ? homeWinPct+'%' : null, awayWinPct ? awayWinPct+'%' : null)}
       ${homeFormSum ? statRow('Moy. écart (10j)', homeFormSum.avgMargin ? (homeFormSum.avgMargin > 0 ? '+'+homeFormSum.avgMargin : homeFormSum.avgMargin)+'pts' : null, awayFormSum?.avgMargin ? (awayFormSum.avgMargin > 0 ? '+'+awayFormSum.avgMargin : awayFormSum.avgMargin)+'pts' : null) : ''}
       <div style="margin-top:12px">
-        <div style="font-size:11px;color:var(--color-muted);margin-bottom:6px">10 derniers matchs</div>
+        <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:6px">10 derniers matchs</div>
         <div style="margin-bottom:8px">
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:4px">${homeAbbr} — ${homeFormSum ? homeFormSum.wins+'V/'+(homeFormSum.total - homeFormSum.wins)+'D' : '—'}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:4px">${homeAbbr} — ${homeFormSum ? homeFormSum.wins+'V/'+(homeFormSum.total - homeFormSum.wins)+'D' : '—'}</div>
           ${renderWL(homeForm)}
         </div>
         <div>
-          <div style="font-size:10px;color:var(--color-muted);margin-bottom:4px">${awayAbbr} — ${awayFormSum ? awayFormSum.wins+'V/'+(awayFormSum.total - awayFormSum.wins)+'D' : '—'}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);margin-bottom:4px">${awayAbbr} — ${awayFormSum ? awayFormSum.wins+'V/'+(awayFormSum.total - awayFormSum.wins)+'D' : '—'}</div>
           ${renderWL(awayForm)}
         </div>
       </div>
@@ -859,7 +859,7 @@ export function renderBlocAbsences(analysis, match, storeInstance) {
 
   const renderPlayerList = (injuries) => {
     const relevant = injuries.filter(p => ['Out', 'Doubtful', 'Questionable', 'Day-To-Day', 'Limited'].includes(p.status));
-    if (!relevant.length) return `<div style="font-size:11px;color:var(--color-muted)">Aucune absence signalée</div>`;
+    if (!relevant.length) return `<div style="font-size:11px;color:var(--color-text-secondary)">Aucune absence signalée</div>`;
     return relevant.map(p => {
       const color  = STATUS_COLORS[p.status] ?? 'var(--color-muted)';
       const label  = STATUS_LABELS[p.status] ?? p.status;
@@ -869,7 +869,7 @@ export function renderBlocAbsences(analysis, match, storeInstance) {
           <span style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0"></span>
           <div style="flex:1;min-width:0">
             <span style="font-size:12px;font-weight:${isStar ? '700' : '500'}">${p.name}</span>
-            ${p.ppg ? `<span style="font-size:10px;color:var(--color-muted);margin-left:4px">${p.ppg} pts/m</span>` : ''}
+            ${p.ppg ? `<span style="font-size:10px;color:var(--color-text-secondary);margin-left:4px">${p.ppg} pts/m</span>` : ''}
             ${isStar ? '<span style="font-size:9px;color:#f97316;margin-left:4px">★ STAR</span>' : ''}
           </div>
           <span style="font-size:10px;font-weight:600;color:${color};flex-shrink:0">${label}</span>
@@ -949,7 +949,7 @@ function renderBlocFiabiliteEtSynthese(analysis, match) {
         <span class="bloc-header__title">Synthèse</span>
       </div>
       <div style="font-size:13px;line-height:1.8;color:var(--color-text)">${synthese}</div>
-      <div style="font-size:10px;color:var(--color-muted);margin-top:8px">Analyse locale · pas d'IA utilisée ici</div>
+      <div style="font-size:10px;color:var(--color-text-secondary);margin-top:8px">Analyse locale · pas d'IA utilisée ici</div>
     </div>`;
 }
 
@@ -1024,15 +1024,15 @@ async function _loadAndRenderMultiBookOdds(container, match, analysis) {
     table.innerHTML = `
       <div class="collapsible" id="books-collapsible">
         <div class="collapsible__header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin-bottom:0">
-          <span style="font-size:11px;color:var(--color-muted);font-weight:600">Comparer les cotes (${matchOdds.bookmakers.length} bookmakers)</span>
+          <span style="font-size:11px;color:var(--color-text-secondary);font-weight:600">Comparer les cotes (${matchOdds.bookmakers.length} bookmakers)</span>
           <span class="collapsible__arrow text-muted" style="font-size:12px">▾</span>
         </div>
         <div class="collapsible__body" style="display:none;margin-top:10px">
           <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="border-bottom:1px solid var(--color-border)"><th style="padding:4px 8px;font-size:10px;color:var(--color-muted);text-align:left;font-weight:500">Bookmaker</th><th style="padding:4px 8px;font-size:10px;color:var(--color-muted);text-align:center;font-weight:500">${match.home_team?.abbreviation ?? 'DOM'}</th><th style="padding:4px 8px;font-size:10px;color:var(--color-muted);text-align:center;font-weight:500">${match.away_team?.abbreviation ?? 'EXT'}</th></tr></thead>
+            <thead><tr style="border-bottom:1px solid var(--color-border)"><th style="padding:4px 8px;font-size:10px;color:var(--color-text-secondary);text-align:left;font-weight:500">Bookmaker</th><th style="padding:4px 8px;font-size:10px;color:var(--color-text-secondary);text-align:center;font-weight:500">${match.home_team?.abbreviation ?? 'DOM'}</th><th style="padding:4px 8px;font-size:10px;color:var(--color-text-secondary);text-align:center;font-weight:500">${match.away_team?.abbreviation ?? 'EXT'}</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
-          <div style="font-size:10px;color:var(--color-muted);margin-top:6px">★ Meilleure cote en vert · Source : The Odds API</div>
+          <div style="font-size:10px;color:var(--color-text-secondary);margin-top:6px">★ Meilleure cote en vert · Source : The Odds API</div>
         </div>
       </div>`;
 
@@ -1139,13 +1139,13 @@ function bindEvents(container, storeInstance, match, analysis) {
                     border:1px solid transparent;margin-bottom:4px">
           <div style="min-width:0">
             <div style="font-size:12px;font-weight:600">${label}</div>
-            <div style="font-size:10px;color:var(--color-muted)">
+            <div style="font-size:10px;color:var(--color-text-secondary)">
               ${motorProb !== null ? motorProb + '% analyse' : '—'} · book ${impliedProb}%
             </div>
           </div>
           <div style="text-align:center;min-width:42px">
             <div style="font-size:14px;font-weight:700;color:var(--color-signal)">${odds.toFixed(2)}</div>
-            <div style="font-size:9px;color:var(--color-muted)">Pinnacle</div>
+            <div style="font-size:9px;color:var(--color-text-secondary)">Pinnacle</div>
           </div>
           <div style="text-align:center;min-width:52px">
             ${edge !== null
@@ -1200,11 +1200,11 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       <div style="background:var(--color-bg);border-radius:8px;padding:12px 14px;margin-bottom:16px">
         <div style="font-size:13px;font-weight:600;margin-bottom:4px">${match.home_team?.name ?? '—'} vs ${match.away_team?.name ?? '—'}</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-size:11px;color:var(--color-muted)">${marketLabels[market] ?? market}</span>
+          <span style="font-size:11px;color:var(--color-text-secondary)">${marketLabels[market] ?? market}</span>
           <span style="font-size:14px;font-weight:700">${sideLabel}</span>
           <span style="font-size:13px;font-weight:600;color:var(--color-signal)">${oddsDecimal}</span>
         </div>
-        <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--color-muted)">
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--color-text-secondary)">
           <span>Cote sous-évaluée <strong style="color:var(--color-text)">${edge}%</strong></span>
           <span>Moteur <strong style="color:var(--color-text)">${motorProb}%</strong></span>
           <span>Book <strong style="color:var(--color-text)">${impliedProb}%</strong></span>
@@ -1215,15 +1215,15 @@ function _openBetModal(btn, match, analysis, storeInstance) {
         <span style="font-size:15px;font-weight:700">${bankroll.toFixed(2)} €</span>
       </div>
       <div style="margin-bottom:12px">
-        <label style="display:block;font-size:11px;color:var(--color-muted);margin-bottom:6px">Cote réelle prise <span style="font-style:italic">(modifiez si vous misez sur un autre book)</span></label>
+        <label style="display:block;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px">Cote réelle prise <span style="font-style:italic">(modifiez si vous misez sur un autre book)</span></label>
         <input type="number" id="odds-input" class="paper-modal__input" value="${oddsDecimal}" placeholder="Ex: 2.70" step="0.05" min="1.01" style="font-size:20px;font-weight:700;text-align:center;letter-spacing:0.05em"/>
       </div>
       <div style="margin-bottom:12px">
-        <label style="display:block;font-size:11px;color:var(--color-muted);margin-bottom:6px">Mise (€)${kellySugg ? `<span style="color:var(--color-signal);font-weight:600"> · Conseillé : ${kellySugg.toFixed(2)} €</span>` : ''}</label>
+        <label style="display:block;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px">Mise (€)${kellySugg ? `<span style="color:var(--color-signal);font-weight:600"> · Conseillé : ${kellySugg.toFixed(2)} €</span>` : ''}</label>
         <input type="number" id="stake-input" class="paper-modal__input" value="${kellySugg ?? ''}" placeholder="Montant en €" min="0.5" max="${bankroll.toFixed(2)}" step="0.5" style="font-size:16px;font-weight:600;text-align:center"/>
       </div>
       <div style="margin-bottom:18px">
-        <label style="display:block;font-size:11px;color:var(--color-muted);margin-bottom:6px">Note (optionnel)</label>
+        <label style="display:block;font-size:11px;color:var(--color-text-secondary);margin-bottom:6px">Note (optionnel)</label>
         <input type="text" id="note-input" class="paper-modal__input" placeholder="Ex: blessure clé…" maxlength="200"/>
       </div>
       <div style="display:flex;gap:8px">
@@ -1256,17 +1256,6 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       ? new Date(match.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
       : null;
 
-    // Snapshot des absences au moment du pari — pour analyse post-match
-    const absVar = analysis?.variables_used?.absences_impact ?? null;
-    const absences_snapshot = absVar ? {
-      value:       absVar.value   ?? null,
-      quality:     absVar.quality ?? null,
-      source:      absVar.source  ?? null,
-      home_out:    absVar.raw?.home_out  ?? null,
-      away_out:    absVar.raw?.away_out  ?? null,
-      is_weighted: absVar.raw?.is_weighted ?? false,
-    } : null;
-
     await PaperEngine.placeBet({
       match_id: match.id, date: match.date, sport: 'NBA',
       home: match.home_team?.name ?? '—', away: match.away_team?.name ?? '—',
@@ -1277,7 +1266,6 @@ function _openBetModal(btn, match, analysis, storeInstance) {
       confidence_level: analysis?.confidence_level ?? null,
       data_quality: analysis?.data_quality_score ?? null,
       decision_note: note, top_signal: topSignal, match_time: matchTime,
-      absences_snapshot,
     });
 
     modal.remove();
