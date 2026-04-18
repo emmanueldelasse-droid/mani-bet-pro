@@ -118,6 +118,9 @@ export class DataOrchestrator {
     if (sport === 'TENNIS') {
       return DataOrchestrator._loadAndAnalyzeTennis(date, store);
     }
+    if (sport === 'MLB') {
+      return DataOrchestrator._loadAndAnalyzeMLB(date, store);
+    }
     try {
       // ÉTAPE 1 : ESPN matches (obligatoire)
       LoadingUI.update('ESPN matches...', 0);
@@ -1066,4 +1069,198 @@ async function _preloadTeamDetails(matches) {
   );
   Logger.info('TEAM_DETAILS_PRELOADED', { count: Object.keys(results).length });
   return results;
+}
+
+// ── MLB ORCHESTRATOR ──────────────────────────────────────────────────────────
+
+DataOrchestrator._loadAndAnalyzeMLB = async function(date, store) {
+  const WORKER = API_CONFIG.WORKER_BASE_URL;
+  const d      = date ?? new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  try {
+    LoadingUI.update('MLB matchs...', 0);
+
+    // 1. Matchs ESPN
+    const matchesResp = await fetch(`${WORKER}/mlb/matches?date=${d}`, { headers: { Accept: 'application/json' } });
+    if (!matchesResp.ok) return { matches: [], analyses: {} };
+    const matchesData = await matchesResp.json();
+    const rawMatches  = matchesData.matches ?? [];
+
+    if (!rawMatches.length) return { matches: [], analyses: {} };
+
+    LoadingUI.update('MLB cotes...', 25);
+
+    // 2. Cotes + pitchers + standings en parallèle
+    const [oddsResp, pitchersResp, standingsResp] = await Promise.allSettled([
+      fetch(`${WORKER}/mlb/odds/comparison`, { headers: { Accept: 'application/json' } }),
+      fetch(`${WORKER}/mlb/pitchers?date=${d}`, { headers: { Accept: 'application/json' } }),
+      fetch(`${WORKER}/mlb/standings`, { headers: { Accept: 'application/json' } }),
+    ]);
+
+    const oddsData      = oddsResp.status      === 'fulfilled' && oddsResp.value.ok      ? await oddsResp.value.json()      : null;
+    const pitchersData  = pitchersResp.status  === 'fulfilled' && pitchersResp.value.ok  ? await pitchersResp.value.json()  : null;
+    const standingsData = standingsResp.status === 'fulfilled' && standingsResp.value.ok ? await standingsResp.value.json() : null;
+
+    LoadingUI.update('MLB analyse...', 60);
+
+    const matchesMap = {};
+    const analyses   = {};
+
+    for (const match of rawMatches) {
+      if (match.status === 'STATUS_FINAL' && !match.home_team?.score) continue;
+
+      // Enrichir le match avec pitcher/standings
+      const homeName   = match.home_team?.name;
+      const awayName   = match.away_team?.name;
+      const pitchers   = pitchersData?.pitchers ?? {};
+      const standings  = standingsData?.standings ?? {};
+      const homePit    = pitchers[homeName] ?? match.home_pitcher ?? null;
+      const awayPit    = pitchers[awayName] ?? match.away_pitcher ?? null;
+      const homeStand  = standings[homeName] ?? null;
+      const awayStand  = standings[awayName] ?? null;
+
+      // Trouver les cotes pour ce match
+      const marketOdds = (oddsData?.matches ?? []).find(m =>
+        (m.home_team === homeName && m.away_team === awayName) ||
+        (m.home_team === awayName && m.away_team === homeName)
+      ) ?? null;
+
+      const matchObj = {
+        ...match,
+        sport:       'MLB',
+        home_pitcher: homePit,
+        away_pitcher: awayPit,
+        market_odds:  marketOdds,
+        home_season:  homeStand ? {
+          run_diff:      homeStand.run_diff,
+          win_pct:       parseFloat(homeStand.pct ?? 0),
+          runs_per_game: homeStand.runs_scored ? homeStand.runs_scored / Math.max(1, homeStand.wins + homeStand.losses) : 4.5,
+        } : null,
+        away_season: awayStand ? {
+          run_diff:      awayStand.run_diff,
+          win_pct:       parseFloat(awayStand.pct ?? 0),
+          runs_per_game: awayStand.runs_scored ? awayStand.runs_scored / Math.max(1, awayStand.wins + awayStand.losses) : 4.5,
+        } : null,
+      };
+
+      matchesMap[match.id] = matchObj;
+
+      // Analyser via EngineCore avec le moteur MLB
+      try {
+        const analysis = _analyzeMLBMatch(matchObj);
+        if (analysis) {
+          analyses[match.id] = analysis;
+          store.upsert('matches', match.id, matchObj);
+          store.upsert('analyses', match.id, analysis);
+        }
+      } catch (err) {
+        Logger.warn('MLB_MATCH_ERROR', { match: `${homeName} vs ${awayName}`, message: err.message });
+      }
+    }
+
+    LoadingUI.update('MLB terminé', 100);
+    Logger.info('MLB_ORCHESTRATOR_DONE', { total: Object.keys(matchesMap).length, analyses: Object.keys(analyses).length });
+
+    store.set({ matches: matchesMap, analyses });
+    return { matches: Object.values(matchesMap), analyses };
+
+  } catch (err) {
+    Logger.error('MLB_ORCHESTRATOR_ERROR', { message: err.message });
+    return { matches: [], analyses: {} };
+  }
+};
+
+// ── MOTEUR MLB FRONT (inline, sans dépendance externe) ────────────────────────
+const MLB_PARK_FACTORS_FRONT = {
+  'Coors Field':115,'Great American Ball Park':108,'Fenway Park':106,
+  'Globe Life Field':105,'Yankee Stadium':104,'Wrigley Field':103,
+  'Oracle Park':97,'T-Mobile Park':96,'Petco Park':95,'Dodger Stadium':97,
+  'Tropicana Field':95,'Oakland Coliseum':96,'loanDepot park':95,
+  'Truist Park':99,'American Family Field':100,'Target Field':99,
+  'Busch Stadium':97,'Minute Maid Park':100,'Angel Stadium':99,
+  'Chase Field':104,'Kauffman Stadium':99,'Progressive Field':98,
+  'PNC Park':97,'Citizens Bank Park':103,'Citi Field':97,
+  'Camden Yards':101,'Guaranteed Rate Field':98,'Comerica Park':96,
+  'Rogers Centre':102,'Nationals Park':99,
+};
+
+function _analyzeMLBMatch(match) {
+  const { home_pitcher, away_pitcher, home_season, away_season, venue, market_odds } = match;
+
+  const hFIP = home_pitcher?.fip ?? home_pitcher?.era ?? 4.20;
+  const aFIP = away_pitcher?.fip ?? away_pitcher?.era ?? 4.20;
+
+  const fipDiff    = aFIP - hFIP;
+  const pitcherAdv = Math.tanh(fipDiff / 2) * 0.20;
+  const hRest      = home_pitcher?.rest_days ?? 4;
+  const aRest      = away_pitcher?.rest_days ?? 4;
+  const rScore     = (r) => r < 3 ? -0.03 : r < 4 ? -0.01 : r <= 6 ? 0 : -0.01;
+  const restAdv    = rScore(hRest) - rScore(aRest);
+  const hRD        = home_season?.run_diff ?? 0;
+  const aRD        = away_season?.run_diff ?? 0;
+  const runDiffAdv = Math.tanh((hRD - aRD) / 50) * 0.07;
+
+  let homeProb = 0.536 + pitcherAdv + restAdv + runDiffAdv;
+  homeProb     = Math.max(0.20, Math.min(0.80, homeProb));
+
+  // Cotes
+  const bookmakers = market_odds?.bookmakers ?? [];
+  const PRIORITY   = ['pinnacle', 'draftkings', 'fanduel', 'betmgm'];
+  const _getBest   = (side) => {
+    for (const key of PRIORITY) {
+      const bk = bookmakers.find(b => b.key === key);
+      if (!bk) continue;
+      const odds = side === 'HOME' ? bk.home_ml : bk.away_ml;
+      if (odds && odds > 1) return { decimalOdds: odds, bookmaker: bk.title ?? bk.key };
+    }
+    return null;
+  };
+
+  const recommendations = [];
+  for (const [side, prob] of [['HOME', homeProb], ['AWAY', 1 - homeProb]]) {
+    const best = _getBest(side);
+    if (!best) continue;
+    const implied = 1 / best.decimalOdds;
+    const edge    = Math.round((prob - implied) * 100);
+    if (edge >= 5) {
+      recommendations.push({ type: 'MONEYLINE', side, edge,
+        odds_decimal: best.decimalOdds, odds_source: best.bookmaker,
+        motor_prob: Math.round(prob * 100), implied_prob: Math.round(implied * 100), has_value: true });
+    }
+  }
+  recommendations.sort((a, b) => b.edge - a.edge);
+
+  const parkFactor = MLB_PARK_FACTORS_FRONT[venue] ?? 100;
+  const hRPG       = home_season?.runs_per_game ?? 4.5;
+  const aRPG       = away_season?.runs_per_game ?? 4.5;
+  const pitcherRed = 1 - Math.min(0.30, Math.max(0, (8 - (hFIP + aFIP) / 2) / 20));
+  const estTotal   = Math.round((hRPG + aRPG) * (parkFactor / 100) * pitcherRed * 10) / 10;
+
+  const missing = [];
+  if (!home_pitcher?.era && !home_pitcher?.fip) missing.push('home_pitcher');
+  if (!away_pitcher?.era && !away_pitcher?.fip) missing.push('away_pitcher');
+
+  // Format compatible EngineCore
+  return {
+    sport:            'MLB',
+    match_id:         match.id,
+    decision:         recommendations.length ? 'EXPLORER' : 'INSUFFISANT',
+    rejection_reason: missing.length >= 2 ? 'MISSING_PITCHER_DATA' : null,
+    predictive_score: homeProb,
+    home_win_prob:    homeProb,
+    away_win_prob:    1 - homeProb,
+    motor_prob_home:  Math.round(homeProb * 100),
+    motor_prob_away:  Math.round((1 - homeProb) * 100),
+    data_quality:     missing.length ? 'LOW' : home_pitcher?.fip ? 'HIGH' : 'MEDIUM',
+    missing_variables: missing,
+    est_total_runs:   estTotal,
+    park_factor:      parkFactor,
+    recommendations,
+    best_recommendation: recommendations[0] ?? null,
+    variables_used: {
+      pitcher_fip_diff: { value: Math.round(fipDiff * 100) / 100, quality: 'OK' },
+      run_diff_adv:     { value: Math.round(runDiffAdv * 100), quality: hRD !== 0 ? 'OK' : 'MISSING' },
+      park_factor:      { value: parkFactor, quality: 'OK' },
+    },
+  };
 }
