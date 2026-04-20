@@ -381,9 +381,10 @@ async function handleNBATeamDetail(url, env, origin) {
   const READ_TTL_MS = 6 * 60 * 60 * 1000;
   const WRITE_TTL_S = 8 * 60 * 60;
 
+  const bustCache = url.searchParams.get('bust') === '1';
   try {
     const cached = kv ? await kv.get(cacheKey, { type: 'json' }) : null;
-    if (cached && cached._ts && (now - cached._ts) < READ_TTL_MS) {
+    if (!bustCache && cached && cached._ts && (now - cached._ts) < READ_TTL_MS && !cached._bundleError_home && !cached._bundleError_away) {
       return jsonResponse(cached, 200, origin);
     }
   } catch (e) {
@@ -419,6 +420,8 @@ async function handleNBATeamDetail(url, env, origin) {
 
   const payload = {
     _ts: Date.now(),
+    _bundleError_home: homeData?._bundleError ?? null,
+    _bundleError_away: awayData?._bundleError ?? null,
     home: {
       teamAbv:           homeRaw,
       last10:            homeData?.last10 ?? [],
@@ -449,8 +452,9 @@ async function handleNBATeamDetail(url, env, origin) {
     },
   };
 
+  const hasData = homeData?.last10?.length > 0 || awayData?.last10?.length > 0;
   try {
-    if (kv) {
+    if (kv && hasData) {
       await kv.put(cacheKey, JSON.stringify(payload), { expirationTtl: WRITE_TTL_S });
     }
   } catch (e) {
@@ -572,7 +576,7 @@ function _teamDetailComputeSplit(games, side, teamAbv) {
 
 async function getTeamDetailBundle(teamAbv, oppAbv, env) {
   try {
-    const schedulePayload = await getNBAData('getNBATeamSchedule', { teamAbv }, env);
+    const schedulePayload = await getNBAData('getNBATeamSchedule', { teamAbv, seasonYear: '2025' }, env);
     const scheduleGames = _teamDetailScheduleArray(schedulePayload)
       .filter(_teamDetailIsCompletedGame)
       .sort((a, b) => Number(String(b?.gameDate ?? 0)) - Number(String(a?.gameDate ?? 0)));
@@ -647,6 +651,7 @@ async function getTeamDetailBundle(teamAbv, oppAbv, env) {
   } catch (err) {
     console.warn('[TEAM-DETAIL] getTeamDetailBundle error', teamAbv, oppAbv, err?.message || err);
     return {
+      _bundleError: err?.message ?? String(err),
       last10: [],
       h2h: [],
       homeSplit: { wins: 0, losses: 0, games: 0 },
