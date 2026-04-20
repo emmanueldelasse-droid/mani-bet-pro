@@ -418,25 +418,17 @@ async function handleNBATeamDetail(url, env, origin) {
   const homeData = await getTeamDetailBundle(home, away, env);
   const awayData = await getTeamDetailBundle(away, home, env);
 
-  const _rd = { null: rostersData === null, n: 0, hFound: false, hSize: 0, aFound: false, aSize: 0, abvs: [], sp: null, rosterType: null, teamKeys: [] };
-
   const extractTop10 = (teamAbv, rostersPayload, boxScores) => {
     try {
-      // Normalise Tank01 roster response — may be array, object-of-teams, or wrapped in .body/.teams
       let teamsArr = [];
       if (Array.isArray(rostersPayload))              teamsArr = rostersPayload;
       else if (Array.isArray(rostersPayload?.body))   teamsArr = rostersPayload.body;
       else if (Array.isArray(rostersPayload?.teams))  teamsArr = rostersPayload.teams;
       else if (rostersPayload && typeof rostersPayload === 'object') teamsArr = Object.values(rostersPayload);
-      if (!_rd.n) { _rd.n = teamsArr.length; _rd.abvs = teamsArr.slice(0, 5).map(t => t?.teamAbv ?? '?'); }
       const abv  = String(teamAbv || '').toUpperCase();
       const team = teamsArr.find(t => String(t?.teamAbv ?? t?.abbr ?? '').toUpperCase() === abv);
       const rr = team?.Roster ?? team?.roster ?? null;
       const roster = Array.isArray(rr) ? rr : (rr && typeof rr === 'object' ? Object.values(rr) : []);
-      if (!_rd.rosterType && rr !== null) _rd.rosterType = Array.isArray(rr) ? 'array' : typeof rr;
-      if (team && !_rd.teamKeys.length) _rd.teamKeys = Object.keys(team).slice(0, 20);
-      if (teamAbv === home) { _rd.hFound = !!team; _rd.hSize = roster.length; _rd.sp = roster[0] ? { name: roster[0]?.longName, ppg: roster[0]?.ppg, pts: roster[0]?.stats?.pts } : null; }
-      else                  { _rd.aFound = !!team; _rd.aSize = roster.length; }
       return buildTop10ScorersFromRoster(roster, teamAbv, boxScores);
     } catch (_) {
       return [];
@@ -455,7 +447,6 @@ async function handleNBATeamDetail(url, env, origin) {
     _ts: Date.now(),
     _bundleError_home: homeData?._bundleError ?? null,
     _bundleError_away: awayData?._bundleError ?? null,
-    _debug_roster: _rd,
     home: {
       teamAbv:           homeRaw,
       last10:            homeData?.last10 ?? [],
