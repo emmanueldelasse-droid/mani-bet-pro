@@ -375,7 +375,7 @@ async function handleNBATeamDetail(url, env, origin) {
   const home = normalizeTank01TeamAbv(homeRaw);
   const away = normalizeTank01TeamAbv(awayRaw);
 
-  const cacheKey    = `team_detail_v6_${awayRaw}_${homeRaw}`;
+  const cacheKey    = `team_detail_v7_${awayRaw}_${homeRaw}`;
   const kv          = env.PAPER_TRADING;
   const now         = Date.now();
   const READ_TTL_MS = 6 * 60 * 60 * 1000;
