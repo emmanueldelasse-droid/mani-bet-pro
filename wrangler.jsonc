@@ -10,5 +10,14 @@
   },
   "compatibility_flags": [
     "nodejs_compat"
-  ]
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "PAPER_TRADING",
+      "id": "17eb7ddc41a949dd99bd840142832cfd"
+    }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  }
 }

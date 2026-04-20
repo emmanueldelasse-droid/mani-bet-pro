@@ -350,7 +350,6 @@ async function _loadAndDisplay(container, storeInstance, date, options = {}) {
     if (
       cachedDate === date &&
       cachedSport === selectedSport &&
-      Object.keys(cachedAnalyses).length > 0 &&
       Object.keys(cachedMatches).length > 0 &&
       cacheAge < CACHE_TTL
     ) {
@@ -568,9 +567,10 @@ function _createMatchCard(match) {
   const homeRecord    = isTennis ? (match.surface ?? '') : (match.home_team?.record ?? '—');
   const awayRecord    = isTennis ? (match.tournament ?? '') : (match.away_team?.record ?? '—');
   const isFinal       = match.status === 'STATUS_FINAL' || match.status === 'STATUS_FINAL_OT';
+  const isLive        = match.status === 'STATUS_IN_PROGRESS' || match.status === 'STATUS_HALFTIME' || match.status === 'STATUS_END_PERIOD';
   const homeScore     = match.home_team?.score;
   const awayScore     = match.away_team?.score;
-  const showScore     = isFinal && homeScore != null && awayScore != null;
+  const showScore     = (isFinal || isLive) && homeScore != null && awayScore != null;
 
   const marketOdds = match.market_odds ?? null;
   const espnOdds   = match.odds ?? {};
@@ -603,10 +603,10 @@ function _createMatchCard(match) {
   card.innerHTML = `
     <div class="match-card__header" style="display:flex;align-items:center;gap:6px">
       <span class="sport-tag ${isTennis ? 'sport-tag--tennis' : isMLB ? 'sport-tag--mlb' : 'sport-tag--nba'}">${isTennis ? 'Tennis' : isMLB ? 'MLB' : 'NBA'}</span>
-      ${!isFinal ? countdownHtml : ''}
-      <span class="mc-header-date" style="margin-left:auto">${isFinal ? 'Terminé' : time}</span>
+      ${(!isFinal && !isLive) ? countdownHtml : ''}
+      <span class="mc-header-date" style="margin-left:auto">${isFinal ? 'Terminé' : isLive ? 'En cours' : time}</span>
       <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}" style="font-size:10px;padding:2px 7px">
-        ${isFinal ? 'Final' : '…'}
+        ${isFinal ? 'Final' : isLive ? '🔴 LIVE' : '…'}
       </span>
     </div>
 

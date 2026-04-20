@@ -137,11 +137,18 @@ export class DataOrchestrator {
         'STATUS_IN_PROGRESS', 'STATUS_HALFTIME', 'STATUS_END_PERIOD',
         'STATUS_FINAL', 'STATUS_FINAL_OT', 'STATUS_FINAL_PENALTY',
       ];
+      const liveMatches = espnData.matches.filter(m => LIVE_STATUSES.includes(m.status));
       const matches = espnData.matches.filter(m => !LIVE_STATUSES.includes(m.status));
 
+      // Si tous les matchs du jour sont live ou terminés, les afficher sans analyse
+      // plutôt que de retourner null (évite l'écran vide pendant les playoffs).
       if (!matches.length) {
-        Logger.warn('ORCHESTRATOR_ALL_LIVE', { date });
-        return null;
+        Logger.warn('ORCHESTRATOR_ALL_LIVE', { date, count: liveMatches.length });
+        liveMatches.forEach(function(match) {
+          store.upsert('matches', match.id, Object.assign({}, match, { sport: 'NBA', is_live: true }));
+        });
+        LoadingUI.hide();
+        return { matches: liveMatches, analyses: {} };
       }
 
       // Vider les analyses précédentes si on change de date
