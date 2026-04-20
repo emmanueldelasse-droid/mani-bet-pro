@@ -418,7 +418,7 @@ async function handleNBATeamDetail(url, env, origin) {
   const homeData = await getTeamDetailBundle(home, away, env);
   const awayData = await getTeamDetailBundle(away, home, env);
 
-  const _rd = { null: rostersData === null, n: 0, hFound: false, hSize: 0, aFound: false, aSize: 0, abvs: [], sp: null, rosterType: null };
+  const _rd = { null: rostersData === null, n: 0, hFound: false, hSize: 0, aFound: false, aSize: 0, abvs: [], sp: null, rosterType: null, teamKeys: [] };
 
   const extractTop10 = (teamAbv, rostersPayload, boxScores) => {
     try {
@@ -434,6 +434,7 @@ async function handleNBATeamDetail(url, env, origin) {
       const rr = team?.roster ?? null;
       const roster = Array.isArray(rr) ? rr : (rr && typeof rr === 'object' ? Object.values(rr) : []);
       if (!_rd.rosterType && rr !== null) _rd.rosterType = Array.isArray(rr) ? 'array' : typeof rr;
+      if (team && !_rd.teamKeys.length) _rd.teamKeys = Object.keys(team).slice(0, 20);
       if (teamAbv === home) { _rd.hFound = !!team; _rd.hSize = roster.length; _rd.sp = roster[0] ? { name: roster[0]?.longName, ppg: roster[0]?.ppg, pts: roster[0]?.stats?.pts } : null; }
       else                  { _rd.aFound = !!team; _rd.aSize = roster.length; }
       return buildTop10ScorersFromRoster(roster, teamAbv, boxScores);
