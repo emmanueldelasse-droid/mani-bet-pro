@@ -392,11 +392,10 @@ async function handleNBATeamDetail(url, env, origin) {
     console.log('[TEAM-DETAIL] cache read fail', e?.message || e);
   }
 
-  const [homeData, awayData, rostersData] = await Promise.all([
-    getTeamDetailBundle(home, away, env),
-    getTeamDetailBundle(away, home, env),
-    getNBAData('getNBATeams', { rosters: 'true', schedules: 'false', topPerformers: 'false', teamStats: 'true' }, env).catch(() => null),
-  ]);
+  // Sequential to avoid Tank01 rate limits (~11 calls per bundle)
+  const homeData    = await getTeamDetailBundle(home, away, env);
+  const awayData    = await getTeamDetailBundle(away, home, env);
+  const rostersData = await getNBAData('getNBATeams', { rosters: 'true', schedules: 'false', topPerformers: 'false', teamStats: 'true' }, env).catch(() => null);
 
   const extractTop10 = (teamAbv, rostersPayload, boxScores) => {
     try {
