@@ -384,7 +384,7 @@ async function handleNBATeamDetail(url, env, origin) {
   const bustCache = url.searchParams.get('bust') === '1';
   try {
     const cached = kv ? await kv.get(cacheKey, { type: 'json' }) : null;
-    const cachedHasData = cached?.home?.last10?.length > 0 || cached?.away?.last10?.length > 0;
+    const cachedHasData = cached?.home?.last10?.length > 0 && cached?.away?.last10?.length > 0;
     if (!bustCache && cached && cached._ts && (now - cached._ts) < READ_TTL_MS && cachedHasData) {
       return jsonResponse(cached, 200, origin);
     }
@@ -580,8 +580,8 @@ async function getTeamDetailBundle(teamAbv, oppAbv, env) {
     return {
       _bundleError: 'TANK01_API_KEY not configured — set secret in Cloudflare dashboard',
       last10: [], h2h: [],
-      homeSplit: { wins: 0, losses: 0, games: 0 },
-      awaySplit: { wins: 0, losses: 0, games: 0 },
+      homeSplit: null,
+      awaySplit: null,
       restDays: null, avgTotal: null, last5ScoringAvg: null,
       momentum: { last3W: 0, last10W: 0 }, boxScores: {},
     };
@@ -624,6 +624,7 @@ async function getTeamDetailBundle(teamAbv, oppAbv, env) {
         result,
         teamPts,
         oppPts,
+        total: (teamPts !== null && oppPts !== null) ? teamPts + oppPts : null,
       };
     });
 
@@ -664,8 +665,8 @@ async function getTeamDetailBundle(teamAbv, oppAbv, env) {
       _bundleError: err?.message ?? String(err),
       last10: [],
       h2h: [],
-      homeSplit: { wins: 0, losses: 0, games: 0 },
-      awaySplit: { wins: 0, losses: 0, games: 0 },
+      homeSplit: null,
+      awaySplit: null,
       restDays: null,
       avgTotal: null,
       last5ScoringAvg: null,
