@@ -6,9 +6,9 @@
 ## Métadonnées
 | Champ | Valeur |
 |-------|--------|
-| **Dernière mise à jour** | 2026-04-19 |
-| **IA utilisée** | ChatGPT |
-| **Branche active** | main |
+| **Dernière mise à jour** | 2026-04-20 |
+| **IA utilisée** | Claude Code (Sonnet 4.6) |
+| **Branche active** | claude/zen-tesla-AZKGq |
 | **Repo GitHub** | emmanueldelasse-droid / Mani-Bet-Pro |
 
 ---
@@ -20,7 +20,7 @@
 - **API externe** : Tank01, ESPN, The Odds API, Claude web search côté worker
 - **Staking** : Kelly/4, cap 5% bankroll
 - **Paper settler** : présent côté worker
-- **Worker réel de référence vu en session** : `Cloudflare Worker v6.41`
+- **Worker réel de référence vu en session** : `Cloudflare Worker v6.44`
 
 ## Abréviations Tank01 non-standard (CONFIRMÉES)
 `GS` = Golden State | `NO` = New Orleans | `NY` = New York | `SA` = San Antonio
@@ -47,38 +47,30 @@
 
 ## Dernière session
 
-**Date** : 2026-04-19
-**IA** : ChatGPT
-**Durée estimée** : session courte à moyenne
+**Date** : 2026-04-20
+**IA** : Claude Code (Sonnet 4.6)
+**Durée estimée** : session courte
 
 ### Tâches accomplies
-- Analyse du vrai fichier worker fourni par l’utilisateur
-- Vérification de la route `/nba/team-detail`
-- Génération d’un front modifié pour afficher le dernier match et un éventuel bloc média
-- Vérification de la réponse JSON réelle du worker sur `BOS` vs `PHI`
-- Vérification visuelle sur la fiche match que le résumé du dernier match s’affiche bien
-- Identification claire que le problème restant est côté worker Basket USA, pas côté front
+- Mise en place du système de continuité de session (guide SESSION.md)
+- Exploration complète du codebase par Claude Code (stack, fichiers, état, historique git)
+- Mise à jour du SESSION.md : branche active, version worker (v6.44), IA du jour
+- Confirmation que le worker actif est `v6.44` (et non v6.41 comme noté précédemment)
 
 ### Bugs résolus
-- Validation du branchement `latestGame` côté front
-- Validation que l’absence de résumé média ne vient pas du front
+- Aucun code modifié cette session — session de mise à jour documentaire uniquement
 
 ### Bugs encore présents
 - `latestMediaSummary = null` pour les équipes testées
 - Affichage en double de `Dernier match :`
 
 ### Décisions techniques prises
-- Garder la logique : **vérité match = données structurées worker**
-- Garder la logique : **média = couche complémentaire facultative**
-- Ne pas continuer à bricoler le front tant que le worker ne renvoie pas de vrai `latestMediaSummary`
-- Ajouter une route debug Basket USA dans le worker avant toute autre tentative de correction média
-- Corriger le doublon front en affichant soit `summary_short` avec label front, soit `summary_long` sans label front
+- Aucune nouvelle décision technique — priorités inchangées depuis session précédente
 
 ### Fichiers modifiés
 | Fichier | Changement |
 |---------|------------|
-| `worker.js` | enrichissement visé autour de `/nba/team-detail` avec `latestGame` / tentative `latestMediaSummary` |
-| `src/ui/ui.match-detail.teamdetail.js` | ajout affichage résumé dernier match + bloc média optionnel |
+| `SESSION.md` | Mise à jour métadonnées (date, IA, branche, version worker) |
 
 ---
 
@@ -105,6 +97,7 @@
 | Date | IA | Résumé |
 |------|----|--------|
 | 2026-04-19 | ChatGPT | Validation du résumé du dernier match dans `Stats équipes`, identification du blocage worker sur `latestMediaSummary`, besoin d’une route debug Basket USA |
+| 2026-04-20 | Claude Code (Sonnet 4.6) | Mise en place du guide SESSION.md, exploration complète du codebase, mise à jour documentation (branche claude/zen-tesla-AZKGq, worker v6.44) |
 
 ---
 
