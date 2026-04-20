@@ -1,7 +1,7 @@
 # Mani Bet Pro
 
 ## État
-Worker `manibetpro` v6.44 · `manibetpro.workers.dev`
+Worker `manibetpro` v6.45 · `manibetpro.workers.dev`
 Front: GitHub Pages · KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
 Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 
@@ -11,9 +11,9 @@ Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 - `/nba/team-detail?home=X&away=Y[&bust=1]` → last10/splits/H2H/top10
 - `/nba/teams/stats` · `/roster-injuries` · `/ai-injuries`
 - `/mlb/matches` · `/odds` · `/pitchers` · `/standings`
-- `/bot/run` POST · `/logs` · `/settle-logs` POST
+- `/bot/run` POST · `/logs` · `/settle-logs` POST · `/logs/export.csv` · `/odds-history?matchId=X`
 - `/tennis/sports-list|odds|stats`
-- Cron `0 * * * *` (bot NBA+MLB)
+- Cron `0 * * * *` · bot NBA+MLB · 10h UTC nightly-settle J-1/J-2 · snapshot cotes ESPN→KV `odds_snap_{matchId}`
 
 ## Fichiers
 - `worker.js` backend monolithe (~4900L)
@@ -32,8 +32,13 @@ Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 - Box scores: 5 derniers/équipe cachés KV 7j par `gameID` → `last5_ppg` actif, ~5 calls max premier hit, ~0 ensuite
 - Bundle calls séquentiels (anti rate-limit)
 
+## v6.45
+- Logs settlement → +`prob_delta_pts` `upset` `ou_was_right` `spread_was_right` `result_margin/total`
+- NBA vars +`b2b_cumul_diff` `travel_load_diff` poids 0.02 chacun (BDL last5) · net_rating 0.24→0.22
+- `line_movement` dans logs · snapshot horaire KV → sharp detect
+
 ## Bugs actifs
-- P1 `/health` annonce v6.31, worker v6.44
+- P1 `/health` annonce v6.31, worker v6.45
 
 ## Deploy
 Auto via intégration Git CF : `git push origin main` → déploiement immédiat.

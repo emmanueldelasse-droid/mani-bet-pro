@@ -250,6 +250,13 @@ export class DataOrchestrator {
       away_back_to_back:    _isBackToBack(awayRecent, match.date || match.datetime),
       home_rest_days:       _computeRestDays(homeRecent, match.date || match.datetime),
       away_rest_days:       _computeRestDays(awayRecent, match.date || match.datetime),
+      // v6.45 : fatigue cumulée & charge voyage sur les 5 derniers matchs.
+      // - b2b_last5 : nombre de paires de matchs joués sur 2 jours consécutifs (fatigue)
+      // - away_last5 : nombre de matchs à l'extérieur (proxy voyage, route)
+      home_b2b_last5:       _countB2BInLast5(homeRecent),
+      away_b2b_last5:       _countB2BInLast5(awayRecent),
+      home_away_games_last5: _countAwayGamesInLast5(homeRecent),
+      away_away_games_last5: _countAwayGamesInLast5(awayRecent),
       // Moyenne de points marqués sur les 5 derniers matchs — utilisée pour la projection O/U
       // Calculée ici depuis recentForms (BDL) disponible au moment du calcul moteur.
       // Plus réactive que avg_pts saison pour détecter les tendances Over/Under récentes.
@@ -1006,6 +1013,36 @@ function _computeRestDays(recentForm, matchDate) {
   var diff = Math.round((curr - last) / 86400000);
   if (diff < 0) return null; // données BDL incohérentes
   return Math.max(0, diff - 1);
+}
+
+/**
+ * Nombre de back-to-back dans les 5 derniers matchs (paires de dates consécutives).
+ * Proxy de fatigue cumulée — plus robuste qu'un simple flag B2B sur le match courant.
+ * Ex : 3 B2B sur 5 matchs = équipe épuisée.
+ */
+function _countB2BInLast5(recentForm) {
+  if (!recentForm?.matches?.length) return null;
+  const m = recentForm.matches.slice(0, 5).filter(x => x.date);
+  if (m.length < 2) return null;
+  let count = 0;
+  for (let i = 0; i < m.length - 1; i++) {
+    const d1 = new Date(m[i].date + 'T12:00:00');
+    const d2 = new Date(m[i + 1].date + 'T12:00:00');
+    const diff = Math.round((d1 - d2) / 86400000);
+    if (diff === 1) count++;
+  }
+  return count;
+}
+
+/**
+ * Nombre de matchs à l'extérieur dans les 5 derniers — proxy de charge de voyage.
+ * Ex : 5 away games d'affilée = équipe en road trip, fatigue cumulée.
+ */
+function _countAwayGamesInLast5(recentForm) {
+  if (!recentForm?.matches?.length) return null;
+  const m = recentForm.matches.slice(0, 5).filter(x => x.is_home !== undefined);
+  if (m.length === 0) return null;
+  return m.filter(x => x.is_home === false).length;
 }
 
 function _normalizeDate(s) {
