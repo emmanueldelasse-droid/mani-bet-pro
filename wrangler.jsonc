@@ -1,14 +1,25 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "manibetpro",
+  "main": "worker.js",
   "compatibility_date": "2026-04-19",
   "observability": {
     "enabled": true
   },
   "assets": {
-    "directory": "."
+    "directory": ".",
+    "binding": "ASSETS"
   },
+  "kv_namespaces": [
+    {
+      "binding": "PAPER_TRADING",
+      "id": "17eb7ddc41a949dd99bd840142832cfd"
+    }
+  ],
   "compatibility_flags": [
     "nodejs_compat"
-  ]
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  }
 }

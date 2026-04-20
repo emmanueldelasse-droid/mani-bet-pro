@@ -348,6 +348,7 @@ export default {
         }, 200, origin);
       }
 
+      if (env.ASSETS) return env.ASSETS.fetch(request);
       return errorResponse('Route not found', 404, origin);
 
     } catch (err) {
