@@ -375,15 +375,17 @@ async function handleNBATeamDetail(url, env, origin) {
   const home = normalizeTank01TeamAbv(homeRaw);
   const away = normalizeTank01TeamAbv(awayRaw);
 
-  const cacheKey    = `team_detail_v6_${awayRaw}_${homeRaw}`;
+  const cacheKey    = `team_detail_v7_${awayRaw}_${homeRaw}`;
   const kv          = env.PAPER_TRADING;
   const now         = Date.now();
   const READ_TTL_MS = 6 * 60 * 60 * 1000;
   const WRITE_TTL_S = 8 * 60 * 60;
 
+  const bustCache = url.searchParams.get('bust') === '1';
   try {
     const cached = kv ? await kv.get(cacheKey, { type: 'json' }) : null;
-    if (cached && cached._ts && (now - cached._ts) < READ_TTL_MS) {
+    const cachedHasData = cached?.home?.last10?.length > 0 || cached?.away?.last10?.length > 0;
+    if (!bustCache && cached && cached._ts && (now - cached._ts) < READ_TTL_MS && cachedHasData) {
       return jsonResponse(cached, 200, origin);
     }
   } catch (e) {
@@ -419,6 +421,8 @@ async function handleNBATeamDetail(url, env, origin) {
 
   const payload = {
     _ts: Date.now(),
+    _bundleError_home: homeData?._bundleError ?? null,
+    _bundleError_away: awayData?._bundleError ?? null,
     home: {
       teamAbv:           homeRaw,
       last10:            homeData?.last10 ?? [],
@@ -449,8 +453,9 @@ async function handleNBATeamDetail(url, env, origin) {
     },
   };
 
+  const hasData = homeData?.last10?.length > 0 || awayData?.last10?.length > 0;
   try {
-    if (kv) {
+    if (kv && hasData) {
       await kv.put(cacheKey, JSON.stringify(payload), { expirationTtl: WRITE_TTL_S });
     }
   } catch (e) {
@@ -571,6 +576,17 @@ function _teamDetailComputeSplit(games, side, teamAbv) {
 }
 
 async function getTeamDetailBundle(teamAbv, oppAbv, env) {
+  const hasKeys = !!(env.TANK01_API_KEY1 || env.TANK01_API_KEY2 || env.TANK01_API_KEY3 || env.TANK01_API_KEY);
+  if (!hasKeys) {
+    return {
+      _bundleError: 'TANK01_API_KEY not configured — set secret in Cloudflare dashboard',
+      last10: [], h2h: [],
+      homeSplit: { wins: 0, losses: 0, games: 0 },
+      awaySplit: { wins: 0, losses: 0, games: 0 },
+      restDays: null, avgTotal: null, last5ScoringAvg: null,
+      momentum: { last3W: 0, last10W: 0 }, boxScores: {},
+    };
+  }
   try {
     const schedulePayload = await getNBAData('getNBATeamSchedule', { teamAbv }, env);
     const scheduleGames = _teamDetailScheduleArray(schedulePayload)
@@ -647,6 +663,7 @@ async function getTeamDetailBundle(teamAbv, oppAbv, env) {
   } catch (err) {
     console.warn('[TEAM-DETAIL] getTeamDetailBundle error', teamAbv, oppAbv, err?.message || err);
     return {
+      _bundleError: err?.message ?? String(err),
       last10: [],
       h2h: [],
       homeSplit: { wins: 0, losses: 0, games: 0 },
