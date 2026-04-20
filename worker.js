@@ -452,7 +452,7 @@ async function handleNBATeamDetail(url, env, origin) {
     },
   };
 
-  const hasData = homeData?.last10?.length > 0 || awayData?.last10?.length > 0;
+  const hasData = homeData?.last10?.length > 0 && awayData?.last10?.length > 0;
   try {
     if (kv && hasData) {
       await kv.put(cacheKey, JSON.stringify(payload), { expirationTtl: WRITE_TTL_S });
@@ -593,30 +593,29 @@ async function getTeamDetailBundle(teamAbv, oppAbv, env) {
       .sort((a, b) => Number(String(b?.gameDate ?? 0)) - Number(String(a?.gameDate ?? 0)));
 
     const last10Raw = scheduleGames.slice(0, 10);
-    const last10GameIds = last10Raw.map(g => g?.gameID).filter(Boolean);
-
-    const boxScoreEntries = await Promise.all(last10GameIds.map(async (gameID) => {
-      try {
-        const body = await getNBAData('getNBABoxScore', { gameID }, env);
-        return [gameID, body];
-      } catch (_) {
-        return [gameID, null];
-      }
-    }));
-    const boxScores = Object.fromEntries(boxScoreEntries);
+    // No box score fetches — schedule data includes teamScore/oppScore/gameResult.
+    // This keeps calls to 1 per bundle and avoids Tank01 rate limits.
+    const boxScores = {};
 
     const last10 = last10Raw.map((game) => {
       const gameID = game?.gameID;
       const home = String(game?.home ?? '').toUpperCase();
       const away = String(game?.away ?? '').toUpperCase();
       const opponent = home === teamAbv ? away : home;
-      const fromBox = gameID ? _teamDetailExtractScoreFromBoxScore(boxScores[gameID] ?? {}, teamAbv, opponent) : null;
-      const homeScore = _teamDetailSafeNum(game?.homeTeamScore ?? game?.homePts ?? game?.homeScore);
-      const awayScore = _teamDetailSafeNum(game?.awayTeamScore ?? game?.awayPts ?? game?.awayScore);
-      const homeAway = fromBox?.homeAway ?? (home === teamAbv ? 'home' : 'away');
-      const teamPts = fromBox?.teamPts ?? (homeAway === 'home' ? homeScore : awayScore);
-      const oppPts = fromBox?.oppPts ?? (homeAway === 'home' ? awayScore : homeScore);
-      const result = teamPts !== null && oppPts !== null ? (teamPts > oppPts ? 'W' : 'L') : null;
+      const homeAway = home === teamAbv ? 'home' : 'away';
+      // Use schedule-level scores: teamScore/oppScore are team-relative,
+      // homeTeamScore/awayTeamScore / homePts/awayPts are absolute.
+      const teamPtsRaw = _teamDetailSafeNum(game?.teamScore);
+      const oppPtsRaw  = _teamDetailSafeNum(game?.oppScore);
+      const homeScore  = _teamDetailSafeNum(game?.homeTeamScore ?? game?.homePts ?? game?.homeScore);
+      const awayScore  = _teamDetailSafeNum(game?.awayTeamScore ?? game?.awayPts ?? game?.awayScore);
+      const teamPts = teamPtsRaw ?? (homeAway === 'home' ? homeScore : awayScore);
+      const oppPts  = oppPtsRaw  ?? (homeAway === 'home' ? awayScore : homeScore);
+      // Derive result from scores; fall back to gameResult/result field ("W"/"L")
+      const resultRaw = game?.gameResult ?? game?.result ?? null;
+      const result = teamPts !== null && oppPts !== null
+        ? (teamPts > oppPts ? 'W' : 'L')
+        : (typeof resultRaw === 'string' ? (resultRaw.startsWith('W') ? 'W' : resultRaw.startsWith('L') ? 'L' : null) : null);
       return {
         gameID,
         date: _teamDetailExtractGameDate(game),
