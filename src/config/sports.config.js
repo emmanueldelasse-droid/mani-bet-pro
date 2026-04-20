@@ -58,6 +58,8 @@ export const SPORTS_CONFIG = {
       { id: 'defensive_diff',  label: 'Défense adverse (Tank01)',            critical: false },
       { id: 'back_to_back',    label: 'Back-to-back',                       critical: false },
       { id: 'rest_days_diff',  label: 'Jours de repos',                     critical: false },
+      { id: 'b2b_cumul_diff',  label: 'B2B cumulé (5 derniers)',            critical: false },
+      { id: 'travel_load_diff',label: 'Charge voyage (5 derniers)',         critical: false },
     ],
 
     /**
@@ -71,16 +73,18 @@ export const SPORTS_CONFIG = {
      *   pace_diff   : contextuel O/U uniquement
      */
     default_weights: {
-      net_rating_diff:  0.24,
-      efg_diff:         0.18,
-      recent_form_ema:  0.16,
-      home_away_split:  0.10,
-      absences_impact:  0.20,
-      defensive_diff:   0.02,
-      win_pct_diff:     0.05,
-      back_to_back:     0.03,
-      rest_days_diff:   0.02,
-      // Somme = 0.24+0.18+0.16+0.10+0.20+0.02+0.05+0.03+0.02 = 1.00
+      net_rating_diff:   0.22,
+      efg_diff:          0.18,
+      recent_form_ema:   0.16,
+      home_away_split:   0.10,
+      absences_impact:   0.20,
+      defensive_diff:    0.02,
+      win_pct_diff:      0.04,
+      back_to_back:      0.02,
+      rest_days_diff:    0.02,
+      b2b_cumul_diff:    0.02,
+      travel_load_diff:  0.02,
+      // Somme = 0.22+0.18+0.16+0.10+0.20+0.02+0.04+0.02+0.02+0.02+0.02 = 1.00
     },
 
     /**
@@ -110,16 +114,18 @@ export const SPORTS_CONFIG = {
      * STATUT : hypothèses d'expert raisonnées — calibration après 50+ paris playoff.
      */
     playoff_weights: {
-      absences_impact:  0.30,
-      recent_form_ema:  0.24,
-      home_away_split:  0.14,
-      defensive_diff:   0.12,
-      net_rating_diff:  0.08,
-      rest_days_diff:   0.06,
-      efg_diff:         0.04,
-      win_pct_diff:     0.02,
-      back_to_back:     0.00,
-      // Somme = 0.30+0.24+0.14+0.12+0.08+0.06+0.04+0.02+0.00 = 1.00
+      absences_impact:   0.30,
+      recent_form_ema:   0.24,
+      home_away_split:   0.14,
+      defensive_diff:    0.12,
+      net_rating_diff:   0.06,
+      rest_days_diff:    0.06,
+      efg_diff:          0.04,
+      travel_load_diff:  0.02,
+      win_pct_diff:      0.02,
+      back_to_back:      0.00,
+      b2b_cumul_diff:    0.00,
+      // Somme = 0.30+0.24+0.14+0.12+0.06+0.06+0.04+0.02+0.02+0.00+0.00 = 1.00
     },
 
     // EMA lambda par phase — 0.85 saison régulière, 0.92 playoffs

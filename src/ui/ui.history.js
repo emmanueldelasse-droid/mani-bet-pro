@@ -15,6 +15,7 @@
  */
 
 import { PaperEngine, STRATEGIES } from '../paper/paper.engine.js';
+import { API_CONFIG } from '../config/api.config.js';
 
 export async function render(container, storeInstance) {
   await _renderPage(container, storeInstance);
@@ -47,6 +48,7 @@ async function _renderPage(container, storeInstance) {
     _renderStrategyCard(metrics),
     _renderBiasCard(metrics),
     _renderBetsList(state.bets, storeInstance),
+    _renderBacktestExport(),
     _renderDangerZone(state),
     _renderBetModal(),
     '</div>',
@@ -111,21 +113,38 @@ function _renderBankrollCard(state, pendingStake, trueCapital) {
 // -- COURBE BANKROLL -------------------------------------------------------
 
 function _renderBankrollChart(state) {
-  const bets = state.bets.filter(function(b) { return b.result !== 'PENDING'; });
+  const bets = state.bets.filter(function(b) { return b.result !== 'PENDING'; })
+    .slice().sort(function(a, b) {
+      return new Date(a.settled_at || a.placed_at) - new Date(b.settled_at || b.placed_at);
+    });
   if (bets.length < 2) return '';
 
   let bankroll = state.initial_bankroll;
-  const points = [{ x: 0, y: bankroll }];
+  const points = [{ x: 0, y: bankroll, bet: null }];
 
   bets.forEach(function(bet, i) {
     bankroll += (bet.pnl || 0);
-    points.push({ x: i + 1, y: Math.round(bankroll * 100) / 100 });
+    points.push({
+      x:   i + 1,
+      y:   Math.round(bankroll * 100) / 100,
+      bet: bet,
+    });
   });
+
+  // Max drawdown : distance max entre un peak précédent et un creux suivant
+  let peak = points[0].y;
+  let maxDD = 0;
+  points.forEach(function(p) {
+    if (p.y > peak) peak = p.y;
+    const dd = peak - p.y;
+    if (dd > maxDD) maxDD = dd;
+  });
+  const maxDDPct = peak > 0 ? Math.round(maxDD / peak * 1000) / 10 : 0;
 
   const minY   = Math.min.apply(null, points.map(function(p) { return p.y; })) * 0.98;
   const maxY   = Math.max.apply(null, points.map(function(p) { return p.y; })) * 1.02;
   const rangeY = maxY - minY || 1;
-  const W = 300, H = 80;
+  const W = 300, H = 100;
 
   function toX(i) { return (i / (points.length - 1)) * W; }
   function toY(y) { return H - ((y - minY) / rangeY) * H; }
@@ -140,21 +159,36 @@ function _renderBankrollChart(state) {
   const color    = isProfit ? '#48c78e' : '#f14668';
   const refY     = toY(state.initial_bankroll).toFixed(1);
 
+  // Points hover invisibles pour tooltip
+  const hoverCircles = points.map(function(p, i) {
+    if (!p.bet) return '';
+    const title = (p.bet.match_label || (p.bet.home + ' vs ' + p.bet.away) || 'Pari ' + i)
+      + ' · ' + (p.bet.result || '') + ' · ' + (p.bet.pnl >= 0 ? '+' : '') + (p.bet.pnl || 0).toFixed(2) + ' € · solde ' + p.y.toFixed(2) + ' €';
+    return '<circle cx="' + toX(i).toFixed(1) + '" cy="' + toY(p.y).toFixed(1) + '" r="4" fill="transparent" style="cursor:help"><title>' + title.replace(/[<>&"]/g, '') + '</title></circle>';
+  }).join('');
+
+  const ddColor = maxDDPct > 15 ? 'var(--color-danger)' : maxDDPct > 8 ? 'var(--color-warning)' : 'var(--color-text-secondary)';
+
   return [
     '<div class="card" style="margin-bottom:var(--space-4)">',
-    '<div style="font-weight:600;font-size:13px;margin-bottom:var(--space-3)">Courbe de bankroll</div>',
-    '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:80px;overflow:visible">',
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3)">',
+    '<div style="font-weight:600;font-size:13px">Courbe de bankroll</div>',
+    '<div style="font-size:10px;color:' + ddColor + '">Drawdown max : ' + maxDD.toFixed(2) + ' \u20ac (' + maxDDPct + '%)</div>',
+    '</div>',
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:100px;overflow:visible">',
     '<defs><linearGradient id="bankroll-grad" x1="0" y1="0" x2="0" y2="1">',
-    '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.3"/>',
+    '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.35"/>',
     '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/>',
     '</linearGradient></defs>',
     '<path d="' + areaData + '" fill="url(#bankroll-grad)" />',
     '<path d="' + pathData + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round"/>',
     '<line x1="0" y1="' + refY + '" x2="' + W + '" y2="' + refY + '" stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-dasharray="4,4"/>',
     '<circle cx="' + toX(points.length - 1).toFixed(1) + '" cy="' + toY(lastY).toFixed(1) + '" r="3" fill="' + color + '"/>',
+    hoverCircles,
     '</svg>',
     '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-secondary);margin-top:4px">',
     '<span>D\u00e9part : ' + state.initial_bankroll + ' \u20ac</span>',
+    '<span>' + bets.length + ' paris cl\u00f4tur\u00e9s</span>',
     '<span>Actuel : ' + lastY.toFixed(2) + ' \u20ac</span>',
     '</div>',
     '</div>',
@@ -425,6 +459,27 @@ function _detailRow(label, value, color) {
   ].join('');
 }
 
+// -- EXPORT BACKTEST -------------------------------------------------------
+// Télécharge les logs bot enrichis (variables utilisées + résultats + prob_delta)
+// sous forme CSV pour analyse offline (Excel, pandas, calibration modèle).
+
+function _renderBacktestExport() {
+  return [
+    '<div class="card" style="margin-bottom:var(--space-4)">',
+    '<div style="font-weight:600;font-size:13px;margin-bottom:var(--space-2)">Backtest (logs bot)</div>',
+    '<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:var(--space-3)">',
+    'Variables moteur, pr\u00e9dictions et r\u00e9sultats r\u00e9els. Idem pour calibrer le mod\u00e8le offline.',
+    '</div>',
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">',
+    '<button class="btn btn--ghost btn--sm" data-export-logs="nba" data-days="30">NBA 30j</button>',
+    '<button class="btn btn--ghost btn--sm" data-export-logs="nba" data-days="90">NBA 90j</button>',
+    '<button class="btn btn--ghost btn--sm" data-export-logs="mlb" data-days="30">MLB 30j</button>',
+    '<button class="btn btn--ghost btn--sm" data-export-logs="mlb" data-days="90">MLB 90j</button>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
 // -- DANGER ZONE -----------------------------------------------------------
 
 function _renderDangerZone(state) {
@@ -520,6 +575,21 @@ function _bindEvents(container, storeInstance, state) {
       }
     });
   }
+
+  // Export backtest logs (NBA/MLB) — appel Worker CSV, déclenche téléchargement
+  container.querySelectorAll('[data-export-logs]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      const sport = btn.dataset.exportLogs;
+      const days  = btn.dataset.days || '30';
+      const url   = API_CONFIG.WORKER_BASE_URL + '/bot/logs/export.csv?sport=' + sport + '&days=' + days;
+      const a     = document.createElement('a');
+      a.href      = url;
+      a.download  = 'manibetpro-' + sport + '-logs-' + days + 'd.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  });
 }
 
 function _openModal(container, bet) {

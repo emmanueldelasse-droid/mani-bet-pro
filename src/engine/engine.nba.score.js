@@ -117,6 +117,8 @@ export function explainSignal(varId, normalized, contribution) {
     defensive_diff:   `Défense ${int} ${dir} — Tank01`,
     back_to_back:     `Fatigue (match consécutif) ${int} ${dir} — ESPN`,
     rest_days_diff:   `Repos ${int} ${dir} — ESPN`,
+    b2b_cumul_diff:   `Fatigue cumulée 5 derniers matchs ${int} ${dir} — BallDontLie`,
+    travel_load_diff: `Charge de voyage 5 derniers matchs ${int} ${dir} — BallDontLie`,
   };
   return labels[varId] ?? `Variable ${varId} — signal ${int} ${dir}`;
 }

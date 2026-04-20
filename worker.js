@@ -203,6 +203,8 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(_runBotCron(env));
     ctx.waitUntil(_runMLBBotCron(env));
+    ctx.waitUntil(_runNightlySettle(env));
+    ctx.waitUntil(_runOddsSnapshot(env));
   },
 
   async fetch(request, env) {
@@ -309,6 +311,12 @@ export default {
       // ── BOT ───────────────────────────────────────────────────────────────
       if (path === '/bot/logs' && request.method === 'GET')
         return await handleBotLogs(url, env, origin);
+
+      if (path === '/bot/logs/export.csv' && request.method === 'GET')
+        return await handleBotLogsExportCSV(url, env, origin);
+
+      if (path === '/bot/odds-history' && request.method === 'GET')
+        return await handleOddsHistory(url, env, origin);
 
       if (path === '/bot/settle-logs' && request.method === 'POST')
         return await handleBotSettleLogs(request, env, origin);
@@ -2743,7 +2751,7 @@ async function _runBotCron(env, forceRun = false) {
 
   for (const match of matches) {
     try {
-      const log = await _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedData, aiInjuriesData, recentForms);
+      const log = await _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedData, aiInjuriesData, recentForms, env);
       if (!log) continue;
       await _botSaveLog(env, log);
       logs.push(log);
@@ -2769,7 +2777,7 @@ async function _runBotCron(env, forceRun = false) {
   console.log(`[BOT] Terminé — ${logs.length} matchs analysés, ${edgesFound.length} edges détectés`);
 }
 
-async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedData, aiInjuriesData, recentForms = {}) {
+async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedData, aiInjuriesData, recentForms = {}, env = null) {
   const homeName = match.home_team?.name;
   const awayName = match.away_team?.name;
   if (!homeName || !awayName) return null;
@@ -2853,6 +2861,15 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
   const missingCount = (analysis.missing_variables ?? []).length;
   const dataQuality  = totalVars > 0 ? Math.round((1 - missingCount / totalVars) * 100) / 100 : null;
 
+  // Line movement snapshot (si historique dispo dans KV)
+  let lineMovement = null;
+  if (env?.PAPER_TRADING) {
+    try {
+      const raw = await env.PAPER_TRADING.get(`${ODDS_SNAP_PREFIX}${match.id}`);
+      if (raw) lineMovement = _computeLineMovement(JSON.parse(raw));
+    } catch { /* skip */ }
+  }
+
   return {
     // Identité
     logged_at:   new Date().toISOString(),
@@ -2877,6 +2894,7 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
     confidence_penalty:    analysis.confidence_penalty ?? null,
     absences_snapshot:     absencesSnapshot,
     odds_at_analysis:      match.odds ?? null,
+    line_movement:         lineMovement,
     betting_recommendations: analysis.betting_recommendations ?? null,
     best_edge:             bestEdge,
     best_market:           bestRec?.type ?? null,
@@ -2886,7 +2904,13 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
     result_home_score: null,
     result_away_score: null,
     result_winner:     null,
+    result_margin:     null,  // home - away (positif = home gagne)
+    result_total:      null,  // total points (pour check O/U)
     motor_was_right:   null,
+    prob_delta_pts:    null,  // motor_prob - 100*actual ∈ [-100, 100] — écart calibration
+    upset:             null,  // true si underdog a gagné (|motor_prob-50|>5)
+    ou_was_right:      null,  // null si pas de reco OU, sinon true/false
+    spread_was_right:  null,  // null si pas de reco spread, sinon true/false
     clv_post_match:    null,
     settled_at:        null,
   };
@@ -3002,56 +3026,85 @@ async function handleBotLogs(url, env, origin) {
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
 
+async function _botSettleDate(env, dateStr) {
+  const espnData = await espnFetch(`${ESPN_SCOREBOARD}?dates=${dateStr}&limit=25`);
+  if (!espnData) return { settled: 0, error: 'ESPN unavailable' };
+
+  const results = parseESPNMatches(espnData, dateStr).filter(m => m.status === 'STATUS_FINAL');
+  let settled = 0;
+
+  for (const result of results) {
+    const key = `${BOT_LOG_PREFIX}${result.id}`;
+    try {
+      const raw = await env.PAPER_TRADING.get(key);
+      if (!raw) continue;
+      const log = JSON.parse(raw);
+      if (log.motor_was_right !== null) continue;
+
+      const homeScore = parseInt(result.home_team?.score ?? 0);
+      const awayScore = parseInt(result.away_team?.score ?? 0);
+      const winner    = homeScore > awayScore ? 'HOME' : 'AWAY';
+      const margin    = homeScore - awayScore;
+      const totalPts  = homeScore + awayScore;
+
+      const motorPredictedHome = (log.motor_prob ?? 50) > 50;
+      const motorWasRight      = (motorPredictedHome && winner === 'HOME') ||
+                                 (!motorPredictedHome && winner === 'AWAY');
+
+      const probDelta = log.motor_prob !== null
+        ? Math.round((log.motor_prob - (winner === 'HOME' ? 100 : 0)) * 10) / 10
+        : null;
+
+      const upset = log.motor_prob !== null && Math.abs(log.motor_prob - 50) > 5 && !motorWasRight;
+
+      let spreadWasRight = null;
+      let ouWasRight     = null;
+      const recs = log.betting_recommendations;
+      if (recs?.spread?.side && recs?.spread?.line !== undefined) {
+        const line = recs.spread.line;
+        const coverHome = (margin + line) > 0;
+        spreadWasRight = recs.spread.side === 'HOME' ? coverHome : !coverHome;
+      }
+      if (recs?.total?.side && recs?.total?.line !== undefined) {
+        const over = totalPts > recs.total.line;
+        ouWasRight = recs.total.side === 'OVER' ? over : !over;
+      }
+
+      let clvPostMatch = null;
+      if (log.motor_prob !== null && log.odds_at_analysis?.home_ml) {
+        const impliedHome = 100 / (Math.abs(log.odds_at_analysis.home_ml) + 100);
+        clvPostMatch = Math.round((log.motor_prob / 100 - impliedHome) * 10000) / 100;
+      }
+
+      log.result_home_score = homeScore;
+      log.result_away_score = awayScore;
+      log.result_winner     = winner;
+      log.result_margin     = margin;
+      log.result_total      = totalPts;
+      log.motor_was_right   = motorWasRight;
+      log.prob_delta_pts    = probDelta;
+      log.upset             = upset;
+      log.ou_was_right      = ouWasRight;
+      log.spread_was_right  = spreadWasRight;
+      log.clv_post_match    = clvPostMatch;
+      log.settled_at        = new Date().toISOString();
+
+      await env.PAPER_TRADING.put(key, JSON.stringify(log), { expirationTtl: 90 * 24 * 3600 });
+      settled++;
+    } catch (err) { console.warn(`[BOT] settle log ${result.id}:`, err.message); }
+  }
+
+  return { settled, date: dateStr };
+}
+
 async function handleBotSettleLogs(request, env, origin) {
   if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
   try {
-    // Chercher les matchs finaux du jour et enrichir les logs
     const body    = await request.json().catch(() => ({}));
     const dateStr = body.date ?? formatDateESPN(new Date());
-
-    const espnData = await espnFetch(`${ESPN_SCOREBOARD}?dates=${dateStr}&limit=25`);
-    if (!espnData) return jsonResponse({ error: 'ESPN unavailable' }, 502, origin);
-
-    const results = parseESPNMatches(espnData, dateStr).filter(m => m.status === 'STATUS_FINAL');
-    let settled = 0;
-
-    for (const result of results) {
-      const key = `${BOT_LOG_PREFIX}${result.id}`;
-      try {
-        const raw = await env.PAPER_TRADING.get(key);
-        if (!raw) continue;
-        const log = JSON.parse(raw);
-        if (log.motor_was_right !== null) continue; // déjà settlé
-
-        const homeScore = parseInt(result.home_team?.score ?? 0);
-        const awayScore = parseInt(result.away_team?.score ?? 0);
-        const winner    = homeScore > awayScore ? 'HOME' : 'AWAY';
-
-        // Le moteur prédit la victoire home si motor_prob > 50
-        const motorPredictedHome = (log.motor_prob ?? 50) > 50;
-        const motorWasRight      = (motorPredictedHome && winner === 'HOME') ||
-                                   (!motorPredictedHome && winner === 'AWAY');
-
-        // CLV post-match : comparer motor_prob vs cote de fermeture
-        let clvPostMatch = null;
-        if (log.motor_prob !== null && log.odds_at_analysis?.home_ml) {
-          const impliedHome = 100 / (Math.abs(log.odds_at_analysis.home_ml) + 100);
-          clvPostMatch = Math.round((log.motor_prob / 100 - impliedHome) * 10000) / 100;
-        }
-
-        log.result_home_score = homeScore;
-        log.result_away_score = awayScore;
-        log.result_winner     = winner;
-        log.motor_was_right   = motorWasRight;
-        log.clv_post_match    = clvPostMatch;
-        log.settled_at        = new Date().toISOString();
-
-        await env.PAPER_TRADING.put(key, JSON.stringify(log), { expirationTtl: 90 * 24 * 3600 });
-        settled++;
-      } catch (err) { console.warn(`[BOT] settle log ${result.id}:`, err.message); }
-    }
-
-    return jsonResponse({ success: true, settled }, 200, origin);
+    const res     = await _botSettleDate(env, dateStr);
+    if (res.error) return jsonResponse({ error: res.error }, 502, origin);
+    return jsonResponse({ success: true, ...res }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
 
@@ -3064,6 +3117,239 @@ async function handleBotRun(request, env, origin) {
     const list = await env.PAPER_TRADING.list({ prefix: BOT_LOG_PREFIX });
     return jsonResponse({ success: true, note: 'Bot run terminé', logs_written: list.keys?.length ?? 0 }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
+}
+
+// ── CRON NIGHTLY AUTO-SETTLE ──────────────────────────────────────────────────
+// Tourne une fois par jour à 10h UTC (12h Paris), après fin des matchs US.
+// Settle J-1 et J-2 (sécurité matchs prolongés / data ESPN retardée).
+// Key NIGHTLY_SETTLE_RUN_KEY évite double run dans la journée.
+const NIGHTLY_SETTLE_RUN_KEY = 'bot_nightly_settle_last_run';
+
+async function _runNightlySettle(env) {
+  if (!env.PAPER_TRADING) return;
+  try {
+    const now = new Date();
+    if (now.getUTCHours() !== 10) return; // cron horaire, on ne tourne que 1x/j
+
+    const todayStr = formatDateESPN(now);
+    const lastRun = await env.PAPER_TRADING.get(NIGHTLY_SETTLE_RUN_KEY);
+    if (lastRun === todayStr) {
+      console.log('[NIGHTLY SETTLE] Déjà tourné aujourd\'hui');
+      return;
+    }
+
+    // Settler J-1 et J-2
+    const dates = [];
+    for (let d = 1; d <= 2; d++) {
+      const dt = new Date(now);
+      dt.setUTCDate(dt.getUTCDate() - d);
+      dates.push(formatDateESPN(dt));
+    }
+
+    const results = { nba: [], mlb: [] };
+    for (const ds of dates) {
+      try {
+        const nba = await _botSettleDate(env, ds);
+        results.nba.push({ date: ds, settled: nba.settled, error: nba.error });
+      } catch (err) { console.warn(`[NIGHTLY SETTLE] NBA ${ds}:`, err.message); }
+      try {
+        const mlb = await _mlbBotSettleDate(env, ds);
+        results.mlb.push({ date: ds, settled: mlb.settled, error: mlb.error });
+      } catch (err) { console.warn(`[NIGHTLY SETTLE] MLB ${ds}:`, err.message); }
+    }
+
+    await env.PAPER_TRADING.put(NIGHTLY_SETTLE_RUN_KEY, todayStr, { expirationTtl: 48 * 3600 });
+    console.log('[NIGHTLY SETTLE]', JSON.stringify(results));
+  } catch (err) { console.warn('[NIGHTLY SETTLE] error:', err.message); }
+}
+
+// ── LINE MOVEMENT TRACKING ────────────────────────────────────────────────────
+// Snapshot horaire des cotes ESPN (NBA + MLB) pour détecter les mouvements.
+// Sharp money = ligne qui bouge vite & contre l'argent public. Signal prédictif.
+// Clé KV : odds_snap_{matchId} → array [{ t, home_ml, away_ml, spread, total }]
+// Tronqué à 48 points (2 jours × 24 h) + TTL 72h.
+const ODDS_SNAP_PREFIX  = 'odds_snap_';
+const ODDS_SNAP_MAX_PTS = 48;
+
+async function _runOddsSnapshot(env) {
+  if (!env.PAPER_TRADING) return;
+  try {
+    const now = new Date();
+    const today = formatDateESPN(now);
+    const tomorrow = formatDateESPN(new Date(now.getTime() + 24 * 3600 * 1000));
+
+    const snapshot = async (url, prefix) => {
+      try {
+        const data = await espnFetch(url);
+        if (!data?.events) return 0;
+        let count = 0;
+        for (const event of data.events) {
+          const comp  = event.competitions?.[0];
+          const odds  = comp?.odds?.[0];
+          if (!odds || event.status?.type?.name === 'STATUS_FINAL') continue;
+
+          const homeML = odds?.moneyline?.home?.close?.odds != null ? Number(odds.moneyline.home.close.odds) : null;
+          const awayML = odds?.moneyline?.away?.close?.odds != null ? Number(odds.moneyline.away.close.odds) : null;
+          if (homeML === null && awayML === null && odds.spread == null) continue;
+
+          const key  = `${prefix}${event.id}`;
+          const raw  = await env.PAPER_TRADING.get(key);
+          const arr  = raw ? JSON.parse(raw) : [];
+          arr.push({
+            t:        now.toISOString(),
+            home_ml:  homeML,
+            away_ml:  awayML,
+            spread:   odds.spread ?? null,
+            total:    odds.overUnder ?? null,
+          });
+          if (arr.length > ODDS_SNAP_MAX_PTS) arr.splice(0, arr.length - ODDS_SNAP_MAX_PTS);
+          await env.PAPER_TRADING.put(key, JSON.stringify(arr), { expirationTtl: 72 * 3600 });
+          count++;
+        }
+        return count;
+      } catch (err) {
+        console.warn('[ODDS SNAP]', err.message);
+        return 0;
+      }
+    };
+
+    const nba1 = await snapshot(`${ESPN_SCOREBOARD}?dates=${today}&limit=25`, ODDS_SNAP_PREFIX);
+    const nba2 = await snapshot(`${ESPN_SCOREBOARD}?dates=${tomorrow}&limit=25`, ODDS_SNAP_PREFIX);
+    const mlb1 = await snapshot(`${ESPN_MLB_SCOREBOARD}?dates=${today}&limit=25`, ODDS_SNAP_PREFIX);
+    const mlb2 = await snapshot(`${ESPN_MLB_SCOREBOARD}?dates=${tomorrow}&limit=25`, ODDS_SNAP_PREFIX);
+    console.log(`[ODDS SNAP] NBA=${nba1 + nba2} MLB=${mlb1 + mlb2}`);
+  } catch (err) { console.warn('[ODDS SNAP] error:', err.message); }
+}
+
+/**
+ * Récupère l'historique des cotes pour un match + calcule le mouvement agrégé.
+ * GET /bot/odds-history?matchId=X
+ */
+async function handleOddsHistory(url, env, origin) {
+  if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
+  const matchId = url.searchParams.get('matchId');
+  if (!matchId) return jsonResponse({ error: 'matchId required' }, 400, origin);
+  try {
+    const raw = await env.PAPER_TRADING.get(`${ODDS_SNAP_PREFIX}${matchId}`);
+    if (!raw) return jsonResponse({ available: false, snapshots: [], movement: null }, 200, origin);
+    const arr = JSON.parse(raw);
+    return jsonResponse({
+      available:  true,
+      snapshots:  arr,
+      movement:   _computeLineMovement(arr),
+    }, 200, origin);
+  } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
+}
+
+/**
+ * Analyse mouvement : delta entre 1ère et dernière snapshot.
+ * Retourne { home_ml_delta, spread_delta, total_delta, direction }.
+ * direction: SHARP_HOME (ligne home tightens), SHARP_AWAY, NEUTRAL.
+ */
+function _computeLineMovement(arr) {
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const first = arr[0];
+  const last  = arr[arr.length - 1];
+
+  const homeMLDelta = (first.home_ml != null && last.home_ml != null) ? last.home_ml - first.home_ml : null;
+  const spreadDelta = (first.spread != null && last.spread != null) ? last.spread - first.spread : null;
+  const totalDelta  = (first.total != null && last.total != null) ? last.total - first.total : null;
+
+  let direction = 'NEUTRAL';
+  // Home ML baisse (cote plus courte) = sharp sur home
+  if (homeMLDelta !== null && Math.abs(homeMLDelta) >= 10) {
+    direction = homeMLDelta < 0 ? 'SHARP_HOME' : 'SHARP_AWAY';
+  } else if (spreadDelta !== null && Math.abs(spreadDelta) >= 1.0) {
+    direction = spreadDelta < 0 ? 'SHARP_HOME' : 'SHARP_AWAY';
+  }
+
+  return {
+    first_at:      first.t,
+    last_at:       last.t,
+    snapshots:     arr.length,
+    home_ml_delta: homeMLDelta,
+    spread_delta:  spreadDelta,
+    total_delta:   totalDelta,
+    direction,
+  };
+}
+
+// ── EXPORT CSV LOGS (backtest offline) ────────────────────────────────────────
+// GET /bot/logs/export.csv?sport=nba|mlb&days=N
+// Colonnes : toutes les variables explicatives + outcome + deltas → feed Excel / pandas.
+async function handleBotLogsExportCSV(url, env, origin) {
+  if (!env.PAPER_TRADING) return new Response('KV not configured', { status: 500, headers: corsHeaders(origin) });
+  try {
+    const sport  = (url.searchParams.get('sport') ?? 'nba').toLowerCase();
+    const days   = Math.min(parseInt(url.searchParams.get('days') ?? '90'), 90);
+    const prefix = sport === 'mlb' ? MLB_BOT_LOG_PREFIX : BOT_LOG_PREFIX;
+
+    const list = await env.PAPER_TRADING.list({ prefix });
+    const keys = (list.keys ?? []).map(k => k.name);
+
+    const cutoff = Date.now() - days * 24 * 3600 * 1000;
+    const logs = [];
+    await Promise.all(keys.map(async key => {
+      try {
+        const raw = await env.PAPER_TRADING.get(key);
+        if (!raw) return;
+        const log = JSON.parse(raw);
+        if (log.logged_at && new Date(log.logged_at).getTime() >= cutoff) logs.push(log);
+      } catch { /* skip */ }
+    }));
+
+    logs.sort((a, b) => new Date(a.logged_at) - new Date(b.logged_at));
+
+    const colsCommon = [
+      'logged_at', 'settled_at', 'match_id', 'date', 'home', 'away',
+      'motor_prob', 'confidence_level', 'data_quality', 'best_edge', 'best_market', 'best_side',
+      'result_home_score', 'result_away_score', 'result_winner', 'result_margin', 'result_total',
+      'motor_was_right', 'prob_delta_pts', 'upset', 'ou_was_right', 'spread_was_right', 'clv_post_match',
+    ];
+    const colsNbaExtra = [
+      'var_net_rating_diff', 'var_efg_diff', 'var_ts_pct', 'var_win_pct_diff',
+      'var_home_away_split', 'var_recent_form_ema', 'var_absences_impact',
+      'var_pace_diff', 'var_rest_days_diff', 'home_out', 'away_out',
+    ];
+    const colsMlbExtra = [
+      'home_prob', 'away_prob', 'home_pitcher', 'away_pitcher',
+      'home_pitcher_fip', 'away_pitcher_fip', 'est_total_runs',
+    ];
+    const cols = sport === 'mlb' ? [...colsCommon.filter(c => c !== 'motor_prob'), ...colsMlbExtra]
+                                 : [...colsCommon, ...colsNbaExtra];
+
+    const esc = v => {
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'object') return `"${JSON.stringify(v).replace(/"/g, '""')}"`;
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const header = cols.join(',');
+    const rows = logs.map(log => cols.map(col => {
+      if (col.startsWith('var_')) {
+        const varName = col.slice(4);
+        return esc(log.variables_used?.[varName] ?? log.variables?.[varName] ?? '');
+      }
+      if (col === 'home_out')  return esc(log.absences_snapshot?.home_out ?? '');
+      if (col === 'away_out')  return esc(log.absences_snapshot?.away_out ?? '');
+      return esc(log[col]);
+    }).join(','));
+
+    const csv = [header, ...rows].join('\n');
+    const filename = `manibetpro-${sport}-logs-${days}d.csv`;
+
+    return new Response(csv, {
+      status:  200,
+      headers: {
+        'Content-Type':        'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        ...corsHeaders(origin),
+      },
+    });
+  } catch (err) {
+    return new Response(`error: ${err.message}`, { status: 500, headers: corsHeaders(origin) });
+  }
 }
 
 // ── MOTEUR NBA PORTÉ CÔTÉ WORKER ──────────────────────────────────────────────
@@ -3148,12 +3434,14 @@ function _botGetWeights() {
   const isPlayoff  = phase === 'playin' || phase === 'playoff';
   const weights    = isPlayoff ? {
     absences_impact: 0.30, recent_form_ema: 0.24, home_away_split: 0.14,
-    defensive_diff: 0.12, net_rating_diff: 0.08, rest_days_diff: 0.06,
-    efg_diff: 0.04, win_pct_diff: 0.02, back_to_back: 0.00,
+    defensive_diff: 0.12, net_rating_diff: 0.06, rest_days_diff: 0.06,
+    efg_diff: 0.04, travel_load_diff: 0.02, win_pct_diff: 0.02,
+    back_to_back: 0.00, b2b_cumul_diff: 0.00,
   } : {
-    net_rating_diff: 0.24, efg_diff: 0.18, recent_form_ema: 0.16,
+    net_rating_diff: 0.22, efg_diff: 0.18, recent_form_ema: 0.16,
     home_away_split: 0.10, absences_impact: 0.20, defensive_diff: 0.02,
-    win_pct_diff: 0.05, back_to_back: 0.03, rest_days_diff: 0.02,
+    win_pct_diff: 0.04, back_to_back: 0.02, rest_days_diff: 0.02,
+    b2b_cumul_diff: 0.02, travel_load_diff: 0.02,
   };
   return {
     weights, phase,
@@ -3210,6 +3498,14 @@ function _botExtractVariables(data, emaLambda = 0.85) {
   // Recent form EMA (BDL)
   const recentFormEma = _botComputeEMADiff(data?.home_recent, data?.away_recent, emaLambda);
 
+  // v6.45 — B2B cumulé & charge voyage (BDL last 5)
+  const homeB2B5     = _botCountB2BInLast5(data?.home_recent);
+  const awayB2B5     = _botCountB2BInLast5(data?.away_recent);
+  const homeAway5    = _botCountAwayGamesInLast5(data?.home_recent);
+  const awayAway5    = _botCountAwayGamesInLast5(data?.away_recent);
+  const b2bCumulDiff  = (homeB2B5 !== null && awayB2B5 !== null) ? awayB2B5 - homeB2B5 : null;
+  const travelDiff    = (homeAway5 !== null && awayAway5 !== null) ? awayAway5 - homeAway5 : null;
+
   return {
     net_rating_diff: { value: netDiffRaw,   source: 'tank01',           quality: netDiffRaw  != null ? 'OK' : 'MISSING' },
     efg_diff:        { value: efgDiffRaw,   source: 'espn_scoreboard',  quality: efgDiffRaw  != null ? 'OK' : 'MISSING' },
@@ -3220,7 +3516,29 @@ function _botExtractVariables(data, emaLambda = 0.85) {
     defensive_diff:  { value: defDiffRaw,   source: 'tank01',           quality: defDiffRaw  != null ? 'OK' : 'MISSING' },
     back_to_back:    { value: b2bVal,       source: 'espn_scoreboard',  quality: 'OK' },
     rest_days_diff:  { value: restDiffRaw,  source: 'espn_scoreboard',  quality: restDiffRaw != null ? 'OK' : 'MISSING' },
+    b2b_cumul_diff:  { value: b2bCumulDiff, source: 'balldontlie_v1',   quality: b2bCumulDiff !== null ? 'OK' : 'MISSING', raw: { home_b2b_last5: homeB2B5, away_b2b_last5: awayB2B5 } },
+    travel_load_diff:{ value: travelDiff,   source: 'balldontlie_v1',   quality: travelDiff   !== null ? 'OK' : 'MISSING', raw: { home_away_last5: homeAway5, away_away_last5: awayAway5 } },
   };
+}
+
+function _botCountB2BInLast5(recentForm) {
+  if (!recentForm?.matches?.length) return null;
+  const m = recentForm.matches.slice(0, 5).filter(x => x.date);
+  if (m.length < 2) return null;
+  let count = 0;
+  for (let i = 0; i < m.length - 1; i++) {
+    const d1 = new Date(m[i].date + 'T12:00:00');
+    const d2 = new Date(m[i + 1].date + 'T12:00:00');
+    if (Math.round((d1 - d2) / 86400000) === 1) count++;
+  }
+  return count;
+}
+
+function _botCountAwayGamesInLast5(recentForm) {
+  if (!recentForm?.matches?.length) return null;
+  const m = recentForm.matches.slice(0, 5).filter(x => x.is_home !== undefined);
+  if (m.length === 0) return null;
+  return m.filter(x => x.is_home === false).length;
 }
 
 function _botComputeAbsencesImpact(homeInj, awayInj) {
@@ -3276,6 +3594,8 @@ function _botNormalizeVariables(variables) {
     defensive_diff:  _clampNorm(variables.defensive_diff?.value,  -5,    5),
     back_to_back:    variables.back_to_back?.value    ?? null,
     rest_days_diff:  _clampNorm(variables.rest_days_diff?.value,  -3,    3),
+    b2b_cumul_diff:  _clampNorm(variables.b2b_cumul_diff?.value,  -3,    3),
+    travel_load_diff: _clampNorm(variables.travel_load_diff?.value, -5, 5),
   };
 }
 
@@ -4726,7 +5046,12 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData)
     result_home_score: null,
     result_away_score: null,
     result_winner:     null,
+    result_margin:     null,
+    result_total:      null,
     motor_was_right:   null,
+    prob_delta_pts:    null,
+    upset:             null,
+    ou_was_right:      null,
     settled_at:        null,
   };
 }
@@ -4891,45 +5216,69 @@ async function handleMLBBotLogs(url, env, origin) {
 }
 
 // ── HANDLER SETTLER MLB ───────────────────────────────────────────────────────
+async function _mlbBotSettleDate(env, dateStr) {
+  const espnData = await espnFetch(`${ESPN_MLB_SCOREBOARD}?dates=${dateStr}&limit=25`);
+  if (!espnData) return { settled: 0, error: 'ESPN unavailable' };
+
+  const results = parseESPNMLBMatches(espnData, dateStr).filter(m => m.status === 'STATUS_FINAL');
+  let settled = 0;
+
+  for (const result of results) {
+    const key = `${MLB_BOT_LOG_PREFIX}${result.id}`;
+    try {
+      const raw = await env.PAPER_TRADING.get(key);
+      if (!raw) continue;
+      const log = JSON.parse(raw);
+      if (log.motor_was_right !== null) continue;
+
+      const homeScore = parseInt(result.home_team?.score ?? 0);
+      const awayScore = parseInt(result.away_team?.score ?? 0);
+      const winner    = homeScore > awayScore ? 'HOME' : 'AWAY';
+      const margin    = homeScore - awayScore;
+      const totalRuns = homeScore + awayScore;
+
+      const motorPredictedHome = (log.home_prob ?? 50) > 50;
+      const motorWasRight      = (motorPredictedHome && winner === 'HOME') ||
+                                 (!motorPredictedHome && winner === 'AWAY');
+
+      const probDelta = log.home_prob !== null
+        ? Math.round((log.home_prob - (winner === 'HOME' ? 100 : 0)) * 10) / 10
+        : null;
+      const upset = log.home_prob !== null && Math.abs(log.home_prob - 50) > 5 && !motorWasRight;
+
+      let ouWasRight = null;
+      const recBest = log.betting_recommendations?.best;
+      if (recBest?.market === 'total' && recBest?.line !== undefined && recBest?.side) {
+        const over = totalRuns > recBest.line;
+        ouWasRight = recBest.side === 'OVER' ? over : !over;
+      }
+
+      log.result_home_score = homeScore;
+      log.result_away_score = awayScore;
+      log.result_winner     = winner;
+      log.result_margin     = margin;
+      log.result_total      = totalRuns;
+      log.motor_was_right   = motorWasRight;
+      log.prob_delta_pts    = probDelta;
+      log.upset             = upset;
+      log.ou_was_right      = ouWasRight;
+      log.settled_at        = new Date().toISOString();
+
+      await env.PAPER_TRADING.put(key, JSON.stringify(log), { expirationTtl: 90 * 24 * 3600 });
+      settled++;
+    } catch (err) { console.warn(`[MLB BOT] settle ${result.id}:`, err.message); }
+  }
+
+  return { settled, date: dateStr };
+}
+
 async function handleMLBBotSettleLogs(request, env, origin) {
   if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
   try {
     const body    = await request.json().catch(() => ({}));
     const dateStr = body.date ?? new Date().toISOString().split('T')[0].replace(/-/g, '');
-
-    const espnData = await espnFetch(`${ESPN_MLB_SCOREBOARD}?dates=${dateStr}&limit=25`);
-    if (!espnData) return jsonResponse({ error: 'ESPN unavailable' }, 502, origin);
-
-    const results = parseESPNMLBMatches(espnData, dateStr).filter(m => m.status === 'STATUS_FINAL');
-    let settled = 0;
-
-    for (const result of results) {
-      const key = `${MLB_BOT_LOG_PREFIX}${result.id}`;
-      try {
-        const raw = await env.PAPER_TRADING.get(key);
-        if (!raw) continue;
-        const log = JSON.parse(raw);
-        if (log.motor_was_right !== null) continue;
-
-        const homeScore = parseInt(result.home_team?.score ?? 0);
-        const awayScore = parseInt(result.away_team?.score ?? 0);
-        const winner    = homeScore > awayScore ? 'HOME' : 'AWAY';
-
-        const motorPredictedHome = (log.home_prob ?? 50) > 50;
-        const motorWasRight      = (motorPredictedHome && winner === 'HOME') ||
-                                   (!motorPredictedHome && winner === 'AWAY');
-
-        log.result_home_score = homeScore;
-        log.result_away_score = awayScore;
-        log.result_winner     = winner;
-        log.motor_was_right   = motorWasRight;
-        log.settled_at        = new Date().toISOString();
-
-        await env.PAPER_TRADING.put(key, JSON.stringify(log), { expirationTtl: 90 * 24 * 3600 });
-        settled++;
-      } catch (err) { console.warn(`[MLB BOT] settle ${result.id}:`, err.message); }
-    }
-
-    return jsonResponse({ success: true, settled }, 200, origin);
+    const res     = await _mlbBotSettleDate(env, dateStr);
+    if (res.error) return jsonResponse({ error: res.error }, 502, origin);
+    return jsonResponse({ success: true, ...res }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }

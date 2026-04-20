@@ -78,6 +78,8 @@ export function extractVariables(data) {
 
     back_to_back:   computeBackToBack(data),
     rest_days_diff: computeRestDiff(data),
+    b2b_cumul_diff: computeB2BCumulDiff(data),
+    travel_load_diff: computeTravelLoadDiff(data),
   };
 }
 
@@ -96,6 +98,10 @@ export function normalizeVariables(variables) {
     back_to_back:    variables.back_to_back?.value    ?? null,
     rest_days_diff:  clampNormalize(variables.rest_days_diff?.value,  -3,    3),
     defensive_diff:  clampNormalize(variables.defensive_diff?.value,  -5,    5),
+    // b2b_cumul_diff : écart max ±3 (0 vs 3 B2B sur 5 derniers matchs)
+    b2b_cumul_diff:  clampNormalize(variables.b2b_cumul_diff?.value,  -3,    3),
+    // travel_load_diff : écart max ±5 (0 vs 5 away sur 5 derniers matchs)
+    travel_load_diff: clampNormalize(variables.travel_load_diff?.value, -5, 5),
   };
 }
 
@@ -309,4 +315,36 @@ function computeRestDiff(data) {
   const h = data?.home_rest_days ?? null, a = data?.away_rest_days ?? null;
   if (h === null || a === null) return { value: null, source: 'espn_schedule', quality: 'MISSING' };
   return { value: Math.max(-3, Math.min(3, h - a)), source: 'espn_schedule', quality: 'VERIFIED', raw: { home_rest: h, away_rest: a } };
+}
+
+/**
+ * B2B cumulé — diff entre nb B2B home et away sur les 5 derniers matchs.
+ * Positif = away a plus de B2B récents → avantage home.
+ * Inversion du signe car b2b = fatigue (néfaste pour l'équipe concernée).
+ */
+function computeB2BCumulDiff(data) {
+  const h = data?.home_b2b_last5 ?? null, a = data?.away_b2b_last5 ?? null;
+  if (h === null || a === null) return { value: null, source: 'balldontlie_v1', quality: 'MISSING' };
+  // Positif = avantage home (home a moins de B2B que away)
+  return {
+    value:   a - h,
+    source:  'balldontlie_v1',
+    quality: 'VERIFIED',
+    raw:     { home_b2b_last5: h, away_b2b_last5: a },
+  };
+}
+
+/**
+ * Charge de voyage — diff entre nb away games home et away sur les 5 derniers matchs.
+ * Positif = away a plus voyagé récemment → avantage home (fatigue voyage, décalage).
+ */
+function computeTravelLoadDiff(data) {
+  const h = data?.home_away_games_last5 ?? null, a = data?.away_away_games_last5 ?? null;
+  if (h === null || a === null) return { value: null, source: 'balldontlie_v1', quality: 'MISSING' };
+  return {
+    value:   a - h,
+    source:  'balldontlie_v1',
+    quality: 'VERIFIED',
+    raw:     { home_away_last5: h, away_away_last5: a },
+  };
 }
