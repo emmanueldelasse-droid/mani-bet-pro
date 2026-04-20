@@ -386,15 +386,15 @@ function _renderTDTop10(match, teamDetail, injReport) {
             const status  = absentMap.get((p.name ?? '').toLowerCase()) ?? null;
             const absent  = status !== null;
             const badge   = absent ? (STATUS_BADGE[status] ?? { label: status, color: '#ef4444' }) : null;
-            const star    = p.pts >= 20;
+            const star    = p.ppg >= 20;
             const bg      = absent ? 'rgba(239,68,68,0.06)' : i % 2 === 0 ? '' : 'var(--color-bg)';
             return `
               <tr style="background:${bg};border-bottom:1px solid var(--color-border);${absent ? 'opacity:0.65' : ''}">
                 <td style="padding:6px 6px;color:var(--color-text);white-space:nowrap;overflow:hidden;max-width:110px;text-overflow:ellipsis">
                   ${star ? '⭐ ' : ''}${p.name ?? '—'}${absent ? ` <span style="font-size:9px;color:${badge.color};font-weight:700;margin-left:3px">${badge.label}</span>` : ''}
                 </td>
-                <td style="padding:6px 4px;text-align:center;font-weight:600">${p.pts?.toFixed(1) ?? '—'}</td>
-                <td style="padding:6px 4px;text-align:center;font-size:10px">${_l5Display(p.pts, p.last5pts)}</td>
+                <td style="padding:6px 4px;text-align:center;font-weight:600">${p.ppg?.toFixed(1) ?? '—'}</td>
+                <td style="padding:6px 4px;text-align:center;font-size:10px">${_l5Display(p.ppg, p.last5_ppg)}</td>
                 <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.reb?.toFixed(1) ?? '—'}</td>
                 <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.ast?.toFixed(1) ?? '—'}</td>
                 <td style="padding:6px 4px;text-align:center;color:var(--color-text-secondary)">${p.stl?.toFixed(1) ?? '—'}</td>
@@ -494,7 +494,12 @@ function _renderTDH2H_OU(match, teamDetail) {
 
   const calcOU = (games) => {
     if (!ouLine || !games?.length) return null;
-    const withTotal = games.filter(g => g.total !== null && g.total !== undefined);
+    const withTotal = games
+      .map(g => {
+        const t = g.total ?? (g.teamPts != null && g.oppPts != null ? g.teamPts + g.oppPts : null);
+        return { ...g, total: t };
+      })
+      .filter(g => g.total !== null && g.total !== undefined);
     if (!withTotal.length) return null;
     const over  = withTotal.filter(g => g.total > ouLine).length;
     const under = withTotal.filter(g => g.total < ouLine).length;
