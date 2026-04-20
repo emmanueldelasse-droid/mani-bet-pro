@@ -2484,14 +2484,14 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
     match_id:            match.id,
     home_season_stats:   Object.assign({}, match.home_season_stats ?? {}, {
       name: homeName,
-      net_rating:        advanced[homeName]?.net_rating        ?? advanced[homeAbv]?.net_rating        ?? null,
-      defensive_rating:  advanced[homeName]?.defensive_rating  ?? advanced[homeAbv]?.defensive_rating  ?? null,
+      net_rating:        advanced[homeName]?.net_rating        ?? advanced[homeAbv]?.net_rating        ?? advanced[homeAbv]?.net_rating_approx ?? null,
+      defensive_rating:  advanced[homeName]?.defensive_rating  ?? advanced[homeAbv]?.defensive_rating  ?? advanced[homeAbv]?.oppg              ?? null,
       pace:              advanced[homeName]?.pace               ?? advanced[homeAbv]?.pace               ?? null,
     }),
     away_season_stats:   Object.assign({}, match.away_season_stats ?? {}, {
       name: awayName,
-      net_rating:        advanced[awayName]?.net_rating        ?? advanced[awayAbv]?.net_rating        ?? null,
-      defensive_rating:  advanced[awayName]?.defensive_rating  ?? advanced[awayAbv]?.defensive_rating  ?? null,
+      net_rating:        advanced[awayName]?.net_rating        ?? advanced[awayAbv]?.net_rating        ?? advanced[awayAbv]?.net_rating_approx ?? null,
+      defensive_rating:  advanced[awayName]?.defensive_rating  ?? advanced[awayAbv]?.defensive_rating  ?? advanced[awayAbv]?.oppg              ?? null,
       pace:              advanced[awayName]?.pace               ?? advanced[awayAbv]?.pace               ?? null,
     }),
     home_injuries:       mergedHome.length > 0 ? mergedHome : null,
@@ -2501,10 +2501,10 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
     market_odds:         marketOdds,
     home_recent:         homeRecent,
     away_recent:         awayRecent,
-    home_back_to_back:   false,
-    away_back_to_back:   false,
-    home_rest_days:      null,
-    away_rest_days:      null,
+    home_back_to_back:   _botIsBackToBack(homeRecent, match.datetime),
+    away_back_to_back:   _botIsBackToBack(awayRecent, match.datetime),
+    home_rest_days:      _botComputeRestDays(homeRecent, match.datetime),
+    away_rest_days:      _botComputeRestDays(awayRecent, match.datetime),
     home_last5_avg_pts:  null,
     away_last5_avg_pts:  null,
   };
@@ -2810,6 +2810,20 @@ function _botComputeEMADiff(homeRecent, awayRecent, lambda = 0.85) {
     source:  'balldontlie_v1',
     quality: (homeRecent.matches.length >= 5 && awayRecent.matches.length >= 5) ? 'VERIFIED' : 'LOW_SAMPLE',
   };
+}
+
+function _botComputeRestDays(recentData, matchDatetime) {
+  if (!recentData?.matches?.length || !matchDatetime) return null;
+  const lastGameDate = new Date(recentData.matches[0].date);
+  const matchDate    = new Date(matchDatetime);
+  const diff = Math.round((matchDate - lastGameDate) / (1000 * 60 * 60 * 24));
+  if (diff < 0) return null;
+  return Math.max(0, diff - 1);
+}
+
+function _botIsBackToBack(recentData, matchDatetime) {
+  const rest = _botComputeRestDays(recentData, matchDatetime);
+  return rest === 0;
 }
 
 function _botGetNBAPhase() {
