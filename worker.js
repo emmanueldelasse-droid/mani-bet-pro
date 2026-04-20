@@ -431,7 +431,7 @@ async function handleNBATeamDetail(url, env, origin) {
       if (!_rd.n) { _rd.n = teamsArr.length; _rd.abvs = teamsArr.slice(0, 5).map(t => t?.teamAbv ?? '?'); }
       const abv  = String(teamAbv || '').toUpperCase();
       const team = teamsArr.find(t => String(t?.teamAbv ?? t?.abbr ?? '').toUpperCase() === abv);
-      const rr = team?.roster ?? null;
+      const rr = team?.Roster ?? team?.roster ?? null;
       const roster = Array.isArray(rr) ? rr : (rr && typeof rr === 'object' ? Object.values(rr) : []);
       if (!_rd.rosterType && rr !== null) _rd.rosterType = Array.isArray(rr) ? 'array' : typeof rr;
       if (team && !_rd.teamKeys.length) _rd.teamKeys = Object.keys(team).slice(0, 20);
