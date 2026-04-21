@@ -386,7 +386,7 @@ function _renderDetailPanel(log) {
           ? `${r.player} ${r.side} ${r.line}`
           : `${r.type} ${r.side}`;
         const extra = r.type === 'PLAYER_POINTS'
-          ? ` · proj ${r.projected_pts} · ${r.odds_source ?? ''}`
+          ? ` · proj ${r.projected_pts} · conf ${r.confidence_label ?? '—'}${r.edge_raw && r.edge_raw !== r.edge ? ` (raw ${r.edge_raw}%→${r.edge}%)` : ''} · ${r.odds_source ?? ''}`
           : '';
         return `<div class="bot-detail-row">
         <span>${label}</span>
@@ -428,9 +428,12 @@ function _renderPlayerPropsSection(log) {
       ? ` · edge O:${mk.over_edge ?? '—'}% U:${mk.under_edge ?? '—'}%`
       : '';
     const model = p.model === 'pts_per_min' ? 'pts/min' : 'ppg';
+    const conf  = p.confidence?.label
+      ? ` · <span style="color:${p.confidence.label === 'high' ? 'var(--color-success)' : p.confidence.label === 'low' ? 'var(--color-danger)' : 'var(--color-warning)'}">conf ${p.confidence.label}</span>`
+      : '';
     return `<div class="bot-detail-row">
       <span>${p.name} (${p.team})</span>
-      <span class="bot-detail-row__val">${p.projected_pts} pts [${model}]${line}${edge}</span>
+      <span class="bot-detail-row__val">${p.projected_pts} pts [${model}]${line}${edge}${conf}</span>
     </div>`;
   }).join('');
 
