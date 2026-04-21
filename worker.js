@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.55
+ * MANI BET PRO — Cloudflare Worker v6.56
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -387,7 +387,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.55.0',
+          version:   '6.56.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -5123,6 +5123,23 @@ function parseESPNMatches(data, dateStr) {
       console.warn(`[ESPN] moneyline null pour ${event.name}`);
     }
 
+    // Score série playoff (si présent) · ESPN : competition.series{title,summary,competitors[].wins}
+    const seriesRaw = competition.series ?? event.series ?? null;
+    let playoffSeries = null;
+    if (seriesRaw) {
+      const srcCompetitors = Array.isArray(seriesRaw.competitors) ? seriesRaw.competitors : [];
+      const homeSrc = srcCompetitors.find(c => c.id === home?.team?.id);
+      const awaySrc = srcCompetitors.find(c => c.id === away?.team?.id);
+      playoffSeries = {
+        title:       seriesRaw.title      ?? null,
+        summary:     seriesRaw.summary    ?? seriesRaw.description ?? null,
+        type:        seriesRaw.type       ?? null,
+        total_games: seriesRaw.totalCompetitions ?? null,
+        home_wins:   homeSrc?.wins ?? null,
+        away_wins:   awaySrc?.wins ?? null,
+      };
+    }
+
     return {
       id:            event.id,
       espn_id:       event.id,
@@ -5145,9 +5162,10 @@ function parseESPNMatches(data, dateStr) {
         away_favorite: odds.awayTeamOdds?.favorite ?? null,
         fetched_at:    new Date().toISOString(),
       } : null,
-      venue:      competition.venue?.fullName ?? null,
-      source:     'espn',
-      fetched_at: new Date().toISOString(),
+      venue:          competition.venue?.fullName ?? null,
+      playoff_series: playoffSeries,
+      source:         'espn',
+      fetched_at:     new Date().toISOString(),
     };
   });
 }

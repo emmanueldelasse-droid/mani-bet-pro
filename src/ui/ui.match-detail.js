@@ -690,8 +690,40 @@ function renderBlocTousLesParis(analysis, match) {
     if (underOdds) rows.push(buildRow(`Moins de ${ou} pts`, 'OVER_UNDER', 'UNDER', recUnder?.motor_prob ?? null, underOdds, recUnder, null, ou));
   }
 
+  // ── Props joueur (v6.56) · ligne marché via TheOddsAPI ou cache AI ─────
+  const ppPred    = analysis?.player_props_prediction;
+  const ppPlayers = ppPred?.available
+    ? [...(ppPred.home_players ?? []), ...(ppPred.away_players ?? [])].filter(p => p.market)
+    : [];
+  // Trier par edge absolu décroissant (meilleurs edges en premier)
+  ppPlayers.sort((a, b) => {
+    const eA = Math.max(a.market?.over_edge ?? -99, a.market?.under_edge ?? -99);
+    const eB = Math.max(b.market?.over_edge ?? -99, b.market?.under_edge ?? -99);
+    return eB - eA;
+  });
+
+  const ppRows = [];
+  for (const p of ppPlayers) {
+    const mk        = p.market;
+    const line      = mk.line;
+    const overEdge  = mk.over_edge;
+    const underEdge = mk.under_edge;
+    const overProb  = mk.over_prob != null ? Math.round(mk.over_prob * 100) : null;
+    const underProb = mk.under_prob != null ? Math.round(mk.under_prob * 100) : null;
+    const overOdds  = mk.over_decimal;
+    const underOdds = mk.under_decimal;
+
+    // Chercher la reco correspondante (déjà push dans betting_recommendations)
+    const recOver  = betting?.recommendations?.find(r => r.type === 'PLAYER_POINTS' && r.player === p.name && r.side === 'OVER');
+    const recUnder = betting?.recommendations?.find(r => r.type === 'PLAYER_POINTS' && r.player === p.name && r.side === 'UNDER');
+
+    if (overOdds)  ppRows.push(buildRow(`${p.name} plus de ${line}`,  'PLAYER_POINTS', 'OVER',  overProb,  overOdds,  recOver,  null, line));
+    if (underOdds) ppRows.push(buildRow(`${p.name} moins de ${line}`, 'PLAYER_POINTS', 'UNDER', underProb, underOdds, recUnder, null, line));
+  }
+
   const validRows = rows.filter(Boolean);
-  if (!validRows.length) return '';
+  const validPpRows = ppRows.filter(Boolean);
+  if (!validRows.length && !validPpRows.length) return '';
 
   // Séparer par type de marché
   const mlRows     = validRows.filter(r => r.includes('data-market="MONEYLINE"'));
@@ -752,6 +784,7 @@ function renderBlocTousLesParis(analysis, match) {
       ${section('Handicap', sprdRows)}
       ${section('Total de points', ouRows)}
       ${ouSelectorHtml}
+      ${section(`Points joueur${ppPred?.market_source ? ` · source ${ppPred.market_source}` : ''}`, validPpRows)}
     </div>`;
 }
 

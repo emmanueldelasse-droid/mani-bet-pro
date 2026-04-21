@@ -564,8 +564,29 @@ function _renderTDH2H_OU(match, teamDetail) {
     ? `<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:8px">${homeAbv} : <strong style="color:var(--color-text)">${h2hWins}V / ${h2hTotal - h2hWins}D</strong> cette saison</div>`
     : '';
 
+  // Score série playoff (si match en playoffs)
+  const series = match?.playoff_series;
+  const seriesHtml = (series && (series.home_wins != null || series.away_wins != null)) ? (() => {
+    const hW = series.home_wins ?? 0;
+    const aW = series.away_wins ?? 0;
+    const leader = hW > aW ? homeAbv : aW > hW ? awayAbv : null;
+    const bigScore = Math.max(hW, aW);
+    const smallScore = Math.min(hW, aW);
+    const leaderTxt = leader
+      ? `<strong style="color:var(--color-signal)">${leader} mène ${bigScore}-${smallScore}</strong>`
+      : `<strong>Série à égalité ${hW}-${aW}</strong>`;
+    const summary = series.summary ?? series.title ?? '';
+    return `
+      <div style="padding:8px 10px;border-radius:8px;background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.25);margin-bottom:10px">
+        <div style="font-size:10px;font-weight:700;color:#a855f7;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px">🏆 Série playoff</div>
+        <div style="font-size:13px">${leaderTxt}</div>
+        ${summary ? `<div style="font-size:10px;color:var(--color-text-secondary);margin-top:2px">${summary}</div>` : ''}
+      </div>`;
+  })() : '';
+
   return `
     <div class="card match-detail__bloc">
+      ${seriesHtml}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
           <div class="bloc-header" style="margin-bottom:var(--space-2)">
