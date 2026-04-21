@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.44
+ * MANI BET PRO — Cloudflare Worker v6.46
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -343,7 +343,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.44.0',
+          version:   '6.46.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -2904,6 +2904,14 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
     best_market:           bestRec?.type ?? null,
     best_side:             bestRec?.side ?? null,
 
+    // Prédiction O/U NBA — pipeline indépendant
+    est_total_nba:       analysis.total_prediction?.est_total        ?? null,
+    ou_line_nba:         analysis.total_prediction?.line             ?? null,
+    ou_diff_nba:         analysis.total_prediction?.diff             ?? null,
+    ou_prediction_side:  analysis.total_prediction?.recommendation?.side ?? null,
+    ou_prediction_edge:  analysis.total_prediction?.recommendation?.edge ?? null,
+    ou_adjustments:      analysis.total_prediction?.adjustments      ?? [],
+
     // Post-match (rempli par handleBotSettleLogs)
     result_home_score: null,
     result_away_score: null,
@@ -2914,6 +2922,7 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
     prob_delta_pts:    null,  // motor_prob - 100*actual ∈ [-100, 100] — écart calibration
     upset:             null,  // true si underdog a gagné (|motor_prob-50|>5)
     ou_was_right:      null,  // null si pas de reco OU, sinon true/false
+    ou_model_was_right: null, // true/false — est_total_nba vs result_total (indép. de la reco)
     spread_was_right:  null,  // null si pas de reco spread, sinon true/false
     clv_post_match:    null,
     settled_at:        null,
@@ -3091,6 +3100,12 @@ async function _botSettleDate(env, dateStr) {
       log.ou_was_right      = ouWasRight;
       log.spread_was_right  = spreadWasRight;
       log.clv_post_match    = clvPostMatch;
+      // Calibration modèle O/U : est_total_nba vs résultat réel (indépendant de la reco)
+      if (log.est_total_nba != null && totalPts != null) {
+        const modelOver = log.est_total_nba > (log.ou_line_nba ?? log.est_total_nba);
+        const actualOver = totalPts > (log.ou_line_nba ?? log.est_total_nba);
+        log.ou_model_was_right = modelOver === actualOver;
+      }
       log.settled_at        = new Date().toISOString();
 
       await env.PAPER_TRADING.put(key, JSON.stringify(log), { expirationTtl: 90 * 24 * 3600 });
@@ -3308,7 +3323,8 @@ async function handleBotLogsExportCSV(url, env, origin) {
       'logged_at', 'settled_at', 'match_id', 'date', 'home', 'away',
       'motor_prob', 'confidence_level', 'data_quality', 'best_edge', 'best_market', 'best_side',
       'result_home_score', 'result_away_score', 'result_winner', 'result_margin', 'result_total',
-      'motor_was_right', 'prob_delta_pts', 'upset', 'ou_was_right', 'spread_was_right', 'clv_post_match',
+      'motor_was_right', 'prob_delta_pts', 'upset', 'ou_was_right', 'ou_model_was_right', 'spread_was_right', 'clv_post_match',
+      'est_total_nba', 'ou_line_nba', 'ou_diff_nba', 'ou_prediction_side', 'ou_prediction_edge',
     ];
     const colsNbaExtra = [
       'var_net_rating_diff', 'var_efg_diff', 'var_ts_pct', 'var_win_pct_diff',
