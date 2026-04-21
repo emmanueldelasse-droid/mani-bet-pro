@@ -1487,7 +1487,7 @@ async function handleNBAAIPlayerPropsBatch(request, env, origin) {
   const cacheKey = `ai_player_props_${date}`;
   const READ_TTL_MS = 20 * 3600 * 1000;
   const WRITE_TTL_S = 24 * 3600;
-  const dailyLimit = 8;  // Augmenté pour phase de debug · à réduire à 3 en prod stable
+  const dailyLimit = 20;  // Bump temporaire debug v6.55 · à réduire à 3 en prod stable
 
   if (!force && env.PAPER_TRADING) {
     try {
