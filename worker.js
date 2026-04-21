@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.48
+ * MANI BET PRO — Cloudflare Worker v6.49
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -272,6 +272,9 @@ export default {
       if (path === '/nba/odds/comparison' && request.method === 'GET')
         return await handleOddsComparison(url, env, origin);
 
+      if (path === '/nba/player-points' && request.method === 'GET')
+        return await handleNBAPlayerPointsOdds(url, env, origin);
+
       // ── v6.31 : Team Detail ───────────────────────────────────────────────
       if (path === '/nba/team-detail' && request.method === 'GET')
         return await handleNBATeamDetail(url, env, origin);
@@ -343,7 +346,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.48.0',
+          version:   '6.49.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -351,6 +354,7 @@ export default {
             'GET /nba/standings', 'GET /nba/results', 'GET /nba/teams/stats',
             'GET /nba/player/test', 'GET /nba/roster-injuries',
             'GET /nba/ai-injuries', 'POST /nba/ai-injuries-batch', 'GET /nba/odds/comparison', 'GET /nba/team-detail',
+            'GET /nba/player-points',
             'GET /paper/state', 'POST /paper/bet', 'PUT /paper/bet/:id', 'POST /paper/reset',
           ],
         }, 200, origin);
@@ -2433,6 +2437,111 @@ function _parseOddsAPIResponse(data) {
   });
 }
 
+// ── MARCHÉ PLAYER_POINTS (Phase 3) ────────────────────────────────────────────
+// Fetch ponctuel par event (TheOddsAPI) · KV cache 4h · gate env PLAYER_PROPS_ENABLED
+// Coût : 1 credit par event+market+region. On utilise us uniquement (max couverture).
+
+async function _fetchPlayerPointsForEvent(eventId, env) {
+  if (!eventId) return { available: false, note: 'no_event_id', lines: {} };
+  if (env.PLAYER_PROPS_ENABLED !== 'true' && env.PLAYER_PROPS_ENABLED !== '1') {
+    return { available: false, note: 'disabled', lines: {} };
+  }
+
+  const cacheKey = `player_points_${eventId}`;
+  const TTL_MS   = 4 * 3600 * 1000;
+  const TTL_S    = 4 * 3600;
+
+  if (env.PAPER_TRADING) {
+    try {
+      const cached = await env.PAPER_TRADING.get(cacheKey, { type: 'json' });
+      if (cached?._ts && (Date.now() - cached._ts) < TTL_MS) {
+        return { ...cached.data, source: 'cache' };
+      }
+    } catch (_) {}
+  }
+
+  const key = env.ODDS_API_KEY_1 ?? env.ODDS_API_KEY_2;
+  if (!key) return { available: false, note: 'no_api_key', lines: {} };
+
+  const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/events/${eventId}/odds` +
+    `?apiKey=${key}&regions=us&markets=player_points&oddsFormat=decimal` +
+    `&bookmakers=pinnacle,betmgm,draftkings,fanduel,betonlineag`;
+
+  try {
+    const resp = await fetchTimeout(url, { headers: { Accept: 'application/json' } }, 10000);
+    if (!resp.ok) return { available: false, note: `odds_api_${resp.status}`, lines: {} };
+    const json = await resp.json();
+
+    // Agrégation : par joueur normalisé, meilleures cotes over/under
+    const BOOK_PRIORITY = ['pinnacle', 'betmgm', 'draftkings', 'fanduel', 'betonlineag'];
+    const linesByPlayer = {};
+
+    for (const bk of (json.bookmakers ?? [])) {
+      const market = bk.markets?.find(m => m.key === 'player_points');
+      if (!market) continue;
+
+      for (const o of (market.outcomes ?? [])) {
+        const playerName = o.description;
+        const side       = o.name; // 'Over' ou 'Under'
+        const line       = parseFloat(o.point);
+        const price      = parseFloat(o.price);
+        if (!playerName || !side || !Number.isFinite(line) || !Number.isFinite(price)) continue;
+
+        const norm = _normalizeName(playerName);
+        if (!linesByPlayer[norm]) {
+          linesByPlayer[norm] = {
+            player_name: playerName,
+            line,
+            over: { decimal: null, book: null },
+            under: { decimal: null, book: null },
+          };
+        }
+
+        const slot = side === 'Over' ? 'over' : side === 'Under' ? 'under' : null;
+        if (!slot) continue;
+
+        const current     = linesByPlayer[norm][slot];
+        const newBookRank = BOOK_PRIORITY.indexOf(bk.key);
+        const curBookRank = current.book ? BOOK_PRIORITY.indexOf(current.book) : 999;
+
+        // Priorité : ligne identique → prix max · sinon livre prioritaire
+        if (linesByPlayer[norm].line === line) {
+          if (current.decimal == null || price > current.decimal) {
+            linesByPlayer[norm][slot] = { decimal: price, book: bk.key };
+          }
+        } else if (newBookRank < curBookRank) {
+          linesByPlayer[norm].line = line;
+          linesByPlayer[norm][slot] = { decimal: price, book: bk.key };
+        }
+      }
+    }
+
+    const result = {
+      available:   true,
+      event_id:    eventId,
+      fetched_at:  new Date().toISOString(),
+      players_count: Object.keys(linesByPlayer).length,
+      lines:       linesByPlayer,
+    };
+
+    if (env.PAPER_TRADING) {
+      try {
+        await env.PAPER_TRADING.put(cacheKey, JSON.stringify({ _ts: Date.now(), data: result }), { expirationTtl: TTL_S });
+      } catch (_) {}
+    }
+    return result;
+  } catch (err) {
+    return { available: false, note: err.message, lines: {} };
+  }
+}
+
+async function handleNBAPlayerPointsOdds(url, env, origin) {
+  const eventId = url.searchParams.get('event_id');
+  if (!eventId) return jsonResponse({ available: false, note: 'event_id required' }, 400, origin);
+  const result = await _fetchPlayerPointsForEvent(eventId, env);
+  return jsonResponse(result, 200, origin);
+}
+
 // ── HANDLER : RÉSULTATS ───────────────────────────────────────────────────────
 
 async function handleNBAResults(url, origin) {
@@ -2866,6 +2975,38 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
   // Lancer le moteur
   const analysis = _botEngineCompute(matchData);
   if (!analysis) return null;
+
+  // Phase 3 : matching projections joueurs ↔ lignes marché TheOddsAPI
+  // Gate env PLAYER_PROPS_ENABLED · fetch par event · KV cache 4h
+  if (env && analysis.player_props_prediction?.available && marketOdds?.odds_api_id) {
+    try {
+      const ppResult = await _fetchPlayerPointsForEvent(marketOdds.odds_api_id, env);
+      if (ppResult?.available && ppResult.lines) {
+        const matched = _botMatchPlayerPropsToLines(
+          analysis.player_props_prediction,
+          ppResult.lines,
+          homeName, awayName
+        );
+        analysis.player_props_prediction = matched.enriched;
+        analysis.player_props_prediction.market_fetched_at = ppResult.fetched_at ?? null;
+        analysis.player_props_prediction.market_source     = ppResult.source ?? 'the_odds_api';
+
+        if (matched.recommendations.length > 0 && analysis.betting_recommendations) {
+          analysis.betting_recommendations.recommendations.push(...matched.recommendations);
+          analysis.betting_recommendations.recommendations.sort((a, b) => b.edge - a.edge);
+          // Mettre à jour best uniquement si pas en critical divergence
+          const curBest = analysis.betting_recommendations.best;
+          const newBest = analysis.betting_recommendations.recommendations[0];
+          if (newBest && (!curBest || newBest.edge > curBest.edge) &&
+              analysis.market_divergence?.flag !== 'critical') {
+            analysis.betting_recommendations.best = newBest;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[BOT] player_points fetch error for ${match.id}:`, err.message);
+    }
+  }
 
   // Snapshot absences
   const absVar = analysis.variables_used?.absences_impact ?? null;
@@ -4091,6 +4232,93 @@ function _botPredictPlayerPoints(matchData) {
     home_players:    homePlayers,
     away_players:    awayPlayers,
     league_avg_oppg: LEAGUE_AVG_OPPG,
+  };
+}
+
+// ── MATCHING PROJECTIONS ↔ LIGNES MARCHÉ (Phase 3) ───────────────────────────
+// Enrichit chaque projection avec {line, over_decimal, under_decimal, edge}
+// Retourne recos triées par edge (≥5%)
+
+function _botMatchPlayerPropsToLines(propsPrediction, linesMap, homeTeam, awayTeam) {
+  if (!propsPrediction?.available || !linesMap || Object.keys(linesMap).length === 0) {
+    return { enriched: propsPrediction, recommendations: [] };
+  }
+
+  const _decToAm = d => d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1));
+
+  const enrichSide = (players, teamName) => {
+    return players.map(p => {
+      const norm = _normalizeName(p.name);
+      const line = linesMap[norm];
+      if (!line || !Number.isFinite(line.line)) return p;
+
+      const diff    = p.projected_pts - line.line;
+      // stdev joueur ~ 5 pts · tanh(diff/5) * 0.20 → cap ±20% swing
+      const overProb  = Math.min(0.85, Math.max(0.15, 0.50 + Math.tanh(diff / 5) * 0.20));
+      const underProb = 1 - overProb;
+
+      const overImplied  = line.over?.decimal  ? 1 / line.over.decimal  : null;
+      const underImplied = line.under?.decimal ? 1 / line.under.decimal : null;
+      const overEdge  = overImplied  != null ? Math.round((overProb  - overImplied)  * 100) : null;
+      const underEdge = underImplied != null ? Math.round((underProb - underImplied) * 100) : null;
+
+      return {
+        ...p,
+        team_full:      teamName,
+        market: {
+          line:          line.line,
+          over_decimal:  line.over?.decimal  ?? null,
+          under_decimal: line.under?.decimal ?? null,
+          over_book:     line.over?.book     ?? null,
+          under_book:    line.under?.book    ?? null,
+          diff:          Math.round(diff * 10) / 10,
+          over_prob:     Math.round(overProb  * 1000) / 1000,
+          under_prob:    Math.round(underProb * 1000) / 1000,
+          over_edge:     overEdge,
+          under_edge:    underEdge,
+        },
+      };
+    });
+  };
+
+  const homeEnriched = enrichSide(propsPrediction.home_players ?? [], homeTeam);
+  const awayEnriched = enrichSide(propsPrediction.away_players ?? [], awayTeam);
+
+  const recommendations = [];
+  for (const p of [...homeEnriched, ...awayEnriched]) {
+    if (!p.market) continue;
+    const { over_edge: oe, under_edge: ue, line } = p.market;
+    const best = (oe ?? -99) >= (ue ?? -99)
+      ? { side: 'OVER',  edge: oe, prob: p.market.over_prob,  decimal: p.market.over_decimal,  book: p.market.over_book }
+      : { side: 'UNDER', edge: ue, prob: p.market.under_prob, decimal: p.market.under_decimal, book: p.market.under_book };
+    if (best.edge == null || best.edge < 5 || !best.decimal) continue;
+
+    recommendations.push({
+      type:          'PLAYER_POINTS',
+      player:        p.name,
+      team:          p.team,
+      side:          best.side,
+      line,
+      projected_pts: p.projected_pts,
+      motor_prob:    Math.round(best.prob * 100),
+      implied_prob:  Math.round((1 / best.decimal) * 100),
+      odds_decimal:  best.decimal,
+      odds_line:     _decToAm(best.decimal),
+      odds_source:   best.book,
+      edge:          best.edge,
+      has_value:     true,
+    });
+  }
+
+  recommendations.sort((a, b) => b.edge - a.edge);
+
+  return {
+    enriched: {
+      ...propsPrediction,
+      home_players: homeEnriched,
+      away_players: awayEnriched,
+    },
+    recommendations,
   };
 }
 

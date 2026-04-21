@@ -1,7 +1,7 @@
 # Mani Bet Pro
 
 ## État
-Worker `manibetpro` v6.48 · `manibetpro.workers.dev`
+Worker `manibetpro` v6.49 · `manibetpro.workers.dev`
 Front: GitHub Pages · KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
 Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 
@@ -9,7 +9,7 @@ Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 - `/health`
 - `/nba/matches?date=YYYYMMDD` · `/odds` · `/injuries` · `/standings`
 - `/nba/team-detail?home=X&away=Y[&bust=1]` → last10/splits/H2H/top10
-- `/nba/teams/stats` · `/roster-injuries` · `/ai-injuries`
+- `/nba/teams/stats` · `/roster-injuries` · `/ai-injuries` · `/nba/player-points?event_id=X`
 - `/mlb/matches` · `/odds` · `/pitchers` · `/standings`
 - `/bot/run` POST · `/logs` · `/settle-logs` POST · `/logs/export.csv` · `/odds-history?matchId=X`
 - `/tennis/sports-list|odds|stats`
