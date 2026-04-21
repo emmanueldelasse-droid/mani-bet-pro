@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.53
+ * MANI BET PRO — Cloudflare Worker v6.54
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -387,7 +387,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.53.0',
+          version:   '6.54.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -448,8 +448,9 @@ async function handleNBATeamDetail(url, env, origin) {
   // Rosters: cached 24h in KV — fetched FIRST before bundle calls to avoid rate-limiting
   // v3 key : v2 avait rosters mais sans stats joueurs (statsToGet=averages manquait)
   const ROSTER_CACHE_KEY = 'nba_rosters_teams_v3';
-  const ROSTER_TTL_MS    = 24 * 60 * 60 * 1000;
-  const ROSTER_TTL_S     = 24 * 60 * 60;
+  // TTL 6h : détecte scratchs/trades du soir (quota Tank01 large, 1000/j)
+  const ROSTER_TTL_MS    = 6 * 60 * 60 * 1000;
+  const ROSTER_TTL_S     = 6 * 60 * 60;
   let rostersData = null;
   if (!bustCache) {
     try {
@@ -919,7 +920,7 @@ async function handleNBAInjuriesImpact(env, origin) {
       const cached = await env.PAPER_TRADING.get(TANK01_INJURIES_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.fetched_at < 3 * 3600 * 1000) {
+        if (Date.now() - parsed.fetched_at < 90 * 60 * 1000) {  // 90min — fraîcheur injury late scratch
           return jsonResponse({ available: true, source: 'cache',
             fetched_at: new Date(parsed.fetched_at).toISOString(),
             by_team: parsed.by_team }, 200, origin);
@@ -1029,7 +1030,7 @@ async function handleNBAInjuriesImpact(env, origin) {
     try {
       await env.PAPER_TRADING.put(TANK01_INJURIES_KEY,
         JSON.stringify({ fetched_at: Date.now(), by_team: byTeam }),
-        { expirationTtl: 3 * 3600 });
+        { expirationTtl: 90 * 60 });  // 90min
     } catch (err) { console.warn('InjuriesImpact cache write:', err.message); }
   }
 
@@ -1047,7 +1048,8 @@ async function handleNBARosterInjuries(env, origin) {
       const cached = await env.PAPER_TRADING.get(TANK01_ROSTER_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.fetched_at < 3 * 3600 * 1000) {
+        // TTL 90min : détecte injury updates tardives avant tip-off
+        if (Date.now() - parsed.fetched_at < 90 * 60 * 1000) {
           return jsonResponse({
             available:  true,
             source:     'cache',
@@ -1124,7 +1126,7 @@ async function handleNBARosterInjuries(env, origin) {
       try {
         await env.PAPER_TRADING.put(TANK01_ROSTER_KEY,
           JSON.stringify({ fetched_at: Date.now(), data: playerMap }),
-          { expirationTtl: 3 * 3600 });
+          { expirationTtl: 90 * 60 });  // 90min
       } catch (err) { console.warn('RosterInjuries cache write:', err.message); }
     }
 
@@ -1519,10 +1521,33 @@ async function handleNBAAIPlayerPropsBatch(request, env, origin) {
 
   const compactGames = games.map(g => `${g.away}@${g.home}`).join(', ');
   // Pass 1 : recherche ouverte (prose tolérée, web_search actif)
-  const researchSystem = `Tu es un analyste NBA. Recherche sur actionnetwork.com, covers.com, rotowire.com, draftkings.com et espn.com les lignes "player points O/U" publiées pour les matchs NBA demandés. Ne t'occupe que des joueurs avec ppg≥15 saison. Si tu trouves une ligne, note source+valeur exacte (format décimal .5). Si rien trouvé, indique-le.`;
+  const researchSystem = `Tu es un analyste NBA spécialisé dans les player props. Recherche les lignes "player points Over/Under" publiées pour les matchs NBA demandés.
+
+Sources prioritaires (par ordre) :
+1. draftkings.com/sportsbook — lignes live books
+2. fanduel.com/sportsbook — lignes live books
+3. actionnetwork.com/nba/player-props — consensus multi-books
+4. rotowire.com/basketball/nba-player-props — consensus projections
+5. covers.com/sports/nba/player-props — consensus
+6. docsports.com — projections editoriales
+7. linesmakers.com, vegasinsider.com — consensus
+8. fantasybros.com, dailyfantasyfuel.com — projections DFS comme proxy
+
+Couvre tous les joueurs qui vont jouer (ppg≥12 saison OU joueurs qui ont marqué 15+ pts dans 2+ des 5 derniers matchs). Si plusieurs sources donnent des lignes différentes pour un même joueur, liste toutes les valeurs et leurs sources. Si seul un site DFS donne une projection (pas une ligne book), note-le quand même en indiquant source type (dfs_projection vs book_line).
+
+Accepte aussi les lignes "consensus" ou "médiane" publiées par agrégateurs. Si tu ne trouves que des projections non-book, indique-le comme source_type=projection.`;
   const researchUser = `Date:${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}
 Matchs:${compactGames}
-Liste tous les joueurs trouvés avec leur ligne et la source. 10 joueurs max.`;
+
+Pour chaque match, liste les joueurs avec :
+- nom complet
+- équipe (abréviation)
+- ligne en pts (.5)
+- source (nom du site)
+- type_source (book_line ou projection ou consensus)
+- nombre de sources concordantes
+
+Objectif : 15-20 joueurs total minimum. Ne te limite pas aux superstars.`;
 
   try {
     const research = await _callClaudeWithWebSearch(env.CLAUDE_API_KEY, researchSystem, researchUser, 2500);
@@ -2779,15 +2804,37 @@ function _parseOddsAPIResponse(data) {
 // Fetch ponctuel par event (TheOddsAPI) · KV cache 4h · gate env PLAYER_PROPS_ENABLED
 // Coût : 1 credit par event+market+region. On utilise us uniquement (max couverture).
 
-async function _fetchPlayerPointsForEvent(eventId, env) {
+// ctx (optionnel) : { commence_time?: ISO string, top_ppg?: number }
+// Si fourni : skip fetch hors fenêtre H-4 à H-0 · skip si top_ppg < 18
+async function _fetchPlayerPointsForEvent(eventId, env, ctx = null) {
   if (!eventId) return { available: false, note: 'no_event_id', lines: {} };
   if (env.PLAYER_PROPS_ENABLED !== 'true' && env.PLAYER_PROPS_ENABLED !== '1') {
     return { available: false, note: 'disabled', lines: {} };
   }
 
+  // Gate temporel : ne fetche que H-4 à H-0 avant tip-off (évite burn quota sur matchs lointains)
+  if (ctx?.commence_time) {
+    const startMs = new Date(ctx.commence_time).getTime();
+    const diffMs  = startMs - Date.now();
+    if (diffMs > 4 * 3600 * 1000) {
+      return { available: false, note: 'too_early', hours_until_tipoff: Math.round(diffMs / 3600000), lines: {} };
+    }
+    if (diffMs < -30 * 60 * 1000) {  // Match commencé depuis > 30min
+      return { available: false, note: 'game_started', lines: {} };
+    }
+  }
+
+  // Gate valeur : skip si aucun scoreur ppg≥18 (low-star matchups)
+  if (ctx?.top_ppg != null && ctx.top_ppg < 18) {
+    return { available: false, note: 'no_star', top_ppg: ctx.top_ppg, lines: {} };
+  }
+
   const cacheKey = `player_points_${eventId}`;
-  const TTL_MS   = 4 * 3600 * 1000;
-  const TTL_S    = 4 * 3600;
+  // TTL 6h jour / 12h nuit — lignes books bougent peu après ouverture
+  const nowH = new Date().getUTCHours();
+  const isNightUTC = nowH >= 3 && nowH < 15;  // nuit US = midi UTC
+  const TTL_MS = (isNightUTC ? 12 : 6) * 3600 * 1000;
+  const TTL_S  = (isNightUTC ? 12 : 6) * 3600;
 
   if (env.PAPER_TRADING) {
     try {
@@ -3172,13 +3219,13 @@ async function _runBotCron(env, forceRun = false) {
   const oddsData     = oddsResp.status    === 'fulfilled' ? await oddsResp.value.json()    : null;
   const advancedData = advancedResp.status === 'fulfilled' ? await advancedResp.value.json() : null;
 
-  // Rosters Tank01 depuis KV cache 24h (populé par /nba/team-detail)
+  // Rosters Tank01 depuis KV cache 6h (populé par /nba/team-detail)
   // Aucun call Tank01 ajouté ici — si miss, player props skippés ce run
   let rostersData = null;
   if (env.PAPER_TRADING) {
     try {
       const cached = await env.PAPER_TRADING.get('nba_rosters_teams_v3', { type: 'json' });
-      if (cached?.data && cached._ts && (Date.now() - cached._ts) < 24 * 3600 * 1000) {
+      if (cached?.data && cached._ts && (Date.now() - cached._ts) < 6 * 3600 * 1000) {
         rostersData = cached.data;
       }
     } catch (err) { console.warn('[BOT] rosters KV read:', err.message); }
@@ -3330,8 +3377,17 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
       let ppResult = null;
 
       // Source 1 : TheOddsAPI (requires PLAYER_PROPS_ENABLED + player_points subscription)
+      // Contexte passé pour gate temporel (H-4 à H-0) et filtre ppg star
       if (marketOdds?.odds_api_id) {
-        ppResult = await _fetchPlayerPointsForEvent(marketOdds.odds_api_id, env);
+        const topPpg = Math.max(
+          ...(analysis.player_props_prediction.home_players ?? []).map(p => p.ppg ?? 0),
+          ...(analysis.player_props_prediction.away_players ?? []).map(p => p.ppg ?? 0),
+          0
+        );
+        ppResult = await _fetchPlayerPointsForEvent(marketOdds.odds_api_id, env, {
+          commence_time: match.datetime ?? marketOdds?.commence_time ?? null,
+          top_ppg:       topPpg,
+        });
       }
 
       // Source 2 (fallback) : cache AI peuplé par _runAIPlayerPropsCron à 22h UTC
