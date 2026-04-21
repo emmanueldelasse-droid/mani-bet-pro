@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.54
+ * MANI BET PRO — Cloudflare Worker v6.55
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -387,7 +387,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.54.0',
+          version:   '6.55.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -1521,36 +1521,26 @@ async function handleNBAAIPlayerPropsBatch(request, env, origin) {
 
   const compactGames = games.map(g => `${g.away}@${g.home}`).join(', ');
   // Pass 1 : recherche ouverte (prose tolérée, web_search actif)
-  const researchSystem = `Tu es un analyste NBA spécialisé dans les player props. Recherche les lignes "player points Over/Under" publiées pour les matchs NBA demandés.
+  // Prompt allégé pour rester dans 5 tours max de web_search
+  const researchSystem = `Tu es un analyste NBA qui cherche les lignes "player points Over/Under" pour les matchs NBA demandés.
 
-Sources prioritaires (par ordre) :
-1. draftkings.com/sportsbook — lignes live books
-2. fanduel.com/sportsbook — lignes live books
-3. actionnetwork.com/nba/player-props — consensus multi-books
-4. rotowire.com/basketball/nba-player-props — consensus projections
-5. covers.com/sports/nba/player-props — consensus
-6. docsports.com — projections editoriales
-7. linesmakers.com, vegasinsider.com — consensus
-8. fantasybros.com, dailyfantasyfuel.com — projections DFS comme proxy
+Sources possibles : actionnetwork.com, rotowire.com, covers.com, docsports.com, draftkings.com, vegasinsider.com.
+Accepte les lignes publiées par books, les consensus d'agrégateurs, ou les projections d'experts.
+Cible : joueurs notables (ppg≥12) des équipes concernées.`;
 
-Couvre tous les joueurs qui vont jouer (ppg≥12 saison OU joueurs qui ont marqué 15+ pts dans 2+ des 5 derniers matchs). Si plusieurs sources donnent des lignes différentes pour un même joueur, liste toutes les valeurs et leurs sources. Si seul un site DFS donne une projection (pas une ligne book), note-le quand même en indiquant source type (dfs_projection vs book_line).
-
-Accepte aussi les lignes "consensus" ou "médiane" publiées par agrégateurs. Si tu ne trouves que des projections non-book, indique-le comme source_type=projection.`;
   const researchUser = `Date:${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}
 Matchs:${compactGames}
 
-Pour chaque match, liste les joueurs avec :
-- nom complet
-- équipe (abréviation)
-- ligne en pts (.5)
-- source (nom du site)
-- type_source (book_line ou projection ou consensus)
-- nombre de sources concordantes
+Trouve 2-4 lignes par match si possible. Pour chaque :
+- Nom + équipe (abréviation 2-3 lettres)
+- Ligne (.5)
+- Source unique (nom du site)
 
-Objectif : 15-20 joueurs total minimum. Ne te limite pas aux superstars.`;
+Format libre, tableau ou liste, peu importe.`;
 
   try {
-    const research = await _callClaudeWithWebSearch(env.CLAUDE_API_KEY, researchSystem, researchUser, 2500);
+    // 6 tours pour laisser Claude faire 3-4 recherches web + réponse finale
+    const research = await _callClaudeWithWebSearch(env.CLAUDE_API_KEY, researchSystem, researchUser, 2500, 6);
     if (!research) {
       return jsonResponse({ available: false, note: 'Claude returned no content (research pass)' }, 200, origin);
     }
@@ -1828,12 +1818,13 @@ async function _callClaudeJSONOnly(apiKey, systemPrompt, userPrompt, maxTokens =
   }
 }
 
-async function _callClaudeWithWebSearch(apiKey, systemPrompt, userPrompt, maxTokens = 1200) {
-  // MAX_TURNS = 3 : 1 appel initial + max 1 tour de recherche web + 1 reponse finale.
+async function _callClaudeWithWebSearch(apiKey, systemPrompt, userPrompt, maxTokens = 1200, maxTurns = 3) {
+  // maxTurns = 3 par défaut : 1 appel initial + max 1 tour de recherche web + 1 reponse finale.
+  // Passer 5-6 pour prompts demandant recherches multiples (ex: AI player props).
   // web_search_20250305 est gere cote ANTHROPIC — le worker renvoie des tool_result
   // vides (is_error: false, content: []). Claude recupere les resultats directement
   // depuis Anthropic, pas depuis le worker. tool_result mal forme = boucle infinie.
-  const MAX_TURNS     = 3;
+  const MAX_TURNS     = maxTurns;
   const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
   const messages      = [{ role: 'user', content: userPrompt }];
   let finalText       = null;
