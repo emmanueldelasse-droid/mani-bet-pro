@@ -2463,13 +2463,22 @@ async function _fetchPlayerPointsForEvent(eventId, env) {
   const key = env.ODDS_API_KEY_1 ?? env.ODDS_API_KEY_2;
   if (!key) return { available: false, note: 'no_api_key', lines: {} };
 
+  // Pas de filtre bookmakers — laisser l'API renvoyer tous les books offrant player_points
   const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/events/${eventId}/odds` +
-    `?apiKey=${key}&regions=us&markets=player_points&oddsFormat=decimal` +
-    `&bookmakers=pinnacle,betmgm,draftkings,fanduel,betonlineag`;
+    `?apiKey=${key}&regions=us&markets=player_points&oddsFormat=decimal`;
 
   try {
     const resp = await fetchTimeout(url, { headers: { Accept: 'application/json' } }, 10000);
-    if (!resp.ok) return { available: false, note: `odds_api_${resp.status}`, lines: {} };
+    if (!resp.ok) {
+      let body = null;
+      try { body = await resp.text(); } catch (_) {}
+      return {
+        available: false,
+        note:      `odds_api_${resp.status}`,
+        error_body: body ? body.slice(0, 500) : null,
+        lines:     {},
+      };
+    }
     const json = await resp.json();
 
     // Agrégation : par joueur normalisé, meilleures cotes over/under
