@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.52
+ * MANI BET PRO — Cloudflare Worker v6.53
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -387,7 +387,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.52.0',
+          version:   '6.53.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -1485,7 +1485,7 @@ async function handleNBAAIPlayerPropsBatch(request, env, origin) {
   const cacheKey = `ai_player_props_${date}`;
   const READ_TTL_MS = 20 * 3600 * 1000;
   const WRITE_TTL_S = 24 * 3600;
-  const dailyLimit = 2;
+  const dailyLimit = 8;  // Augmenté pour phase de debug · à réduire à 3 en prod stable
 
   if (!force && env.PAPER_TRADING) {
     try {
@@ -1518,40 +1518,47 @@ async function handleNBAAIPlayerPropsBatch(request, env, origin) {
   }
 
   const compactGames = games.map(g => `${g.away}@${g.home}`).join(', ');
-  const systemPrompt = `Tu es une API qui retourne STRICTEMENT du JSON. Jamais de texte libre, jamais d'explications, jamais de préambule. Recherche les lignes "points joueur O/U" NBA publiées pour ce soir sur actionnetwork.com, covers.com, rotowire.com, draftkings.com, espn.com. Uniquement joueurs ppg≥15 saison. Lignes format décimal (.5). Si aucune donnée trouvée, retourne la structure JSON avec des tableaux vides.
-
-RÈGLES ABSOLUES :
-- Ta réponse DOIT commencer par { et finir par }
-- AUCUN texte hors du JSON (pas "Voici", pas "Based on", pas "Je trouve")
-- Si tu ne trouves rien, players:[] pour chaque match
-- JAMAIS d'explication après le JSON`;
-
-  const userPrompt = `Date:${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}
+  // Pass 1 : recherche ouverte (prose tolérée, web_search actif)
+  const researchSystem = `Tu es un analyste NBA. Recherche sur actionnetwork.com, covers.com, rotowire.com, draftkings.com et espn.com les lignes "player points O/U" publiées pour les matchs NBA demandés. Ne t'occupe que des joueurs avec ppg≥15 saison. Si tu trouves une ligne, note source+valeur exacte (format décimal .5). Si rien trouvé, indique-le.`;
+  const researchUser = `Date:${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}
 Matchs:${compactGames}
-
-Trouve les lignes over/under points des stars (ppg≥15 saison).
-
-SCHÉMA OBLIGATOIRE (copie strictement) :
-{"games":[{"game":"AWY@HOME","players":[{"name":"","team":"","line":24.5,"source":"","confidence":"high"}]}]}
-
-Si match trouvé avec 0 ligne → players:[]. Max 6 joueurs/match. Ligne entre 4 et 55.
-
-RÉPONDS UNIQUEMENT AVEC LE JSON. RIEN D'AUTRE.`;
+Liste tous les joueurs trouvés avec leur ligne et la source. 10 joueurs max.`;
 
   try {
-    const textContent = await _callClaudeWithWebSearch(env.CLAUDE_API_KEY, systemPrompt, userPrompt, 2500);
-    if (!textContent) {
-      return jsonResponse({ available: false, note: 'Claude returned no content' }, 200, origin);
+    const research = await _callClaudeWithWebSearch(env.CLAUDE_API_KEY, researchSystem, researchUser, 2500);
+    if (!research) {
+      return jsonResponse({ available: false, note: 'Claude returned no content (research pass)' }, 200, origin);
     }
 
-    const parsed = _extractJSONFromText(textContent);
-    if (!parsed) {
-      console.warn('AIProps JSON extraction fail, raw preview:', textContent.slice(0, 200));
+    // Pass 2 : extraction JSON pure avec prefill assistant forçant { en début
+    const extractSystem = `Tu es un extracteur JSON. Ta réponse est STRICTEMENT du JSON valide et rien d'autre.`;
+    const extractUser = `Convertis ces données en JSON selon le schéma exact :
+{"games":[{"game":"AWY@HOME","players":[{"name":"","team":"","line":24.5,"source":"","confidence":"high|medium|low"}]}]}
+
+Matchs attendus (utilise exactement ces clés): ${compactGames}
+Si un match a 0 ligne trouvée, players:[]. Ligne entre 4 et 55. Max 6 joueurs/match.
+
+DONNÉES SOURCES :
+${research}
+
+Confidence = high si 2+ sources concordent, medium si 1 source fiable, low sinon.`;
+
+    const jsonText = await _callClaudeJSONOnly(env.CLAUDE_API_KEY, extractSystem, extractUser, 1500);
+    if (!jsonText) {
       return jsonResponse({
         available:   false,
-        note:        'invalid_json',
-        raw_preview: textContent.slice(0, 500),
-        hint:        'Claude a répondu en texte libre au lieu de JSON. Essaye à nouveau, le prompt a été durci.',
+        note:        'extract_pass_failed',
+        research_preview: research.slice(0, 300),
+      }, 200, origin);
+    }
+
+    const parsed = _extractJSONFromText(jsonText);
+    if (!parsed) {
+      return jsonResponse({
+        available:         false,
+        note:              'invalid_json',
+        research_preview:  research.slice(0, 300),
+        extract_preview:   jsonText.slice(0, 500),
       }, 200, origin);
     }
 
@@ -1754,6 +1761,47 @@ Retourne exactement cet objet JSON :
 }
 
 // ── CLAUDE WEB SEARCH ─────────────────────────────────────────────────────────
+
+// Appel Claude direct (sans web_search) avec prefill assistant "{".
+// Force Claude à commencer la réponse par { → garantit JSON parsable.
+async function _callClaudeJSONOnly(apiKey, systemPrompt, userPrompt, maxTokens = 1500) {
+  try {
+    const response = await fetchTimeout('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      ALLOWED_AI_MODEL,
+        max_tokens: maxTokens,
+        system:     systemPrompt,
+        messages: [
+          { role: 'user',      content: userPrompt },
+          { role: 'assistant', content: '{' },
+        ],
+      }),
+    }, 30000);
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn(`Claude JSON-only API error ${response.status}:`, errText.slice(0, 200));
+      return null;
+    }
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text ?? '';
+    if (data.usage) {
+      console.log(`Claude JSON-only — in:${data.usage.input_tokens} out:${data.usage.output_tokens}`);
+    }
+    // Réinjecte le { du prefill pour reconstituer le JSON complet
+    return '{' + text;
+  } catch (err) {
+    console.warn('Claude JSON-only fetch error:', err.message);
+    return null;
+  }
+}
 
 async function _callClaudeWithWebSearch(apiKey, systemPrompt, userPrompt, maxTokens = 1200) {
   // MAX_TURNS = 3 : 1 appel initial + max 1 tour de recherche web + 1 reponse finale.
