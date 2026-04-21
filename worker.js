@@ -3706,10 +3706,17 @@ function _botEngineCompute(matchData) {
   // Market divergence
   const marketDivergence = _botComputeMarketDivergence(score, matchData);
 
-  // Betting recommendations (Moneyline uniquement dans le bot — suffisant pour calibration)
+  // Betting recommendations ML (Moneyline)
   let bettingRecs = null;
   if (score !== null && (matchData.odds || matchData.market_odds)) {
     bettingRecs = _botComputeBettingRecs(score, matchData, computed.signals, marketDivergence);
+  }
+
+  // Prédiction O/U — pipeline indépendant du moteur ML
+  const totalPrediction = _botPredictNBATotal(matchData);
+  if (totalPrediction?.recommendation && bettingRecs) {
+    bettingRecs.recommendations.push(totalPrediction.recommendation);
+    bettingRecs.recommendations.sort((a, b) => b.edge - a.edge);
   }
 
   return {
@@ -3723,6 +3730,7 @@ function _botEngineCompute(matchData) {
     confidence_penalty:    null,
     nba_phase:             phase,
     betting_recommendations: bettingRecs,
+    total_prediction:      totalPrediction,
   };
 }
 
@@ -3792,6 +3800,127 @@ function _botComputeBettingRecs(score, matchData, signals, marketDivergence) {
     recommendations: recs,
     best: isCritDiv ? null : (recs[0] ?? null),
     market_divergence_flag: marketDivergence?.flag ?? 'low',
+  };
+}
+
+// ── MOTEUR O/U NBA ────────────────────────────────────────────────────────────
+// Prédit le total (pts combinés) à partir des données ppg/oppg Tank01,
+// de la forme récente BDL et des absences de stars.
+// Entièrement indépendant du moteur ML — ne modifie aucun calcul 1X2.
+
+function _botPredictNBATotal(matchData) {
+  const hs = matchData?.home_season_stats ?? {};
+  const as = matchData?.away_season_stats ?? {};
+
+  const hPpg  = hs.ppg  != null ? parseFloat(hs.ppg)  : (hs.avg_pts ?? null);
+  const hOppg = hs.oppg != null ? parseFloat(hs.oppg) : null;
+  const aPpg  = as.ppg  != null ? parseFloat(as.ppg)  : (as.avg_pts ?? null);
+  const aOppg = as.oppg != null ? parseFloat(as.oppg) : null;
+
+  if (hPpg == null || hOppg == null || aPpg == null || aOppg == null) {
+    return { est_total: null, line: null, recommendation: null, adjustments: [], missing: 'ppg/oppg' };
+  }
+
+  // Modèle de matchup offensif/défensif :
+  // Pts attendus domicile = moy. offensive dom. vs défensive visiteur
+  // Pts attendus visiteur = moy. offensive vis. vs défensive domicile
+  const homeExpected = (hPpg + aOppg) / 2;
+  const awayExpected = (aPpg + hOppg) / 2;
+  let estTotal = homeExpected + awayExpected;
+  const adjustments = [];
+
+  // Playoffs / play-in : défense +, rythme -, arbitrage différent → -4.5 pts
+  const phase = _botGetNBAPhase();
+  const isPlayoff = phase === 'playin' || phase === 'playoff';
+  if (isPlayoff) {
+    estTotal -= 4.5;
+    adjustments.push({ name: 'playoff_defense', delta: -4.5 });
+  }
+
+  // Forme récente BDL : moyenne des 5 derniers scores vs ppg saison
+  const recentAdj = (recent, seasonPpg) => {
+    const matches = recent?.matches;
+    if (!Array.isArray(matches) || matches.length < 3) return null;
+    const last5 = matches.slice(0, 5);
+    const avg = last5.reduce((s, m) => s + (m.team_score ?? 0), 0) / last5.length;
+    return (avg - seasonPpg) * 0.35;
+  };
+  const hAdj = recentAdj(matchData?.home_recent, hPpg);
+  const aAdj = recentAdj(matchData?.away_recent, aPpg);
+  if (hAdj != null) { estTotal += hAdj; adjustments.push({ name: 'home_recent_form', delta: Math.round(hAdj * 10) / 10 }); }
+  if (aAdj != null) { estTotal += aAdj; adjustments.push({ name: 'away_recent_form', delta: Math.round(aAdj * 10) / 10 }); }
+
+  // Absences de stars : net pts perdus (star absent → ~60% du ppg non remplacé)
+  const absImpact = (injuries) => {
+    if (!Array.isArray(injuries)) return 0;
+    let lost = 0;
+    for (const p of injuries) {
+      const ppg = p.ppg ?? null;
+      if (ppg == null || ppg < 12) continue;
+      const w = p.status === 'Out' ? 1.0 : p.status === 'Doubtful' ? 0.6 : 0.3;
+      lost += ppg * 0.60 * w;
+    }
+    return lost;
+  };
+  const hLost = absImpact(matchData?.home_injuries);
+  const aLost = absImpact(matchData?.away_injuries);
+  if (hLost > 0) { estTotal -= hLost; adjustments.push({ name: 'home_absences', delta: -Math.round(hLost * 10) / 10 }); }
+  if (aLost > 0) { estTotal -= aLost; adjustments.push({ name: 'away_absences', delta: -Math.round(aLost * 10) / 10 }); }
+
+  estTotal = Math.round(estTotal * 10) / 10;
+
+  // Chercher la ligne O/U dans les bookmakers
+  const PRIORITY = ['pinnacle', 'winamax', 'betclic', 'unibet_eu', 'bet365'];
+  const bks = matchData?.market_odds?.bookmakers ?? [];
+  let book = null;
+  for (const key of PRIORITY) {
+    const b = bks.find(b => b.key === key);
+    if (b?.total_line && b?.over_total && b?.under_total) { book = b; break; }
+  }
+  if (!book) book = bks.find(b => b.total_line && b.over_total && b.under_total) ?? null;
+
+  if (!book) return { est_total: estTotal, line: null, recommendation: null, adjustments };
+
+  const line = parseFloat(book.total_line);
+  const diff = estTotal - line;
+
+  // Conversion diff → prob : NBA total std ~12 pts → 1 pt ≈ 4% swing, cap ±18%
+  const overProb  = Math.min(0.80, Math.max(0.20, 0.50 + Math.tanh(diff / 6) * 0.18));
+  const underProb = 1 - overProb;
+
+  const _decToAm = d => d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1));
+
+  const overImplied  = book.over_total  > 1 ? 1 / book.over_total  : null;
+  const underImplied = book.under_total > 1 ? 1 / book.under_total : null;
+  if (!overImplied || !underImplied) return { est_total: estTotal, line, recommendation: null, adjustments };
+
+  const overEdge  = Math.round((overProb  - overImplied)  * 100);
+  const underEdge = Math.round((underProb - underImplied) * 100);
+  const best = overEdge >= underEdge
+    ? { side: 'OVER',  edge: overEdge,  prob: overProb,  implied: overImplied,  odds: book.over_total }
+    : { side: 'UNDER', edge: underEdge, prob: underProb, implied: underImplied, odds: book.under_total };
+
+  const recommendation = best.edge >= 5 ? {
+    type:         'OVER_UNDER',
+    side:         best.side,
+    line,
+    est_total:    estTotal,
+    motor_prob:   Math.round(best.prob * 100),
+    implied_prob: Math.round(best.implied * 100),
+    odds_decimal: best.odds,
+    odds_line:    _decToAm(best.odds),
+    odds_source:  book.title ?? book.key,
+    edge:         best.edge,
+    has_value:    true,
+  } : null;
+
+  return {
+    est_total: estTotal,
+    line,
+    diff: Math.round(diff * 10) / 10,
+    recommendation,
+    adjustments,
+    all_edges: { over: overEdge, under: underEdge },
   };
 }
 
