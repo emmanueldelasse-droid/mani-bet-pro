@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.49
+ * MANI BET PRO — Cloudflare Worker v6.50
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -205,6 +205,7 @@ export default {
     ctx.waitUntil(_runMLBBotCron(env));
     ctx.waitUntil(_runNightlySettle(env));
     ctx.waitUntil(_runOddsSnapshot(env));
+    ctx.waitUntil(_runAIPlayerPropsCron(env));
   },
 
   async fetch(request, env) {
@@ -256,6 +257,9 @@ export default {
 
       if (path === '/nba/ai-injuries-batch' && request.method === 'POST')
         return await handleNBAAIInjuriesBatch(request, env, origin);
+
+      if (path === '/nba/ai-player-props-batch' && request.method === 'POST')
+        return await handleNBAAIPlayerPropsBatch(request, env, origin);
 
       if (path === '/nba/roster-debug' && request.method === 'GET')
         return await handleNBARosterDebug(url, env, origin);
@@ -346,7 +350,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.49.0',
+          version:   '6.50.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -354,7 +358,7 @@ export default {
             'GET /nba/standings', 'GET /nba/results', 'GET /nba/teams/stats',
             'GET /nba/player/test', 'GET /nba/roster-injuries',
             'GET /nba/ai-injuries', 'POST /nba/ai-injuries-batch', 'GET /nba/odds/comparison', 'GET /nba/team-detail',
-            'GET /nba/player-points',
+            'GET /nba/player-points', 'POST /nba/ai-player-props-batch',
             'GET /paper/state', 'POST /paper/bet', 'PUT /paper/bet/:id', 'POST /paper/reset',
           ],
         }, 200, origin);
@@ -1313,6 +1317,144 @@ async function handleNBAAIInjuriesBatch(request, env, origin) {
 }
 
 // ── HANDLER : AI CONTEXT GLOBAL ───────────────────────────────────────────────
+
+// ── HANDLER : AI PLAYER PROPS BATCH (fallback TheOddsAPI) ────────────────────
+// Fetch 1 fois/jour les lignes props via Claude web_search sur agrégateurs.
+// Cache KV 20h · rate limit 2/jour · appelé par cron à 22h UTC.
+
+async function handleNBAAIPlayerPropsBatch(request, env, origin) {
+  let body = null;
+  try { body = await request.json(); } catch (_) {
+    return jsonResponse({ available: false, note: 'invalid json body' }, 400, origin);
+  }
+
+  const date = String(body?.date ?? '').replace(/-/g, '');
+  const gamesRaw = Array.isArray(body?.games) ? body.games : [];
+  const force = body?.force === true;
+
+  if (!date || date.length !== 8) {
+    return jsonResponse({ available: false, note: 'date required in YYYYMMDD' }, 400, origin);
+  }
+
+  const games = gamesRaw
+    .map(g => ({
+      home: String(g?.home ?? '').trim().toUpperCase(),
+      away: String(g?.away ?? '').trim().toUpperCase(),
+    }))
+    .filter(g => g.home && g.away)
+    .slice(0, AI_BATCH_MAX_GAMES);
+
+  if (!games.length) {
+    return jsonResponse({ available: false, note: 'games required' }, 400, origin);
+  }
+
+  const cacheKey = `ai_player_props_${date}`;
+  const READ_TTL_MS = 20 * 3600 * 1000;
+  const WRITE_TTL_S = 24 * 3600;
+  const dailyLimit = 2;
+
+  if (!force && env.PAPER_TRADING) {
+    try {
+      const cached = await env.PAPER_TRADING.get(cacheKey, { type: 'json' });
+      if (cached && cached.fetched_at && (Date.now() - cached.fetched_at) < READ_TTL_MS) {
+        return jsonResponse({
+          available:  true,
+          source:     'cache',
+          fetched_at: new Date(cached.fetched_at).toISOString(),
+          by_game:    cached.by_game,
+        }, 200, origin);
+      }
+    } catch (err) { console.warn('AIProps cache read error:', err.message); }
+  }
+
+  if (!env.CLAUDE_API_KEY) {
+    return jsonResponse({ available: false, note: 'CLAUDE_API_KEY not configured' }, 200, origin);
+  }
+
+  const rateKey = `ai_player_props_rate_${_todayParisKey()}`;
+  if (env.PAPER_TRADING) {
+    try {
+      const rateRaw = await env.PAPER_TRADING.get(rateKey);
+      const count = rateRaw ? parseInt(rateRaw, 10) : 0;
+      if (count >= dailyLimit) {
+        return jsonResponse({ available: false, note: `AI player props daily limit reached (${dailyLimit}/day)` }, 429, origin);
+      }
+      await env.PAPER_TRADING.put(rateKey, String(count + 1), { expirationTtl: 25 * 3600 });
+    } catch (err) { console.warn('AIProps rate increment error:', err.message); }
+  }
+
+  const compactGames = games.map(g => `${g.away}@${g.home}`).join(', ');
+  const systemPrompt = `Tu trouves les lignes "points joueur O/U" NBA publiées pour ce soir. Sources prioritaires : actionnetwork.com/nba/player-props, covers.com/sports/nba/player-props, rotowire.com/basketball/nba-player-props, draftkings.com/sportsbook. Uniquement joueurs avec ppg≥15 saison. Lignes format décimal .5 (ex 24.5, 30.5). Si plusieurs sources pour un joueur, prends la médiane. Si aucune source fiable, omets le joueur. Réponds uniquement en JSON valide, pas de texte libre.`;
+  const userPrompt = `Date:${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}
+Matchs:${compactGames}
+Pour chaque match, trouve les lignes "player points O/U" des stars (ppg≥15).
+Retourne exactement :
+{"games":[{"game":"AWY@HOME","players":[{"name":"LeBron James","team":"LAL","line":25.5,"source":"actionnetwork.com","confidence":"high|medium|low"}]}]}
+Tableau vide players si aucune ligne trouvée. Max 6 joueurs/match.`;
+
+  try {
+    const textContent = await _callClaudeWithWebSearch(env.CLAUDE_API_KEY, systemPrompt, userPrompt, 2500);
+    if (!textContent) {
+      return jsonResponse({ available: false, note: 'Claude returned no content' }, 200, origin);
+    }
+
+    const cleaned = textContent.replace(/```json|```/g, '').trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (err) {
+      console.warn('AIProps JSON parse fail:', err.message, cleaned.slice(0, 200));
+      return jsonResponse({ available: false, note: 'invalid_json', raw_preview: cleaned.slice(0, 200) }, 200, origin);
+    }
+
+    const byGame = {};
+    for (const item of (parsed?.games ?? [])) {
+      const game = String(item?.game ?? '').trim().toUpperCase();
+      if (!game || !game.includes('@')) continue;
+
+      const cleanPlayers = (Array.isArray(item?.players) ? item.players : [])
+        .filter(p => p && typeof p === 'object' && p.name && Number.isFinite(parseFloat(p.line)))
+        .map(p => {
+          const line = parseFloat(p.line);
+          // Validation : ligne cohérente pour un joueur NBA (entre 4 et 55 pts)
+          if (line < 4 || line > 55) return null;
+          return {
+            name:       String(p.name).trim(),
+            team:       String(p.team ?? '').trim().toUpperCase(),
+            line:       Math.round(line * 2) / 2,  // force .5 step
+            source:     String(p.source ?? 'ai_web_search').trim(),
+            confidence: ['high','medium','low'].includes(p.confidence) ? p.confidence : 'medium',
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 6);
+
+      byGame[game] = { players: cleanPlayers };
+    }
+
+    const payload = {
+      fetched_at: Date.now(),
+      date,
+      games:      games.map(g => `${g.away}@${g.home}`),
+      by_game:    byGame,
+    };
+
+    if (env.PAPER_TRADING) {
+      try { await env.PAPER_TRADING.put(cacheKey, JSON.stringify(payload), { expirationTtl: WRITE_TTL_S }); }
+      catch (err) { console.warn('AIProps cache write error:', err.message); }
+    }
+
+    return jsonResponse({
+      available:  true,
+      source:     'claude_web_search',
+      fetched_at: new Date().toISOString(),
+      by_game:    byGame,
+    }, 200, origin);
+  } catch (err) {
+    console.error('AIProps error:', err.message);
+    return jsonResponse({ available: false, note: err.message }, 200, origin);
+  }
+}
 
 // ── HANDLER : AI INJURIES ONLY ──────────────────────────────────────────────
 
@@ -2985,11 +3127,23 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
   const analysis = _botEngineCompute(matchData);
   if (!analysis) return null;
 
-  // Phase 3 : matching projections joueurs ↔ lignes marché TheOddsAPI
-  // Gate env PLAYER_PROPS_ENABLED · fetch par event · KV cache 4h
-  if (env && analysis.player_props_prediction?.available && marketOdds?.odds_api_id) {
+  // Phase 3 : matching projections joueurs ↔ lignes marché
+  // Chaîne de fetch : TheOddsAPI d'abord (si PLAYER_PROPS_ENABLED), AI cache en fallback
+  if (env && analysis.player_props_prediction?.available) {
     try {
-      const ppResult = await _fetchPlayerPointsForEvent(marketOdds.odds_api_id, env);
+      let ppResult = null;
+
+      // Source 1 : TheOddsAPI (requires PLAYER_PROPS_ENABLED + player_points subscription)
+      if (marketOdds?.odds_api_id) {
+        ppResult = await _fetchPlayerPointsForEvent(marketOdds.odds_api_id, env);
+      }
+
+      // Source 2 (fallback) : cache AI peuplé par _runAIPlayerPropsCron à 22h UTC
+      if (!ppResult?.available) {
+        const aiLines = await _getAIPlayerPropsLines(dateStr, gameKey, env);
+        if (aiLines?.available) ppResult = aiLines;
+      }
+
       if (ppResult?.available && ppResult.lines) {
         const matched = _botMatchPlayerPropsToLines(
           analysis.player_props_prediction,
@@ -2998,7 +3152,7 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
         );
         analysis.player_props_prediction = matched.enriched;
         analysis.player_props_prediction.market_fetched_at = ppResult.fetched_at ?? null;
-        analysis.player_props_prediction.market_source     = ppResult.source ?? 'the_odds_api';
+        analysis.player_props_prediction.market_source     = ppResult.source ?? 'unknown';
 
         if (matched.recommendations.length > 0 && analysis.betting_recommendations) {
           analysis.betting_recommendations.recommendations.push(...matched.recommendations);
@@ -3414,6 +3568,87 @@ async function _runOddsSnapshot(env) {
     const mlb2 = await snapshot(`${ESPN_MLB_SCOREBOARD}?dates=${tomorrow}&limit=25`, ODDS_SNAP_PREFIX);
     console.log(`[ODDS SNAP] NBA=${nba1 + nba2} MLB=${mlb1 + mlb2}`);
   } catch (err) { console.warn('[ODDS SNAP] error:', err.message); }
+}
+
+// Cron AI player props — 1 appel Claude web_search par jour à 22h UTC (= 23h Paris hiver / 00h été)
+// Fetch tous les matchs du soir → cache KV 24h · rate-limited 2/jour
+async function _runAIPlayerPropsCron(env) {
+  if (!env.PAPER_TRADING || !env.CLAUDE_API_KEY) return;
+  if (env.AI_PLAYER_PROPS_ENABLED !== 'true' && env.AI_PLAYER_PROPS_ENABLED !== '1') return;
+
+  // Fenêtre déclenchement : 22h UTC uniquement
+  const nowUTC = new Date();
+  if (nowUTC.getUTCHours() !== 22) return;
+
+  const dateStr = _botFormatDate(_botNowParis());
+
+  // Déjà fetché aujourd'hui ?
+  try {
+    const cached = await env.PAPER_TRADING.get(`ai_player_props_${dateStr}`, { type: 'json' });
+    if (cached?.fetched_at && (Date.now() - cached.fetched_at) < 20 * 3600 * 1000) {
+      console.log('[AI-PROPS CRON] déjà fetché aujourd\'hui, skip');
+      return;
+    }
+  } catch (_) {}
+
+  // Récupérer matchs du soir via ESPN
+  try {
+    const espnData = await espnFetch(`${ESPN_SCOREBOARD}?dates=${dateStr}&limit=25`);
+    if (!espnData) { console.warn('[AI-PROPS CRON] ESPN indispo'); return; }
+
+    const matches = parseESPNMatches(espnData, dateStr).filter(m =>
+      m.status !== 'STATUS_FINAL' && m.home_team && m.away_team
+    );
+    if (!matches.length) { console.log('[AI-PROPS CRON] aucun match à venir'); return; }
+
+    const games = matches.map(m => ({
+      home: _botGetTeamAbv(m.home_team?.name),
+      away: _botGetTeamAbv(m.away_team?.name),
+    })).filter(g => g.home && g.away);
+
+    if (!games.length) return;
+
+    const fakeReq = new Request('https://manibetpro.emmanueldelasse.workers.dev/nba/ai-player-props-batch', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ date: dateStr, games }),
+    });
+    const resp = await handleNBAAIPlayerPropsBatch(fakeReq, env, 'https://manibetpro.emmanueldelasse.workers.dev');
+    const result = await resp.json();
+    console.log(`[AI-PROPS CRON] ${result.available ? 'OK' : 'FAIL'} — ${Object.keys(result.by_game ?? {}).length} matchs`);
+  } catch (err) {
+    console.error('[AI-PROPS CRON] error:', err.message);
+  }
+}
+
+// Lit le cache AI player props et convertit au format attendu par _botMatchPlayerPropsToLines
+async function _getAIPlayerPropsLines(dateStr, gameKey, env) {
+  if (!env?.PAPER_TRADING) return null;
+  try {
+    const cached = await env.PAPER_TRADING.get(`ai_player_props_${dateStr}`, { type: 'json' });
+    const players = cached?.by_game?.[gameKey]?.players;
+    if (!Array.isArray(players) || players.length === 0) return null;
+
+    const linesByPlayer = {};
+    for (const p of players) {
+      const norm = _normalizeName(p.name);
+      linesByPlayer[norm] = {
+        player_name: p.name,
+        line:        p.line,
+        // Pas de vraies cotes → défaut 1.91 (standard -110/-110)
+        over:        { decimal: 1.91, book: `ai:${p.source}` },
+        under:       { decimal: 1.91, book: `ai:${p.source}` },
+        confidence:  p.confidence,
+      };
+    }
+    return {
+      available:     true,
+      source:        'ai_cache',
+      fetched_at:    new Date(cached.fetched_at).toISOString(),
+      players_count: Object.keys(linesByPlayer).length,
+      lines:         linesByPlayer,
+    };
+  } catch (_) { return null; }
 }
 
 /**
