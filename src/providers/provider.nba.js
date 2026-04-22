@@ -350,6 +350,7 @@ export class ProviderNBA {
           away_favorite: m.odds.away_favorite  ?? null,
           fetched_at:    m.odds.fetched_at     ?? new Date().toISOString(),
         } : null,
+        playoff_series: m.playoff_series ?? null,
       })),
     };
   }

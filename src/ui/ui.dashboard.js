@@ -226,6 +226,15 @@ function _injectStyles() {
       font-size: 11px; color: var(--color-text-muted);
       font-variant-numeric: tabular-nums;
     }
+    .mc-series {
+      font-size: 10px; font-weight: 700;
+      color: #a855f7; letter-spacing: 0.03em;
+      margin-top: 4px;
+      padding: 2px 7px; border-radius: 4px;
+      background: rgba(168,85,247,0.08);
+      border: 1px solid rgba(168,85,247,0.22);
+      display: inline-block;
+    }
     .mc-footer__cta {
       display: block; width: 100%;
       margin-top: 10px;
@@ -573,6 +582,20 @@ function _createMatchCard(match) {
   const awayScore     = match.away_team?.score;
   const showScore     = isFinal && homeScore != null && awayScore != null;
 
+  // Série playoff compacte · ex: "🏆 OKC mène 1-0"
+  const ps = match.playoff_series;
+  const seriesBadge = (ps && (ps.home_wins != null || ps.away_wins != null)) ? (() => {
+    const hW = ps.home_wins ?? 0;
+    const aW = ps.away_wins ?? 0;
+    const homeAbv = match.home_team?.abbreviation ?? '—';
+    const awayAbv = match.away_team?.abbreviation ?? '—';
+    const big = Math.max(hW, aW);
+    const small = Math.min(hW, aW);
+    const leader = hW > aW ? homeAbv : aW > hW ? awayAbv : null;
+    const txt = leader ? `${leader} mène ${big}-${small}` : `Série ${hW}-${aW}`;
+    return `<div class="mc-series">🏆 ${txt}</div>`;
+  })() : '';
+
   const marketOdds = match.market_odds ?? null;
   const espnOdds   = match.odds ?? {};
 
@@ -610,6 +633,7 @@ function _createMatchCard(match) {
         ${isFinal ? 'Final' : '…'}
       </span>
     </div>
+    ${seriesBadge}
 
     <div class="mc-teams">
       <div class="mc-team">
