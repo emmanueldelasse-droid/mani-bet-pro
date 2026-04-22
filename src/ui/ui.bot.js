@@ -235,7 +235,9 @@ async function _loadAndRender(container, filter = 'all') {
     _bindLogCards(logsEl);
 
   } catch (err) {
-    logsEl.innerHTML = `<div class="bot-error">Impossible de charger les logs : ${err.message}</div>`;
+    const safe = String(err?.message ?? err ?? 'erreur inconnue')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    logsEl.innerHTML = `<div class="bot-error">Impossible de charger les logs : ${safe}</div>`;
   }
 }
 

@@ -668,7 +668,7 @@ function _openGameModal(gameID, teamAbv, teamName, box, game) {
     const isTop = p.pts >= 20;
     return `
       <tr style="border-bottom:1px solid var(--color-border)${isTop ? ';background:rgba(34,197,94,0.04)' : ''}">
-        <td style="padding:5px 6px;font-size:11px;font-weight:${isTop ? '700' : '400'};white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis">${p.name}</td>
+        <td style="padding:5px 6px;font-size:11px;font-weight:${isTop ? '700' : '400'};white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis">${_escapeHtml(p.name)}</td>
         <td style="padding:5px 4px;text-align:center;font-size:11px;color:var(--color-text-secondary)">${p.min}</td>
         <td style="padding:5px 4px;text-align:center;font-size:12px;font-weight:${isTop ? '700' : '600'};color:${isTop ? '#22c55e' : 'var(--color-text)'}">${p.pts}</td>
         <td style="padding:5px 4px;text-align:center;font-size:11px">${p.reb}</td>
@@ -687,10 +687,10 @@ function _openGameModal(gameID, teamAbv, teamName, box, game) {
     <div style="background:var(--color-card);border-radius:16px 16px 0 0;width:100%;max-width:600px;max-height:85vh;overflow-y:auto;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div>
-          <div style="font-size:14px;font-weight:700">${teamName} · ${dateStr}</div>
+          <div style="font-size:14px;font-weight:700">${_escapeHtml(teamName)} · ${_escapeHtml(dateStr)}</div>
           <div style="display:flex;gap:10px;margin-top:4px">
             <span style="font-size:12px;font-weight:700;color:${resColor}">${won ? '✓ Victoire' : '✗ Défaite'}</span>
-            <span style="font-size:12px;color:var(--color-text-secondary)">${score}</span>
+            <span style="font-size:12px;color:var(--color-text-secondary)">${_escapeHtml(score)}</span>
             <span style="font-size:11px;color:var(--color-text-secondary)">${venue}</span>
           </div>
         </div>

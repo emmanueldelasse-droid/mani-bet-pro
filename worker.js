@@ -860,6 +860,7 @@ async function handleNBAMatches(url, origin) {
   const dateStr   = dateParam
     ? dateParam.replace(/-/g, '')
     : formatDateESPN(new Date());
+  if (!/^\d{8}$/.test(dateStr)) return errorResponse('invalid date format · YYYYMMDD ou YYYY-MM-DD', 400, origin);
 
   const data = await espnFetch(`${ESPN_SCOREBOARD}?dates=${dateStr}&limit=25`);
   if (!data) return errorResponse('ESPN fetch failed', 502, origin);
@@ -878,6 +879,16 @@ function _getTank01Key(env) {
   if (env.TANK01_API_KEY2) return env.TANK01_API_KEY2;
   if (env.TANK01_API_KEY3) return env.TANK01_API_KEY3;
   return env.TANK01_API_KEY ?? null;
+}
+
+// Guard debug strict : refuse si DEBUG_SECRET absent OU incorrect.
+// Retourne Response erreur si KO, null sinon.
+function _denyIfNoDebugAuth(url, env, origin) {
+  const provided = url.searchParams.get('secret');
+  if (!env.DEBUG_SECRET || !provided || provided !== env.DEBUG_SECRET) {
+    return errorResponse('Unauthorized', 401, origin);
+  }
+  return null;
 }
 
 async function _tank01FetchWithFallback(url, env, timeout = 10000) {
@@ -1942,9 +1953,8 @@ function _validateAIInjuryList(list, teamsAbv) {
 // ── HANDLER : PLAYER TEST ─────────────────────────────────────────────────────
 
 async function handleNBAPlayerTest(url, env, origin) {
-  // Guard debug — CORRECTION v6.33
-  if (env.DEBUG_SECRET && url.searchParams.get('secret') !== env.DEBUG_SECRET)
-    return errorResponse('Unauthorized', 401, origin);
+  const authDeny = _denyIfNoDebugAuth(url, env, origin);
+  if (authDeny) return authDeny;
   const tank01Key  = _getTank01Key(env);
   if (!tank01Key) {
     return jsonResponse({ available: false, note: 'TANK01_API_KEY not configured' }, 200, origin);
@@ -1979,9 +1989,8 @@ async function handleNBAPlayerTest(url, env, origin) {
 // ── HANDLER : ROSTER DEBUG ────────────────────────────────────────────────────
 
 async function handleNBARosterDebug(url, env, origin) {
-  // Guard debug — CORRECTION v6.33
-  if (env.DEBUG_SECRET && url.searchParams.get('secret') !== env.DEBUG_SECRET)
-    return errorResponse('Unauthorized', 401, origin);
+  const authDeny = _denyIfNoDebugAuth(url, env, origin);
+  if (authDeny) return authDeny;
   const teamAbv  = url.searchParams.get('team') ?? 'LAL';
   const debugUrl = `${TANK01_BASE}/getNBATeams?rosters=true&schedules=false&statsToGet=averages&topPerformers=false&teamStats=false`;
 
@@ -2332,8 +2341,10 @@ function _buildLatestGameSummary(teamAbv, game) {
 }
 
 async function handleDebugBasketUSA(url, env, origin) {
-  const home = String(url.searchParams.get('home') ?? '').toUpperCase();
-  const away = String(url.searchParams.get('away') ?? '').toUpperCase();
+  const authDeny = _denyIfNoDebugAuth(url, env, origin);
+  if (authDeny) return authDeny;
+  const home = String(url.searchParams.get('home') ?? '').trim().toUpperCase();
+  const away = String(url.searchParams.get('away') ?? '').trim().toUpperCase();
 
   if (!home || !away) {
     return jsonResponse({ error: 'home and away params required' }, 400, origin);
@@ -2472,9 +2483,8 @@ function normalizeTank01TeamAbv(abv = '') {
 // Retourne la structure brute du body Tank01 getNBABoxScore pour diagnostiquer
 // les champs playerStats, homePts, awayPts, etc.
 async function handleNBABoxscoreDebug(url, env, origin) {
-  // Guard debug — CORRECTION v6.33
-  if (env.DEBUG_SECRET && url.searchParams.get('secret') !== env.DEBUG_SECRET)
-    return errorResponse('Unauthorized', 401, origin);
+  const authDeny = _denyIfNoDebugAuth(url, env, origin);
+  if (authDeny) return authDeny;
   const gameID = url.searchParams.get('gameID');
   if (!gameID) {
     return jsonResponse({ error: 'gameID param required (ex: CHA@DET_20260408)' }, 400, origin);
@@ -2531,9 +2541,8 @@ async function handleNBABoxscoreDebug(url, env, origin) {
 // Retourne les 3 premiers matchs du schedule pour voir les champs disponibles
 // (homeTeamScore, awayTeamScore, gameResult, etc.)
 async function handleNBAScheduleDebug(url, env, origin) {
-  // Guard debug — CORRECTION v6.33
-  if (env.DEBUG_SECRET && url.searchParams.get('secret') !== env.DEBUG_SECRET)
-    return errorResponse('Unauthorized', 401, origin);
+  const authDeny = _denyIfNoDebugAuth(url, env, origin);
+  if (authDeny) return authDeny;
   const teamAbv = url.searchParams.get('team') ?? 'CHA';
 
   const res = await _tank01FetchWithFallback(
@@ -4205,7 +4214,9 @@ async function _getAIPlayerPropsLines(dateStr, gameKey, env) {
 async function handleOddsHistory(url, env, origin) {
   if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
   const matchId = url.searchParams.get('matchId');
-  if (!matchId) return jsonResponse({ error: 'matchId required' }, 400, origin);
+  if (!matchId || !/^[a-zA-Z0-9_-]+$/.test(matchId)) {
+    return jsonResponse({ error: 'invalid matchId' }, 400, origin);
+  }
   try {
     const raw = await env.PAPER_TRADING.get(`${ODDS_SNAP_PREFIX}${matchId}`);
     if (!raw) return jsonResponse({ available: false, snapshots: [], movement: null }, 200, origin);
