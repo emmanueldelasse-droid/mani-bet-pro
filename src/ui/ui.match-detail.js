@@ -51,8 +51,14 @@ export async function render(container, storeInstance) {
   container.innerHTML = renderShell(match, analysis, storeInstance);
   bindEvents(container, storeInstance, match, analysis);
   _loadAndRenderMultiBookOdds(container, match, analysis);
-  _loadAndRenderTeamDetail(container, match, storeInstance);
-  _loadAndRenderPlayerPropsFromBot(container, match, analysis, storeInstance);
+
+  const isMLB = String(match?.sport ?? '').toUpperCase() === 'MLB';
+  if (isMLB) {
+    _loadAndRenderMLBStats(container, match, storeInstance);
+  } else {
+    _loadAndRenderTeamDetail(container, match, storeInstance);
+    _loadAndRenderPlayerPropsFromBot(container, match, analysis, storeInstance);
+  }
 
   return { destroy() {} };
 }
@@ -97,9 +103,152 @@ async function _loadAndRenderPlayerPropsFromBot(container, match, analysis, stor
   }
 }
 
+// ── MLB : charge stats équipe + pitchers + standings et rend le bloc détail ───
+async function _loadAndRenderMLBStats(container, match, storeInstance) {
+  const el = container.querySelector('#mlb-stats-container');
+  if (!el) return;
+
+  try {
+    const homeName = match.home_team?.name;
+    const awayName = match.away_team?.name;
+    const dateStr  = (match.date ?? '').length === 8
+      ? `${match.date.slice(0,4)}-${match.date.slice(4,6)}-${match.date.slice(6,8)}`
+      : null;
+
+    // 3 fetches en parallèle (tous cachés côté worker)
+    const [teamStatsResp, standingsResp, pitchersResp, botLogResp] = await Promise.allSettled([
+      fetch(`${WORKER_URL}/mlb/team-stats`,        { headers: { Accept: 'application/json' } }),
+      fetch(`${WORKER_URL}/mlb/standings`,         { headers: { Accept: 'application/json' } }),
+      fetch(`${WORKER_URL}/mlb/pitchers${dateStr ? `?date=${dateStr}` : ''}`, { headers: { Accept: 'application/json' } }),
+      fetch(`${WORKER_URL}/mlb/bot/logs${match.date ? `?date=${match.date}` : ''}`, { headers: { Accept: 'application/json' } }),
+    ]);
+
+    const teamStatsData = teamStatsResp.status === 'fulfilled' ? await teamStatsResp.value.json() : null;
+    const standingsData = standingsResp.status === 'fulfilled' ? await standingsResp.value.json() : null;
+    const pitchersData  = pitchersResp.status  === 'fulfilled' ? await pitchersResp.value.json()  : null;
+    const botLogs       = botLogResp.status    === 'fulfilled' ? await botLogResp.value.json()    : null;
+
+    const homeStats  = teamStatsData?.teams?.[homeName] ?? null;
+    const awayStats  = teamStatsData?.teams?.[awayName] ?? null;
+    const homeStand  = standingsData?.standings?.[homeName] ?? null;
+    const awayStand  = standingsData?.standings?.[awayName] ?? null;
+    const homePit    = pitchersData?.pitchers?.[homeName] ?? null;
+    const awayPit    = pitchersData?.pitchers?.[awayName] ?? null;
+
+    const matchingLog = (botLogs?.logs ?? []).find(l => l.match_id === match.id);
+    const strikeoutsPrediction = matchingLog?.pitcher_strikeouts_prediction ?? null;
+
+    el.innerHTML = _renderMLBMatchDetail({
+      homeName, awayName,
+      homeStats, awayStats,
+      homeStand, awayStand,
+      homePit, awayPit,
+      strikeoutsPrediction,
+    });
+  } catch (err) {
+    console.warn('[MatchDetail MLB] load error:', err.message);
+    el.innerHTML = `<div class="bot-error" style="padding:20px">Erreur chargement stats MLB: ${err.message}</div>`;
+  }
+}
+
+function _renderMLBMatchDetail(data) {
+  const { homeName, awayName, homeStats, awayStats, homeStand, awayStand, homePit, awayPit, strikeoutsPrediction } = data;
+
+  const compareRow = (label, hVal, aVal, fmt = (v) => v, reverse = false) => {
+    const h = hVal != null ? fmt(hVal) : '—';
+    const a = aVal != null ? fmt(aVal) : '—';
+    let hColor = 'var(--color-text-primary)';
+    let aColor = 'var(--color-text-primary)';
+    if (hVal != null && aVal != null) {
+      const better = reverse ? hVal < aVal : hVal > aVal;
+      if (hVal !== aVal) {
+        hColor = better ? 'var(--color-success)' : 'var(--color-text-secondary)';
+        aColor = better ? 'var(--color-text-secondary)' : 'var(--color-success)';
+      }
+    }
+    return `
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;padding:8px 0;border-bottom:1px solid var(--color-border);font-size:13px">
+        <div style="text-align:right;font-weight:700;color:${hColor}">${h}</div>
+        <div style="color:var(--color-text-secondary);font-size:11px;min-width:110px;text-align:center">${label}</div>
+        <div style="text-align:left;font-weight:700;color:${aColor}">${a}</div>
+      </div>`;
+  };
+
+  const pitcherBlock = (pit, ks, label) => {
+    if (!pit) return `<div style="padding:10px;font-size:12px;color:var(--color-muted)">${label} : pas de pitcher annoncé</div>`;
+    const projKs = ks?.projected_ks != null ? `<span style="color:var(--color-signal);font-weight:700">${ks.projected_ks}K projetés</span>` : '';
+    return `
+      <div style="background:var(--color-bg);border-radius:8px;padding:10px 12px">
+        <div style="font-size:10px;text-transform:uppercase;color:var(--color-muted);letter-spacing:0.06em;margin-bottom:4px">${label}</div>
+        <div style="font-size:14px;font-weight:700;margin-bottom:4px">${pit.name ?? '—'}</div>
+        <div style="font-size:11px;color:var(--color-text-secondary)">
+          ERA ${pit.era?.toFixed(2) ?? '—'} · FIP ${pit.fip?.toFixed(2) ?? '—'} · WHIP ${pit.whip?.toFixed(2) ?? '—'}
+        </div>
+        <div style="font-size:11px;color:var(--color-text-secondary);margin-top:2px">
+          K/9 ${pit.k_per_9?.toFixed(1) ?? '—'} · BB/9 ${pit.bb_per_9?.toFixed(1) ?? '—'} · HR/9 ${pit.hr_per_9?.toFixed(2) ?? '—'}
+          · ${pit.games ?? '?'} GS
+        </div>
+        ${projKs ? `<div style="margin-top:6px;font-size:12px">${projKs}</div>` : ''}
+      </div>`;
+  };
+
+  return `
+    <div style="padding:14px 16px">
+      <div class="bloc-header" style="margin-bottom:var(--space-3)">
+        <span class="bloc-header__title">⚾ Starters du match</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        ${pitcherBlock(homePit, strikeoutsPrediction?.home_pitcher, '🏠 ' + (homeName ?? 'Home'))}
+        ${pitcherBlock(awayPit, strikeoutsPrediction?.away_pitcher, '✈️ ' + (awayName ?? 'Away'))}
+      </div>
+
+      <div class="bloc-header" style="margin-bottom:var(--space-2)">
+        <span class="bloc-header__title">📊 Stats équipes saison</span>
+      </div>
+      <div style="background:var(--color-bg);border-radius:8px;padding:10px 14px;margin-bottom:14px">
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;padding-bottom:6px;border-bottom:2px solid var(--color-border);font-size:11px;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.06em">
+          <div style="text-align:right">${homeName ?? 'Home'}</div>
+          <div style="text-align:center"></div>
+          <div style="text-align:left">${awayName ?? 'Away'}</div>
+        </div>
+        ${compareRow('Win %',         homeStand?.pct,          awayStand?.pct,         (v) => (parseFloat(v) * 100).toFixed(1) + '%')}
+        ${compareRow('Record',        homeStand ? `${homeStand.wins}-${homeStand.losses}` : null, awayStand ? `${awayStand.wins}-${awayStand.losses}` : null, (v) => v)}
+        ${compareRow('Run diff',      homeStand?.run_diff,     awayStand?.run_diff,    (v) => (v > 0 ? '+' : '') + v)}
+        ${compareRow('OPS',           homeStats?.ops,          awayStats?.ops,         (v) => v.toFixed(3))}
+        ${compareRow('Team ERA',      homeStats?.team_era,     awayStats?.team_era,    (v) => v.toFixed(2), true)}
+        ${compareRow('Team WHIP',     homeStats?.team_whip,    awayStats?.team_whip,   (v) => v.toFixed(2), true)}
+        ${compareRow('Team K/9',      homeStats?.team_k_per_9, awayStats?.team_k_per_9, (v) => v.toFixed(1))}
+      </div>
+
+      ${(homeStand && awayStand) ? `
+        <div class="bloc-header" style="margin-bottom:var(--space-2)">
+          <span class="bloc-header__title">📅 Splits & forme</span>
+        </div>
+        <div style="background:var(--color-bg);border-radius:8px;padding:10px 14px">
+          ${compareRow('Dom.',         homeStand.home_wins != null ? homeStand.home_wins / Math.max(1, homeStand.home_wins + homeStand.home_losses) : null,
+                                        awayStand.home_wins != null ? awayStand.home_wins / Math.max(1, awayStand.home_wins + awayStand.home_losses) : null,
+                                        (v) => (v * 100).toFixed(0) + '%')}
+          ${compareRow('Ext.',         homeStand.away_wins != null ? homeStand.away_wins / Math.max(1, homeStand.away_wins + homeStand.away_losses) : null,
+                                        awayStand.away_wins != null ? awayStand.away_wins / Math.max(1, awayStand.away_wins + awayStand.away_losses) : null,
+                                        (v) => (v * 100).toFixed(0) + '%')}
+          ${compareRow('Last 10',      homeStand.last10_wins != null ? `${homeStand.last10_wins}-${homeStand.last10_losses}` : null,
+                                        awayStand.last10_wins != null ? `${awayStand.last10_wins}-${awayStand.last10_losses}` : null,
+                                        (v) => v)}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
 // ── SHELL ─────────────────────────────────────────────────────────────────────
 
 function renderShell(match, analysis, storeInstance) {
+  const sport     = String(match?.sport ?? 'NBA').toUpperCase();
+  const isMLB     = sport === 'MLB';
+  const sportTag  = isMLB
+    ? '<span class="sport-tag sport-tag--mlb">⚾ MLB</span>'
+    : '<span class="sport-tag sport-tag--nba">🏀 NBA</span>';
+
   return `
     <div class="match-detail">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3)">
@@ -109,7 +258,7 @@ function renderShell(match, analysis, storeInstance) {
 
       <div class="match-detail__header card">
         <div class="row row--between" style="margin-bottom:var(--space-3)">
-          <span class="sport-tag sport-tag--nba">NBA</span>
+          ${sportTag}
           <span class="text-muted" style="font-size:12px">${formatMatchTime(match)}</span>
         </div>
         <div class="match-detail__teams">
@@ -135,7 +284,9 @@ function renderShell(match, analysis, storeInstance) {
       ${renderBlocSyntheseSummary(analysis, match)}
       ${renderBlocProbas(analysis, match)}
       <div id="bloc-tous-paris">${renderBlocTousLesParis(analysis, match)}</div>
-      <div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>
+      ${isMLB
+        ? `<div id="mlb-stats-container" class="card match-detail__bloc"><div class="bot-loading" style="padding:20px">Chargement stats MLB…</div></div>`
+        : `<div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>`}
       ${renderBlocFiabiliteEtSynthese(analysis, match)}
     </div>
   `;
@@ -991,9 +1142,20 @@ export function renderBlocAbsences(analysis, match, storeInstance) {
 // ── BLOC FIABILITÉ + SOURCES + SYNTHÈSE (fusionné) ───────────────────────────
 
 function renderBlocFiabiliteEtSynthese(analysis, match) {
-  const rob   = analysis?.robustness_score;
-  const qual  = analysis?.data_quality_score;
-  const score = rob !== null && qual !== null ? Math.round(((rob + qual) / 2) * 100) : null;
+  const isMLB = String(match?.sport ?? '').toUpperCase() === 'MLB';
+
+  let score = null;
+  if (isMLB) {
+    // MLB : mappe data_quality (HIGH/MEDIUM/LOW) → score numérique
+    const dq = analysis?.data_quality;
+    if      (dq === 'HIGH')   score = 85;
+    else if (dq === 'MEDIUM') score = 60;
+    else if (dq === 'LOW')    score = 35;
+  } else {
+    const rob   = analysis?.robustness_score;
+    const qual  = analysis?.data_quality_score;
+    if (rob != null && qual != null) score = Math.round(((rob + qual) / 2) * 100);
+  }
 
   let fiabLabel, fiabColor;
   if (score === null)   { fiabLabel = '—';       fiabColor = 'var(--color-muted)'; }
