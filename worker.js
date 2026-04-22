@@ -3641,8 +3641,9 @@ async function _botSettleDate(env, dateStr, options = {}) {
       // force=true : re-settle même si déjà settlé (pour enrichir avec nouveaux champs)
       if (!force && log.motor_was_right !== null) continue;
 
-      const homeScore = parseInt(result.home_team?.score ?? 0);
-      const awayScore = parseInt(result.away_team?.score ?? 0);
+      const homeScore = parseInt(result.home_team?.score ?? '', 10);
+      const awayScore = parseInt(result.away_team?.score ?? '', 10);
+      if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || homeScore === awayScore) continue;
       const winner    = homeScore > awayScore ? 'HOME' : 'AWAY';
       const margin    = homeScore - awayScore;
       const totalPts  = homeScore + awayScore;
@@ -3672,7 +3673,8 @@ async function _botSettleDate(env, dateStr, options = {}) {
 
       let clvPostMatch = null;
       if (log.motor_prob !== null && log.odds_at_analysis?.home_ml) {
-        const impliedHome = 100 / (Math.abs(log.odds_at_analysis.home_ml) + 100);
+        const ml = log.odds_at_analysis.home_ml;
+        const impliedHome = ml < 0 ? Math.abs(ml) / (Math.abs(ml) + 100) : 100 / (ml + 100);
         clvPostMatch = Math.round((log.motor_prob / 100 - impliedHome) * 10000) / 100;
       }
 
@@ -3719,9 +3721,9 @@ async function _botSettleDate(env, dateStr, options = {}) {
       log.clv_post_match    = clvPostMatch;
       log.pp_recs_settled   = ppSettled;
       // Calibration modèle O/U : est_total_nba vs résultat réel (indépendant de la reco)
-      if (log.est_total_nba != null && totalPts != null) {
-        const modelOver = log.est_total_nba > (log.ou_line_nba ?? log.est_total_nba);
-        const actualOver = totalPts > (log.ou_line_nba ?? log.est_total_nba);
+      if (log.est_total_nba != null && log.ou_line_nba != null && totalPts != null) {
+        const modelOver = log.est_total_nba > log.ou_line_nba;
+        const actualOver = totalPts > log.ou_line_nba;
         log.ou_model_was_right = modelOver === actualOver;
       }
       log.settled_at        = new Date().toISOString();
@@ -4009,7 +4011,8 @@ async function _runNightlySettle(env) {
   if (!env.PAPER_TRADING) return;
   try {
     const now = new Date();
-    if (now.getUTCHours() !== 10) return; // cron horaire, on ne tourne que 1x/j
+    const h = now.getUTCHours();
+    if (h < 10 || h > 11) return; // fenêtre 10-11h UTC · idempotent via NIGHTLY_SETTLE_RUN_KEY
 
     const todayStr = formatDateESPN(now);
     const lastRun = await env.PAPER_TRADING.get(NIGHTLY_SETTLE_RUN_KEY);
@@ -5269,8 +5272,8 @@ async function handlePaperPlaceBet(request, env, origin) {
     bet.clv       = null;
 
     state.bets.push(bet);
-    state.current_bankroll -= bet.stake;
-    state.total_staked     += bet.stake;
+    state.current_bankroll = Math.round((state.current_bankroll - bet.stake) * 100) / 100;
+    state.total_staked     = Math.round((state.total_staked + bet.stake) * 100) / 100;
 
     await env.PAPER_TRADING.put(PAPER_KV_KEY, JSON.stringify(state));
 
@@ -5302,8 +5305,8 @@ async function handlePaperSettleBet(request, betId, env, origin) {
       return jsonResponse({ error: 'Bet already settled — use force:true to override' }, 404, origin);
     }
     if (force && bet.result !== 'PENDING') {
-      state.current_bankroll -= (bet.stake + oldPnl);
-      state.total_pnl         = Math.round((state.total_pnl - oldPnl) * 100) / 100;
+      state.current_bankroll = Math.round((state.current_bankroll - bet.stake - oldPnl) * 100) / 100;
+      state.total_pnl        = Math.round((state.total_pnl - oldPnl) * 100) / 100;
     }
 
     bet.result       = body.result;
@@ -5330,8 +5333,8 @@ async function handlePaperSettleBet(request, betId, env, origin) {
       bet.clv = Math.round((bet.motor_prob / 100 - impliedClosing) * 10000) / 100;
     }
 
-    state.current_bankroll += bet.stake + bet.pnl;
-    state.total_pnl         = Math.round((state.total_pnl + bet.pnl) * 100) / 100;
+    state.current_bankroll = Math.round((state.current_bankroll + bet.stake + bet.pnl) * 100) / 100;
+    state.total_pnl        = Math.round((state.total_pnl + bet.pnl) * 100) / 100;
 
     await env.PAPER_TRADING.put(PAPER_KV_KEY, JSON.stringify(state));
 
@@ -6504,8 +6507,9 @@ async function _fetchWeatherForVenue(venue, env) {
 // ── CRON MLB BOT ──────────────────────────────────────────────────────────────
 async function _runMLBBotCron(env, forceRun = false) {
   const now     = new Date();
-  const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
-  const dateESPN = dateStr.replace(/-/g, '');       // YYYYMMDD
+  const dateISO = now.toISOString().split('T')[0];      // YYYY-MM-DD (pour MLB Stats API)
+  const dateStr = dateISO.replace(/-/g, '');            // YYYYMMDD (aligné NBA pour logs/KV/stats cross-sport)
+  const dateESPN = dateStr;
 
   console.log(`[MLB BOT] Démarré — ${now.toISOString()}, date: ${dateStr}`);
 
@@ -6545,7 +6549,7 @@ async function _runMLBBotCron(env, forceRun = false) {
 
   // 4. Charger données en parallèle — appels directs aux fonctions
   const fakeOrigin = 'https://manibetpro.emmanueldelasse.workers.dev';
-  const fakeUrl    = new URL(`https://manibetpro.emmanueldelasse.workers.dev/mlb/pitchers?date=${dateStr}`);
+  const fakeUrl    = new URL(`https://manibetpro.emmanueldelasse.workers.dev/mlb/pitchers?date=${dateISO}`);
   const fakeOddsUrl = new URL('https://manibetpro.emmanueldelasse.workers.dev/mlb/odds/comparison');
   const fakeStandUrl = new URL('https://manibetpro.emmanueldelasse.workers.dev/mlb/standings');
 
@@ -7110,8 +7114,9 @@ async function _mlbBotSettleDate(env, dateStr, options = {}) {
       const log = JSON.parse(raw);
       if (!force && log.motor_was_right !== null) continue;
 
-      const homeScore = parseInt(result.home_team?.score ?? 0);
-      const awayScore = parseInt(result.away_team?.score ?? 0);
+      const homeScore = parseInt(result.home_team?.score ?? '', 10);
+      const awayScore = parseInt(result.away_team?.score ?? '', 10);
+      if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore) || homeScore === awayScore) continue;
       const winner    = homeScore > awayScore ? 'HOME' : 'AWAY';
       const margin    = homeScore - awayScore;
       const totalRuns = homeScore + awayScore;
