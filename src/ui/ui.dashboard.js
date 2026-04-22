@@ -227,13 +227,43 @@ function _injectStyles() {
       font-variant-numeric: tabular-nums;
     }
     .mc-series {
-      font-size: 10px; font-weight: 700;
-      color: #a855f7; letter-spacing: 0.03em;
-      margin-top: 4px;
-      padding: 2px 7px; border-radius: 4px;
-      background: rgba(168,85,247,0.08);
-      border: 1px solid rgba(168,85,247,0.22);
-      display: inline-block;
+      font-family: var(--font-display, 'Bebas Neue', sans-serif);
+      font-size: 14px; font-weight: 400;
+      letter-spacing: 0.08em;
+      color: #fff;
+      margin: 6px -16px 8px; /* déborde de la carte → bandeau plein */
+      padding: 6px 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .mc-series--nba {
+      background: linear-gradient(90deg, rgba(249,115,22,0.18) 0%, rgba(168,85,247,0.18) 100%);
+      border-top: 1px solid rgba(249,115,22,0.35);
+      border-bottom: 1px solid rgba(168,85,247,0.35);
+    }
+    .mc-series--mlb {
+      background: linear-gradient(90deg, rgba(220,38,38,0.18) 0%, rgba(30,58,138,0.18) 100%);
+      border-top: 1px solid rgba(220,38,38,0.35);
+      border-bottom: 1px solid rgba(30,58,138,0.35);
+    }
+    .mc-series__icon {
+      font-size: 16px;
+    }
+    .mc-series--nba .mc-series__icon { filter: drop-shadow(0 0 4px rgba(249,115,22,0.6)); }
+    .mc-series--mlb .mc-series__icon { filter: drop-shadow(0 0 4px rgba(220,38,38,0.6)); }
+    .mc-series__leader {
+      font-weight: 700;
+    }
+    .mc-series--nba .mc-series__leader { color: var(--color-basket-soft, #fb923c); }
+    .mc-series--mlb .mc-series__leader { color: var(--color-mlb-soft, #f87171); }
+    .mc-series__score {
+      font-family: var(--font-mono);
+      font-size: 13px; font-weight: 700;
+      margin-left: auto;
+      padding: 2px 8px;
+      background: rgba(0,0,0,0.35);
+      border-radius: 3px;
+      color: #fff;
+      letter-spacing: 0.05em;
     }
     .mc-footer__cta {
       display: block; width: 100%;
@@ -582,7 +612,7 @@ function _createMatchCard(match) {
   const awayScore     = match.away_team?.score;
   const showScore     = isFinal && homeScore != null && awayScore != null;
 
-  // Série playoff compacte · ex: "🏆 OKC mène 1-0"
+  // Série playoff bandeau adapté sport (NBA orange · MLB rouge baseball)
   const ps = match.playoff_series;
   const seriesBadge = (ps && (ps.home_wins != null || ps.away_wins != null)) ? (() => {
     const hW = ps.home_wins ?? 0;
@@ -592,8 +622,20 @@ function _createMatchCard(match) {
     const big = Math.max(hW, aW);
     const small = Math.min(hW, aW);
     const leader = hW > aW ? homeAbv : aW > hW ? awayAbv : null;
-    const txt = leader ? `${leader} mène ${big}-${small}` : `Série ${hW}-${aW}`;
-    return `<div class="mc-series">🏆 ${txt}</div>`;
+    const total = ps.total_games ?? 7;
+    const status = leader
+      ? `<span class="mc-series__leader">${leader}</span> mène`
+      : `Série à égalité`;
+    const sportClass = isMLB ? 'mc-series--mlb' : 'mc-series--nba';
+    const icon = isMLB ? '⚾' : '🏆';
+    const label = isMLB
+      ? (total === 3 ? 'WILD CARD' : total === 5 ? 'DIVISION' : 'POSTSEASON')
+      : 'PLAYOFF';
+    return `<div class="mc-series ${sportClass}">
+      <span class="mc-series__icon">${icon}</span>
+      <span>${label} · ${status}</span>
+      <span class="mc-series__score">${big}–${small} (BO${total})</span>
+    </div>`;
   })() : '';
 
   const marketOdds = match.market_odds ?? null;

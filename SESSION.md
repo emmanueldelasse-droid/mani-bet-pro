@@ -10,7 +10,7 @@ néant
 néant (demander P quand user ajoute)
 
 ## État
-Worker `manibetpro` v6.72 · `manibetpro.emmanueldelasse.workers.dev` · Front GH Pages
+Worker `manibetpro` v6.75 · `manibetpro.emmanueldelasse.workers.dev` · Front GH Pages
 KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
 Stack: CF Worker + KV + Tank01 + ESPN + Claude API + Telegram
 

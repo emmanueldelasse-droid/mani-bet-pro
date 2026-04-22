@@ -409,6 +409,51 @@ function renderShell(match, analysis, storeInstance) {
     ? '<span class="sport-tag sport-tag--mlb">⚾ MLB</span>'
     : '<span class="sport-tag sport-tag--nba">🏀 NBA</span>';
 
+  // Bandeau Série playoff · scoreboard adapté sport (NBA orange · MLB rouge)
+  const ps = match?.playoff_series;
+  const seriesHeaderBadge = (ps && (ps.home_wins != null || ps.away_wins != null)) ? (() => {
+    const hW = ps.home_wins ?? 0;
+    const aW = ps.away_wins ?? 0;
+    const homeAbv = match.home_team?.abbreviation ?? '—';
+    const awayAbv = match.away_team?.abbreviation ?? '—';
+    const total = ps.total_games ?? 7;
+    const leadHome = hW > aW;
+    const leadAway = aW > hW;
+    const tied = hW === aW;
+    const statusTxt = tied ? 'SÉRIE À ÉGALITÉ' : `${leadHome ? homeAbv : awayAbv} MÈNE LA SÉRIE`;
+    const seriesLabel = isMLB
+      ? (total === 3 ? 'WILD CARD · BO3' : total === 5 ? 'DIVISION SERIES · BO5' : `POSTSEASON · BO${total}`)
+      : `PLAYOFFS · BO${total}`;
+    const accentColor = isMLB ? 'var(--color-mlb-soft, #f87171)' : 'var(--color-basket-soft, #fb923c)';
+    const accentRgb   = isMLB ? '220,38,38' : '249,115,22';
+    const accentRgb2  = isMLB ? '30,58,138' : '168,85,247';
+    return `
+      <div style="
+        margin: 0 calc(-1 * var(--space-5)) var(--space-3);
+        padding: 12px var(--space-5);
+        background: linear-gradient(90deg, rgba(${accentRgb},0.20) 0%, rgba(${accentRgb2},0.18) 50%, rgba(${accentRgb},0.20) 100%);
+        border-top: 1px solid rgba(${accentRgb},0.40);
+        border-bottom: 1px solid rgba(${accentRgb2},0.40);
+        position: relative;
+      ">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px">
+          <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+            <div style="font-family:var(--font-display,'Bebas Neue',sans-serif);font-size:22px;font-weight:400;letter-spacing:0.03em;color:${leadHome ? accentColor : 'var(--color-text-secondary)'};line-height:1">${homeAbv}</div>
+            <div style="font-family:var(--font-mono);font-size:32px;font-weight:800;color:${leadHome ? '#fff' : 'var(--color-text-secondary)'};line-height:1;margin-top:2px">${hW}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0">
+            <span style="font-size:18px;filter:drop-shadow(0 0 6px rgba(${accentRgb},0.8))">${isMLB ? '⚾' : '🏆'}</span>
+            <span style="font-family:var(--font-display,'Bebas Neue',sans-serif);font-size:11px;letter-spacing:0.12em;color:#fff;text-align:center;white-space:nowrap">${seriesLabel}</span>
+            <span style="font-size:9px;font-weight:700;letter-spacing:0.10em;color:${accentColor};background:rgba(0,0,0,0.45);padding:2px 8px;border-radius:3px">${statusTxt}</span>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+            <div style="font-family:var(--font-display,'Bebas Neue',sans-serif);font-size:22px;font-weight:400;letter-spacing:0.03em;color:${leadAway ? accentColor : 'var(--color-text-secondary)'};line-height:1">${awayAbv}</div>
+            <div style="font-family:var(--font-mono);font-size:32px;font-weight:800;color:${leadAway ? '#fff' : 'var(--color-text-secondary)'};line-height:1;margin-top:2px">${aW}</div>
+          </div>
+        </div>
+      </div>`;
+  })() : '';
+
   return `
     <div class="match-detail">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3)">
@@ -421,6 +466,7 @@ function renderShell(match, analysis, storeInstance) {
           ${sportTag}
           <span class="text-muted" style="font-size:12px">${formatMatchTime(match)}</span>
         </div>
+        ${seriesHeaderBadge}
         <div class="match-detail__teams">
           <div class="match-detail__team">
             <div class="match-detail__team-abbr">${match.home_team?.abbreviation ?? '—'}</div>
