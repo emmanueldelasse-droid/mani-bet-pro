@@ -254,14 +254,35 @@ function _renderDeepAnalysis(logs) {
   const settled = logs.filter(l => l.motor_was_right !== null);
   if (settled.length === 0) {
     return `<div class="bot-analysis-panel">
-      <div class="bot-analysis-title">Analyse performance</div>
+      <div class="bot-analysis-title">📊 Analyse performance</div>
       <div style="font-size:12px;color:var(--color-muted);text-align:center;padding:16px">
-        Pas encore de matchs réglés (settled). Les résultats arrivent après fin de match via nightly-settle à 12h Paris.
+        Pas encore de matchs réglés. Les résultats arrivent à 12h Paris via le cron nightly-settle.
       </div>
     </div>`;
   }
 
-  // 1. Performance par niveau d'edge
+  const correct = settled.filter(l => l.motor_was_right === true).length;
+  const total   = settled.length;
+  const pct     = Math.round(correct / total * 1000) / 10;
+  const color   = pct >= 60 ? 'var(--color-success)' : pct >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
+
+  // Verdict simple
+  let verdict = '', verdictColor = '';
+  if (total < 20) {
+    verdict = `Échantillon trop petit (${total} matchs) pour tirer des conclusions fiables. Attendre 30+ matchs.`;
+    verdictColor = 'var(--color-muted)';
+  } else if (pct >= 58) {
+    verdict = `Le bot performe bien (${pct}% vs 50% hasard · +${Math.round((pct-50)*10)/10} pts au-dessus).`;
+    verdictColor = 'var(--color-success)';
+  } else if (pct >= 52) {
+    verdict = `Le bot est légèrement positif (${pct}% · très proche du hasard, marge faible).`;
+    verdictColor = 'var(--color-warning)';
+  } else {
+    verdict = `Le bot est SOUS le hasard (${pct}% vs 50%). Calibration nécessaire.`;
+    verdictColor = 'var(--color-danger)';
+  }
+
+  // 1. Edge buckets — toujours afficher les 4 pour voir la progression
   const edgeBuckets = [
     { label: 'Edge ≥ 10%', min: 10, max: 999 },
     { label: 'Edge 7-10%', min: 7,  max: 10  },
@@ -270,33 +291,42 @@ function _renderDeepAnalysis(logs) {
   ];
   const bucketRows = edgeBuckets.map(b => {
     const grp = settled.filter(l => (l.best_edge ?? 0) >= b.min && (l.best_edge ?? 0) < b.max);
-    if (!grp.length) return null;
-    const correct = grp.filter(l => l.motor_was_right === true).length;
-    const pct = Math.round(correct / grp.length * 1000) / 10;
-    const color = pct >= 60 ? 'var(--color-success)' : pct >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
+    if (grp.length === 0) {
+      return `<div class="bot-analysis-row">
+        <span>${b.label}</span>
+        <span style="color:var(--color-muted);font-weight:500">—</span>
+      </div>`;
+    }
+    const c   = grp.filter(l => l.motor_was_right === true).length;
+    const p   = Math.round(c / grp.length * 1000) / 10;
+    const col = p >= 60 ? 'var(--color-success)' : p >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
     return `<div class="bot-analysis-row">
       <span>${b.label}</span>
-      <span style="color:${color};font-weight:700">${correct}/${grp.length} · ${pct}%</span>
+      <span style="color:${col};font-weight:700">${c}/${grp.length} · ${p}%</span>
     </div>`;
-  }).filter(Boolean).join('');
+  }).join('');
 
-  // 2. Par type de marché (best_market est rempli avec type reco principale)
+  // 2. Par type de marché — ignorer null, trier par count desc
   const byMarket = {};
   for (const l of settled) {
-    const m = l.best_market ?? 'none';
+    if (!l.best_market) continue;  // Skip matchs sans reco
+    const m = l.best_market;
     if (!byMarket[m]) byMarket[m] = { total: 0, correct: 0 };
     byMarket[m].total++;
     if (l.motor_was_right === true) byMarket[m].correct++;
   }
-  const marketRows = Object.entries(byMarket).map(([m, v]) => {
-    const pct = Math.round(v.correct / v.total * 1000) / 10;
-    const color = pct >= 60 ? 'var(--color-success)' : pct >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
-    const label = { MONEYLINE: 'Vainqueur (ML)', SPREAD: 'Handicap', OVER_UNDER: 'Total pts', PLAYER_POINTS: 'Props joueur', none: '—' }[m] ?? m;
-    return `<div class="bot-analysis-row">
-      <span>${label}</span>
-      <span style="color:${color};font-weight:700">${v.correct}/${v.total} · ${pct}%</span>
-    </div>`;
-  }).join('');
+  const marketEntries = Object.entries(byMarket).sort((a, b) => b[1].total - a[1].total);
+  const marketRows = marketEntries.length > 0
+    ? marketEntries.map(([m, v]) => {
+        const p = Math.round(v.correct / v.total * 1000) / 10;
+        const col = p >= 60 ? 'var(--color-success)' : p >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
+        const label = { MONEYLINE: 'Vainqueur (ML)', SPREAD: 'Handicap', OVER_UNDER: 'Total pts', PLAYER_POINTS: 'Props joueur' }[m] ?? m;
+        return `<div class="bot-analysis-row">
+          <span>${label}</span>
+          <span style="color:${col};font-weight:700">${v.correct}/${v.total} · ${p}%</span>
+        </div>`;
+      }).join('')
+    : '<div style="font-size:11px;color:var(--color-muted);padding:4px 0">Aucun marché avec reco (edge < 5% partout)</div>';
 
   // 3. O/U spécifique
   const ouModel = settled.filter(l => l.ou_model_was_right !== null && l.ou_model_was_right !== undefined);
@@ -304,87 +334,119 @@ function _renderDeepAnalysis(logs) {
   const ouRows = [];
   if (ouModel.length) {
     const c = ouModel.filter(l => l.ou_model_was_right === true).length;
-    const pct = Math.round(c / ouModel.length * 1000) / 10;
-    ouRows.push(`<div class="bot-analysis-row"><span>Modèle O/U (tous matchs)</span><span style="font-weight:700">${c}/${ouModel.length} · ${pct}%</span></div>`);
+    const p = Math.round(c / ouModel.length * 1000) / 10;
+    const col = p >= 60 ? 'var(--color-success)' : p >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
+    ouRows.push(`<div class="bot-analysis-row"><span>Modèle O/U (tous matchs)</span><span style="color:${col};font-weight:700">${c}/${ouModel.length} · ${p}%</span></div>`);
   }
   if (ouReco.length) {
     const c = ouReco.filter(l => l.ou_was_right === true).length;
-    const pct = Math.round(c / ouReco.length * 1000) / 10;
-    ouRows.push(`<div class="bot-analysis-row"><span>Reco O/U quand edge ≥ 5%</span><span style="font-weight:700">${c}/${ouReco.length} · ${pct}%</span></div>`);
+    const p = Math.round(c / ouReco.length * 1000) / 10;
+    const col = p >= 60 ? 'var(--color-success)' : p >= 50 ? 'var(--color-warning)' : 'var(--color-danger)';
+    ouRows.push(`<div class="bot-analysis-row"><span>Reco O/U quand edge ≥ 5%</span><span style="color:${col};font-weight:700">${c}/${ouReco.length} · ${p}%</span></div>`);
   }
 
   // 4. Upsets
   const upsets = settled.filter(l => l.upset === true).length;
-  const favs   = settled.length - upsets;
+  const favs   = total - upsets;
+  const upsetPct = Math.round(upsets / total * 1000) / 10;
 
-  // 5. Player Points (en attente de settle, pas encore settlable)
+  // 5. Player Points
   const withPP    = logs.filter(l => l.player_props_prediction?.available === true).length;
   const withPPRec = logs.filter(l => (l.betting_recommendations?.recommendations ?? []).some(r => r.type === 'PLAYER_POINTS')).length;
   const totalPPRecs = logs.reduce((s, l) => s + ((l.betting_recommendations?.recommendations ?? []).filter(r => r.type === 'PLAYER_POINTS').length), 0);
 
   return `<div class="bot-analysis-panel">
-    <div class="bot-analysis-title">📊 Analyse performance (${settled.length} matchs réglés)</div>
+    <div class="bot-analysis-header">
+      <div class="bot-analysis-title">📊 Analyse performance · ${total} matchs réglés</div>
+      <div class="bot-analysis-headline">
+        <span class="bot-analysis-big-number" style="color:${color}">${correct}/${total}</span>
+        <span class="bot-analysis-big-pct" style="color:${color}">${pct}%</span>
+        <span class="bot-analysis-ref">vs hasard 50%</span>
+      </div>
+      <div class="bot-analysis-verdict" style="color:${verdictColor}">${verdict}</div>
+    </div>
 
     <div class="bot-analysis-grid">
       <div class="bot-analysis-section">
         <div class="bot-analysis-subtitle">Par niveau d'edge</div>
-        ${bucketRows || '<div style="font-size:11px;color:var(--color-muted)">Aucun edge détecté</div>'}
+        <div class="bot-analysis-help">Plus l'edge est gros, plus le bot devrait gagner. Si les gros edges ratent, ça indique une mauvaise calibration.</div>
+        ${bucketRows}
       </div>
 
       <div class="bot-analysis-section">
-        <div class="bot-analysis-subtitle">Par type de marché</div>
-        ${marketRows || '<div style="font-size:11px;color:var(--color-muted)">—</div>'}
+        <div class="bot-analysis-subtitle">Par type de pari</div>
+        <div class="bot-analysis-help">Quel marché performe le mieux ? Si un type échoue systématiquement, on peut désactiver les recos sur celui-ci.</div>
+        ${marketRows}
       </div>
 
       ${ouRows.length ? `<div class="bot-analysis-section">
-        <div class="bot-analysis-subtitle">Over / Under</div>
+        <div class="bot-analysis-subtitle">Over / Under (total pts)</div>
+        <div class="bot-analysis-help">"Modèle" = prédit correctement le sens sur TOUS les matchs. "Reco" = seulement ceux avec edge ≥5%.</div>
         ${ouRows.join('')}
       </div>` : ''}
 
       <div class="bot-analysis-section">
-        <div class="bot-analysis-subtitle">Upsets (underdog gagne)</div>
+        <div class="bot-analysis-subtitle">Upsets</div>
+        <div class="bot-analysis-help">Upset = l'outsider gagne. Trop d'upsets = bot trop confiant en ses favoris.</div>
         <div class="bot-analysis-row">
           <span>Favori respecté</span>
-          <span style="font-weight:700">${favs}/${settled.length}</span>
+          <span style="color:var(--color-success);font-weight:700">${favs}/${total}</span>
         </div>
         <div class="bot-analysis-row">
-          <span>Upsets détectés</span>
-          <span style="color:var(--color-warning);font-weight:700">${upsets}/${settled.length}</span>
+          <span>Upset (surprise)</span>
+          <span style="color:var(--color-warning);font-weight:700">${upsets}/${total} · ${upsetPct}%</span>
         </div>
       </div>
 
       <div class="bot-analysis-section">
-        <div class="bot-analysis-subtitle">Props joueur (pas encore settlable)</div>
+        <div class="bot-analysis-subtitle">Props joueur · en attente</div>
+        <div class="bot-analysis-help">Les props (points d'un joueur) n'ont pas encore de système de settlement. On verra les résultats plus tard.</div>
         <div class="bot-analysis-row"><span>Matchs avec projections</span><span style="font-weight:700">${withPP}</span></div>
-        <div class="bot-analysis-row"><span>Matchs avec reco PLAYER_POINTS</span><span style="font-weight:700">${withPPRec}</span></div>
-        <div class="bot-analysis-row"><span>Recos PLAYER_POINTS total</span><span style="font-weight:700">${totalPPRecs}</span></div>
+        <div class="bot-analysis-row"><span>Matchs avec reco</span><span style="font-weight:700">${withPPRec}</span></div>
+        <div class="bot-analysis-row"><span>Recos totales</span><span style="font-weight:700">${totalPPRecs}</span></div>
       </div>
     </div>
   </div>
   <style>
     .bot-analysis-panel {
-      background: var(--color-card); border-radius: 10px; padding: 14px 16px;
+      background: var(--color-card); border-radius: 10px; padding: 16px 18px;
       margin-bottom: 16px; border: 1px solid var(--color-border);
     }
+    .bot-analysis-header { margin-bottom: 16px; }
     .bot-analysis-title {
-      font-size: 13px; font-weight: 700; margin-bottom: 12px;
+      font-size: 13px; font-weight: 700; margin-bottom: 8px;
       color: var(--color-text-primary);
     }
+    .bot-analysis-headline {
+      display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px;
+    }
+    .bot-analysis-big-number { font-size: 24px; font-weight: 800; }
+    .bot-analysis-big-pct    { font-size: 18px; font-weight: 700; }
+    .bot-analysis-ref {
+      font-size: 11px; color: var(--color-muted);
+    }
+    .bot-analysis-verdict {
+      font-size: 12px; font-weight: 500; font-style: italic;
+    }
     .bot-analysis-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 12px;
     }
     .bot-analysis-section {
-      background: var(--color-bg); border-radius: 6px; padding: 10px 12px;
+      background: var(--color-bg); border-radius: 8px; padding: 12px 14px;
     }
     .bot-analysis-subtitle {
-      font-size: 10px; font-weight: 700; color: var(--color-muted);
-      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;
+      font-size: 10px; font-weight: 700; color: var(--color-text-primary);
+      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;
+    }
+    .bot-analysis-help {
+      font-size: 10px; color: var(--color-muted); line-height: 1.35;
+      margin-bottom: 8px;
     }
     .bot-analysis-row {
       display: flex; justify-content: space-between; align-items: center;
       font-size: 12px; color: var(--color-text-secondary);
-      padding: 4px 0; border-bottom: 1px solid var(--color-border);
+      padding: 5px 0; border-bottom: 1px solid var(--color-border);
     }
     .bot-analysis-row:last-child { border-bottom: none; }
   </style>`;
