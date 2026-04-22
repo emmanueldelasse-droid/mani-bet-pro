@@ -52,8 +52,49 @@ export async function render(container, storeInstance) {
   bindEvents(container, storeInstance, match, analysis);
   _loadAndRenderMultiBookOdds(container, match, analysis);
   _loadAndRenderTeamDetail(container, match, storeInstance);
+  _loadAndRenderPlayerPropsFromBot(container, match, analysis, storeInstance);
 
   return { destroy() {} };
+}
+
+// Charge les données props joueur depuis /bot/logs et ré-injecte la section
+// "Points joueur" dans le tableau Marchés. Le front calcule l'analyse localement
+// mais le backend est seul à faire les projections player_points → fetch nécessaire.
+async function _loadAndRenderPlayerPropsFromBot(container, match, analysis, storeInstance) {
+  try {
+    const dateStr = match.date ? String(match.date).replace(/-/g, '') : null;
+    if (!dateStr || !match.id) return;
+
+    const url  = `${WORKER_URL}/bot/logs?date=${dateStr}`;
+    const resp = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const log  = (data.logs ?? []).find(l => l.match_id === match.id || l.espn_id === match.id);
+    if (!log?.player_props_prediction?.available) return;
+
+    // Enrichir l'analyse locale avec les données bot
+    const enrichedAnalysis = {
+      ...analysis,
+      player_props_prediction: log.player_props_prediction,
+      betting_recommendations: {
+        ...(analysis?.betting_recommendations ?? {}),
+        recommendations: [
+          ...(analysis?.betting_recommendations?.recommendations ?? []),
+          ...((log.betting_recommendations?.recommendations ?? []).filter(r => r.type === 'PLAYER_POINTS')),
+        ],
+      },
+    };
+
+    // Re-render Marchés block
+    const blocEl = container.querySelector('#bloc-tous-paris');
+    if (blocEl) {
+      blocEl.innerHTML = renderBlocTousLesParis(enrichedAnalysis, match);
+      // Re-bind paper bet buttons sur les nouveaux éléments
+      bindEvents(container, storeInstance, match, enrichedAnalysis);
+    }
+  } catch (err) {
+    console.warn('[MatchDetail] player props fetch error:', err.message);
+  }
 }
 
 // ── SHELL ─────────────────────────────────────────────────────────────────────
@@ -93,7 +134,7 @@ function renderShell(match, analysis, storeInstance) {
 
       ${renderBlocSyntheseSummary(analysis, match)}
       ${renderBlocProbas(analysis, match)}
-      ${renderBlocTousLesParis(analysis, match)}
+      <div id="bloc-tous-paris">${renderBlocTousLesParis(analysis, match)}</div>
       <div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>
       ${renderBlocFiabiliteEtSynthese(analysis, match)}
     </div>
