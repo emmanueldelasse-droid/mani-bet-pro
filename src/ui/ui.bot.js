@@ -182,9 +182,13 @@ async function _loadAndRender(container, filter = 'all') {
     // Stats globales
     statsEl.innerHTML = _renderStats(stats, allLogs);
 
-    // Panneau analyse approfondie
+    // Panneau analyse approfondie — filtre phase stocké sur le container
     const analysisEl = container.querySelector('#bot-analysis-container');
-    if (analysisEl) analysisEl.innerHTML = _renderDeepAnalysis(allLogs);
+    if (analysisEl) {
+      const phaseFilter = analysisEl.dataset.phaseFilter || 'all';
+      analysisEl.innerHTML = _renderDeepAnalysis(allLogs, phaseFilter);
+      _bindAnalysisPhaseToggle(analysisEl, allLogs);
+    }
 
     // Filtrer
     const filtered = _filterLogs(allLogs, filter);
@@ -249,14 +253,39 @@ function _renderStats(stats, logs) {
 
 // ── ANALYSE APPROFONDIE ───────────────────────────────────────────────────────
 
-function _renderDeepAnalysis(logs) {
+function _renderDeepAnalysis(logs, phaseFilter = 'all') {
   if (!logs?.length) return '';
-  const settled = logs.filter(l => l.motor_was_right !== null);
+
+  // Filtrer par phase choisie
+  const matchPhase = (log) => {
+    const p = log.nba_phase;
+    if (phaseFilter === 'regular')  return p === 'regular';
+    if (phaseFilter === 'playoffs') return p === 'playin' || p === 'playoff';
+    return true;
+  };
+  const logsForPhase = logs.filter(matchPhase);
+
+  // Compteurs pour le toggle (sur TOUS les logs, pas juste settled)
+  const counts = {
+    all:      logs.length,
+    regular:  logs.filter(l => l.nba_phase === 'regular').length,
+    playoffs: logs.filter(l => l.nba_phase === 'playin' || l.nba_phase === 'playoff').length,
+  };
+
+  const toggleHtml = `<div class="bot-phase-toggle">
+    <button class="bot-phase-btn ${phaseFilter === 'all' ? 'active' : ''}" data-phase="all">Tous (${counts.all})</button>
+    <button class="bot-phase-btn ${phaseFilter === 'regular' ? 'active' : ''}" data-phase="regular">Saison régulière (${counts.regular})</button>
+    <button class="bot-phase-btn ${phaseFilter === 'playoffs' ? 'active' : ''}" data-phase="playoffs">Playoffs & Play-in (${counts.playoffs})</button>
+  </div>`;
+
+  const settled = logsForPhase.filter(l => l.motor_was_right !== null);
   if (settled.length === 0) {
+    const phaseLabel = phaseFilter === 'regular' ? 'saison régulière' : phaseFilter === 'playoffs' ? 'playoffs' : '';
     return `<div class="bot-analysis-panel">
       <div class="bot-analysis-title">📊 Analyse performance</div>
+      ${toggleHtml}
       <div style="font-size:12px;color:var(--color-muted);text-align:center;padding:16px">
-        Pas encore de matchs réglés. Les résultats arrivent à 12h Paris via le cron nightly-settle.
+        Pas encore de matchs réglés${phaseLabel ? ` en ${phaseLabel}` : ''}. Les résultats arrivent à 12h Paris via le cron nightly-settle.
       </div>
     </div>`;
   }
@@ -350,14 +379,17 @@ function _renderDeepAnalysis(logs) {
   const favs   = total - upsets;
   const upsetPct = Math.round(upsets / total * 1000) / 10;
 
-  // 5. Player Points
-  const withPP    = logs.filter(l => l.player_props_prediction?.available === true).length;
-  const withPPRec = logs.filter(l => (l.betting_recommendations?.recommendations ?? []).some(r => r.type === 'PLAYER_POINTS')).length;
-  const totalPPRecs = logs.reduce((s, l) => s + ((l.betting_recommendations?.recommendations ?? []).filter(r => r.type === 'PLAYER_POINTS').length), 0);
+  // 5. Player Points — sur logs filtrés par phase
+  const withPP    = logsForPhase.filter(l => l.player_props_prediction?.available === true).length;
+  const withPPRec = logsForPhase.filter(l => (l.betting_recommendations?.recommendations ?? []).some(r => r.type === 'PLAYER_POINTS')).length;
+  const totalPPRecs = logsForPhase.reduce((s, l) => s + ((l.betting_recommendations?.recommendations ?? []).filter(r => r.type === 'PLAYER_POINTS').length), 0);
+
+  const phaseLabel = phaseFilter === 'regular' ? ' · Saison régulière' : phaseFilter === 'playoffs' ? ' · Playoffs & Play-in' : '';
 
   return `<div class="bot-analysis-panel">
     <div class="bot-analysis-header">
-      <div class="bot-analysis-title">📊 Analyse performance · ${total} matchs réglés</div>
+      <div class="bot-analysis-title">📊 Analyse performance${phaseLabel} · ${total} matchs réglés</div>
+      ${toggleHtml}
       <div class="bot-analysis-headline">
         <span class="bot-analysis-big-number" style="color:${color}">${correct}/${total}</span>
         <span class="bot-analysis-big-pct" style="color:${color}">${pct}%</span>
@@ -449,7 +481,33 @@ function _renderDeepAnalysis(logs) {
       padding: 5px 0; border-bottom: 1px solid var(--color-border);
     }
     .bot-analysis-row:last-child { border-bottom: none; }
+    .bot-phase-toggle {
+      display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;
+    }
+    .bot-phase-btn {
+      background: var(--color-bg); border: 1px solid var(--color-border);
+      color: var(--color-text-secondary); font-size: 11px; font-weight: 600;
+      padding: 5px 11px; border-radius: 6px; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .bot-phase-btn:hover { background: var(--color-bg-elevated); }
+    .bot-phase-btn.active {
+      background: var(--color-signal); color: white;
+      border-color: var(--color-signal);
+    }
   </style>`;
+}
+
+function _bindAnalysisPhaseToggle(analysisEl, allLogs) {
+  const buttons = analysisEl.querySelectorAll('.bot-phase-btn');
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newPhase = btn.dataset.phase;
+      analysisEl.dataset.phaseFilter = newPhase;
+      analysisEl.innerHTML = _renderDeepAnalysis(allLogs, newPhase);
+      _bindAnalysisPhaseToggle(analysisEl, allLogs);  // re-bind après re-render
+    });
+  });
 }
 
 // ── CARTE LOG ─────────────────────────────────────────────────────────────────
