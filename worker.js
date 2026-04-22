@@ -3161,10 +3161,10 @@ async function handleNBAStandings(origin) {
 //     motor_was_right, clv_post_match, settled_at }
 
 async function _runBotCron(env, forceRun = false) {
-  const nowParis = _botNowParis();
-  const dateStr  = _botFormatDate(nowParis);
+  const now     = new Date();
+  const dateStr = _botFormatDate(now);
 
-  console.log(`[BOT] Cron démarré — ${nowParis.toISOString()} Paris, date NBA: ${dateStr}`);
+  console.log(`[BOT] Cron démarré — ${now.toISOString()}, date NBA (Paris): ${dateStr}`);
 
   // Charger les matchs du jour
   const espnData = await espnFetch(`${ESPN_SCOREBOARD}?dates=${dateStr}&limit=25`);
@@ -5222,13 +5222,20 @@ function _botGetMarketOdds(oddsData, homeName, awayName) {
   ) ?? null;
 }
 
-function _botNowParis() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+// Retourne date YYYYMMDD pour Europe/Paris (DST géré via Intl)
+// Remplace l'ancien _botNowParis + _botFormatDate qui dépendaient d'un reparse fragile.
+function _botFormatDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const y = parts.find(p => p.type === 'year').value;
+  const m = parts.find(p => p.type === 'month').value;
+  const d = parts.find(p => p.type === 'day').value;
+  return `${y}${m}${d}`;
 }
-
-function _botFormatDate(date) {
-  return date.toISOString().slice(0, 10).replace(/-/g, '');
-}
+// Legacy : _botNowParis renvoyait un Date dont les champs UTC étaient les heures Paris.
+// Remplacé par appels directs à Date + _botFormatDate pour éviter ambiguïté.
+function _botNowParis() { return new Date(); }
 
 // ── PAPER TRADING ─────────────────────────────────────────────────────────────
 
@@ -5900,8 +5907,14 @@ function formatDateESPN(date) {
 }
 
 function getTodayET() {
-  const now = new Date();
-  return new Date(now.getTime() + (-5) * 3600000).toISOString().slice(0, 10);
+  // YYYY-MM-DD America/New_York · DST géré par Intl
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const y = parts.find(p => p.type === 'year').value;
+  const m = parts.find(p => p.type === 'month').value;
+  const d = parts.find(p => p.type === 'day').value;
+  return `${y}-${m}-${d}`;
 }
 
 function currentSeason() {
@@ -6521,8 +6534,8 @@ async function _fetchWeatherForVenue(venue, env) {
 // ── CRON MLB BOT ──────────────────────────────────────────────────────────────
 async function _runMLBBotCron(env, forceRun = false) {
   const now     = new Date();
-  const dateISO = now.toISOString().split('T')[0];      // YYYY-MM-DD (pour MLB Stats API)
-  const dateStr = dateISO.replace(/-/g, '');            // YYYYMMDD (aligné NBA pour logs/KV/stats cross-sport)
+  const dateStr = _botFormatDate(now);                  // YYYYMMDD Paris (aligné NBA)
+  const dateISO = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`; // YYYY-MM-DD pour MLB Stats API
   const dateESPN = dateStr;
 
   console.log(`[MLB BOT] Démarré — ${now.toISOString()}, date: ${dateStr}`);
