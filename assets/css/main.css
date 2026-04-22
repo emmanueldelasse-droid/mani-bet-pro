@@ -17,7 +17,9 @@ html {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);
   min-height: 100dvh;
@@ -65,7 +67,10 @@ body {
   --color-bg-tertiary: var(--color-bg-elevated);
 
   --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Bebas Neue', 'Inter', system-ui, sans-serif; /* sport iconique */
+  --color-basket: #f97316;       /* orange ballon basket */
+  --color-basket-soft: #fb923c;
 
   --space-1:  4px;
   --space-2:  8px;
@@ -464,7 +469,7 @@ body.theme-light .btn--ghost:hover,
   text-transform: uppercase;
 }
 
-.sport-tag--nba      { background: rgba(59,130,246,0.15); color: #60a5fa; }
+.sport-tag--nba      { background: rgba(249,115,22,0.15); color: var(--color-basket-soft); border: 1px solid rgba(249,115,22,0.30); }
 .sport-tag--tennis   { background: rgba(34,197,94,0.15);  color: #4ade80; }
 .sport-tag--mlb      { background: rgba(239,68,68,0.15);  color: #f87171; }
 .sport-tag--mlb      { background: rgba(245,158,11,0.15); color: #fbbf24; }
@@ -1076,11 +1081,12 @@ body.theme-light .chip--active,
 .match-detail__team--away { text-align: right; align-items: flex-end; }
 
 .match-detail__team-abbr {
-  font-family: var(--font-mono);
-  font-size: 28px;
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 42px;
+  font-weight: 400;
   color: var(--color-text-primary);
-  letter-spacing: -0.02em;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .match-detail__team-name { font-size: 14px; color: var(--color-text-secondary); font-weight: 500; }

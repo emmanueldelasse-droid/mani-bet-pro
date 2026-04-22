@@ -227,13 +227,32 @@ function _injectStyles() {
       font-variant-numeric: tabular-nums;
     }
     .mc-series {
-      font-size: 10px; font-weight: 700;
-      color: #a855f7; letter-spacing: 0.03em;
-      margin-top: 4px;
-      padding: 2px 7px; border-radius: 4px;
-      background: rgba(168,85,247,0.08);
-      border: 1px solid rgba(168,85,247,0.22);
-      display: inline-block;
+      font-family: var(--font-display, 'Bebas Neue', sans-serif);
+      font-size: 14px; font-weight: 400;
+      letter-spacing: 0.08em;
+      color: #fff;
+      margin: 6px -16px 8px; /* déborde de la carte → bandeau plein */
+      padding: 6px 16px;
+      background: linear-gradient(90deg, rgba(249,115,22,0.18) 0%, rgba(168,85,247,0.18) 100%);
+      border-top: 1px solid rgba(249,115,22,0.35);
+      border-bottom: 1px solid rgba(168,85,247,0.35);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .mc-series__icon {
+      font-size: 16px; filter: drop-shadow(0 0 4px rgba(249,115,22,0.6));
+    }
+    .mc-series__leader {
+      font-weight: 700; color: var(--color-basket-soft, #fb923c);
+    }
+    .mc-series__score {
+      font-family: var(--font-mono);
+      font-size: 13px; font-weight: 700;
+      margin-left: auto;
+      padding: 2px 8px;
+      background: rgba(0,0,0,0.35);
+      border-radius: 3px;
+      color: #fff;
+      letter-spacing: 0.05em;
     }
     .mc-footer__cta {
       display: block; width: 100%;
@@ -582,7 +601,7 @@ function _createMatchCard(match) {
   const awayScore     = match.away_team?.score;
   const showScore     = isFinal && homeScore != null && awayScore != null;
 
-  // Série playoff compacte · ex: "🏆 OKC mène 1-0"
+  // Série playoff bandeau "PLAYOFF · OKC mène · 1-0"
   const ps = match.playoff_series;
   const seriesBadge = (ps && (ps.home_wins != null || ps.away_wins != null)) ? (() => {
     const hW = ps.home_wins ?? 0;
@@ -592,8 +611,15 @@ function _createMatchCard(match) {
     const big = Math.max(hW, aW);
     const small = Math.min(hW, aW);
     const leader = hW > aW ? homeAbv : aW > hW ? awayAbv : null;
-    const txt = leader ? `${leader} mène ${big}-${small}` : `Série ${hW}-${aW}`;
-    return `<div class="mc-series">🏆 ${txt}</div>`;
+    const total = ps.total_games ?? 7;
+    const status = leader
+      ? `<span class="mc-series__leader">${leader}</span> mène`
+      : `Série à égalité`;
+    return `<div class="mc-series">
+      <span class="mc-series__icon">🏆</span>
+      <span>PLAYOFF · ${status}</span>
+      <span class="mc-series__score">${big}–${small} (BO${total})</span>
+    </div>`;
   })() : '';
 
   const marketOdds = match.market_odds ?? null;

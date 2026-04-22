@@ -409,20 +409,43 @@ function renderShell(match, analysis, storeInstance) {
     ? '<span class="sport-tag sport-tag--mlb">⚾ MLB</span>'
     : '<span class="sport-tag sport-tag--nba">🏀 NBA</span>';
 
-  // Badge série playoff (si match en playoffs · centré bandeau principal)
+  // Bandeau Série playoff · format scoreboard NBA (gros chiffres, mode basket)
   const ps = match?.playoff_series;
   const seriesHeaderBadge = (ps && (ps.home_wins != null || ps.away_wins != null)) ? (() => {
     const hW = ps.home_wins ?? 0;
     const aW = ps.away_wins ?? 0;
     const homeAbv = match.home_team?.abbreviation ?? '—';
     const awayAbv = match.away_team?.abbreviation ?? '—';
-    const big = Math.max(hW, aW);
-    const small = Math.min(hW, aW);
-    const leader = hW > aW ? homeAbv : aW > hW ? awayAbv : null;
-    const txt = leader ? `${leader} mène ${big}-${small}` : `Série à égalité ${hW}-${aW}`;
-    return `<div style="display:flex;justify-content:center;margin-bottom:var(--space-3)">
-      <span style="font-size:12px;font-weight:700;color:#a855f7;letter-spacing:0.04em;padding:4px 12px;border-radius:6px;background:rgba(168,85,247,0.10);border:1px solid rgba(168,85,247,0.28)">🏆 Série playoff · ${txt}</span>
-    </div>`;
+    const total = ps.total_games ?? 7;
+    const leadHome = hW > aW;
+    const leadAway = aW > hW;
+    const tied = hW === aW;
+    const statusTxt = tied ? 'SÉRIE À ÉGALITÉ' : `${leadHome ? homeAbv : awayAbv} MÈNE LA SÉRIE`;
+    return `
+      <div style="
+        margin: 0 calc(-1 * var(--space-5)) var(--space-3);
+        padding: 12px var(--space-5);
+        background: linear-gradient(90deg, rgba(249,115,22,0.20) 0%, rgba(168,85,247,0.18) 50%, rgba(249,115,22,0.20) 100%);
+        border-top: 1px solid rgba(249,115,22,0.40);
+        border-bottom: 1px solid rgba(168,85,247,0.40);
+        position: relative;
+      ">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px">
+          <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+            <div style="font-family:var(--font-display,'Bebas Neue',sans-serif);font-size:22px;font-weight:400;letter-spacing:0.03em;color:${leadHome ? 'var(--color-basket-soft,#fb923c)' : 'var(--color-text-secondary)'};line-height:1">${homeAbv}</div>
+            <div style="font-family:var(--font-mono);font-size:32px;font-weight:800;color:${leadHome ? '#fff' : 'var(--color-text-secondary)'};line-height:1;margin-top:2px">${hW}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0">
+            <span style="font-size:18px;filter:drop-shadow(0 0 6px rgba(249,115,22,0.8))">🏆</span>
+            <span style="font-family:var(--font-display,'Bebas Neue',sans-serif);font-size:11px;letter-spacing:0.12em;color:#fff;text-align:center;white-space:nowrap">PLAYOFFS · BO${total}</span>
+            <span style="font-size:9px;font-weight:700;letter-spacing:0.10em;color:var(--color-basket-soft,#fb923c);background:rgba(0,0,0,0.45);padding:2px 8px;border-radius:3px">${statusTxt}</span>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0">
+            <div style="font-family:var(--font-display,'Bebas Neue',sans-serif);font-size:22px;font-weight:400;letter-spacing:0.03em;color:${leadAway ? 'var(--color-basket-soft,#fb923c)' : 'var(--color-text-secondary)'};line-height:1">${awayAbv}</div>
+            <div style="font-family:var(--font-mono);font-size:32px;font-weight:800;color:${leadAway ? '#fff' : 'var(--color-text-secondary)'};line-height:1;margin-top:2px">${aW}</div>
+          </div>
+        </div>
+      </div>`;
   })() : '';
 
   return `
