@@ -409,6 +409,22 @@ function renderShell(match, analysis, storeInstance) {
     ? '<span class="sport-tag sport-tag--mlb">⚾ MLB</span>'
     : '<span class="sport-tag sport-tag--nba">🏀 NBA</span>';
 
+  // Badge série playoff (si match en playoffs · centré bandeau principal)
+  const ps = match?.playoff_series;
+  const seriesHeaderBadge = (ps && (ps.home_wins != null || ps.away_wins != null)) ? (() => {
+    const hW = ps.home_wins ?? 0;
+    const aW = ps.away_wins ?? 0;
+    const homeAbv = match.home_team?.abbreviation ?? '—';
+    const awayAbv = match.away_team?.abbreviation ?? '—';
+    const big = Math.max(hW, aW);
+    const small = Math.min(hW, aW);
+    const leader = hW > aW ? homeAbv : aW > hW ? awayAbv : null;
+    const txt = leader ? `${leader} mène ${big}-${small}` : `Série à égalité ${hW}-${aW}`;
+    return `<div style="display:flex;justify-content:center;margin-bottom:var(--space-3)">
+      <span style="font-size:12px;font-weight:700;color:#a855f7;letter-spacing:0.04em;padding:4px 12px;border-radius:6px;background:rgba(168,85,247,0.10);border:1px solid rgba(168,85,247,0.28)">🏆 Série playoff · ${txt}</span>
+    </div>`;
+  })() : '';
+
   return `
     <div class="match-detail">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3)">
@@ -421,6 +437,7 @@ function renderShell(match, analysis, storeInstance) {
           ${sportTag}
           <span class="text-muted" style="font-size:12px">${formatMatchTime(match)}</span>
         </div>
+        ${seriesHeaderBadge}
         <div class="match-detail__teams">
           <div class="match-detail__team">
             <div class="match-detail__team-abbr">${match.home_team?.abbreviation ?? '—'}</div>
