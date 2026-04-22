@@ -65,6 +65,7 @@ function _renderShell() {
       </div>
 
       <div id="bot-stats-container"></div>
+      <div id="bot-bets-container"></div>
       <div id="bot-analysis-container"></div>
       <div id="bot-logs-container">
         <div class="bot-loading">Chargement des analyses…</div>
@@ -213,6 +214,10 @@ async function _loadAndRender(container, filter = 'all') {
     // Stats globales
     statsEl.innerHTML = _renderStats(stats, allLogs, sport);
 
+    // Liste paris disponibles du jour (toutes recos + cote + fiabilité)
+    const betsEl = container.querySelector('#bot-bets-container');
+    if (betsEl) betsEl.innerHTML = _renderBetsAvailable(allLogs, sport);
+
     // Panneau analyse approfondie — filtre phase stocké sur le container
     const analysisEl = container.querySelector('#bot-analysis-container');
     if (analysisEl) {
@@ -287,6 +292,178 @@ function _renderStats(stats, logs, sport = 'nba') {
 }
 
 // ── ANALYSE APPROFONDIE ───────────────────────────────────────────────────────
+
+// ── PARIS DISPONIBLES DU JOUR ────────────────────────────────────────────────
+// Agrège toutes les recos (ML/Spread/O-U/PLAYER_POINTS) sur matchs pending
+// (pas encore settlés) avec cote + edge + score fiabilité
+function _renderBetsAvailable(logs, sport = 'nba') {
+  if (!logs?.length) return '';
+
+  // Seuls les matchs pas encore joués (pending) — pas d'intérêt sur matchs passés
+  const pending = logs.filter(l => l.motor_was_right === null || l.motor_was_right === undefined);
+  if (pending.length === 0) return '';
+
+  // Extraire toutes les recos avec contexte match
+  const bets = [];
+  for (const log of pending) {
+    const recs = log.betting_recommendations?.recommendations ?? log.betting_recommendations?.all ?? [];
+    for (const r of recs) {
+      if (r.edge == null || r.edge < 5) continue;  // Seuil minimum 5%
+      bets.push({
+        match_id:    log.match_id,
+        away:        log.away,
+        home:        log.home,
+        datetime:    log.datetime,
+        rec:         r,
+        data_quality:     log.data_quality ?? log.confidence_level ?? null,
+        dq_score:    log.data_quality_score ?? null,
+        score_robust: log.robustness_score ?? null,
+        nba_phase:   log.nba_phase ?? null,
+      });
+    }
+  }
+
+  if (bets.length === 0) {
+    return `<div class="bot-bets-panel">
+      <div class="bot-bets-title">🎯 Paris disponibles · aucun edge ≥ 5%</div>
+      <div style="font-size:12px;color:var(--color-muted);text-align:center;padding:10px">
+        Pas de reco ce soir avec edge suffisant. Le bot ne trouve pas d'opportunité.
+      </div>
+    </div>`;
+  }
+
+  // Score fiabilité composite : edge × qualité × confidence
+  const computeReliability = (bet) => {
+    let score = bet.rec.edge ?? 0;
+    // Bonus data quality
+    const dq = bet.data_quality;
+    if      (dq === 'HIGH')   score *= 1.20;
+    else if (dq === 'MEDIUM') score *= 1.00;
+    else if (dq === 'LOW')    score *= 0.70;
+    // Confidence factor pour player points
+    if (bet.rec.confidence_factor != null) score *= bet.rec.confidence_factor;
+    return Math.round(score * 10) / 10;
+  };
+
+  bets.forEach(b => { b.reliability = computeReliability(b); });
+  bets.sort((a, b) => b.reliability - a.reliability);
+
+  const rows = bets.slice(0, 20).map(bet => {
+    const { rec, away, home, datetime, data_quality, reliability } = bet;
+    const dateFmt = datetime ? new Date(datetime).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+
+    // Label du pari
+    let betLabel = '';
+    if (rec.type === 'MONEYLINE') {
+      const name = rec.side === 'HOME' ? home : away;
+      betLabel = `${name} vainqueur`;
+    } else if (rec.type === 'SPREAD') {
+      const name = rec.side === 'HOME' ? home : away;
+      betLabel = `${name} ${rec.spread_line > 0 ? '+' : ''}${rec.spread_line ?? rec.line ?? ''}`;
+    } else if (rec.type === 'OVER_UNDER') {
+      betLabel = `${rec.side === 'OVER' ? 'Plus' : 'Moins'} de ${rec.ou_line ?? rec.line} pts`;
+    } else if (rec.type === 'PLAYER_POINTS') {
+      betLabel = `${rec.player} ${rec.side === 'OVER' ? 'plus' : 'moins'} de ${rec.line} pts`;
+    } else {
+      betLabel = `${rec.type} ${rec.side}`;
+    }
+
+    // Cote
+    const odds = rec.odds_decimal ? rec.odds_decimal.toFixed(2) : (rec.odds_line != null ? rec.odds_line : '—');
+    const source = rec.odds_source ?? 'book';
+
+    // Couleur edge
+    const edgeColor = rec.edge >= 10 ? 'var(--color-success)'
+                    : rec.edge >= 7  ? 'var(--color-warning)'
+                    : 'var(--color-signal)';
+
+    // Score fiabilité couleur
+    const relColor = reliability >= 10 ? 'var(--color-success)'
+                   : reliability >= 6  ? 'var(--color-warning)'
+                   : 'var(--color-muted)';
+
+    // Étoiles fiabilité (1-5 selon reliability)
+    const stars = reliability >= 12 ? '⭐⭐⭐⭐⭐'
+                : reliability >= 9  ? '⭐⭐⭐⭐'
+                : reliability >= 7  ? '⭐⭐⭐'
+                : reliability >= 5  ? '⭐⭐'
+                : '⭐';
+
+    // Badge type de pari
+    const typeLabel = { MONEYLINE: 'Vainqueur', SPREAD: 'Handicap', OVER_UNDER: 'Total', PLAYER_POINTS: 'Props' }[rec.type] ?? rec.type;
+    const typeColor = rec.type === 'PLAYER_POINTS' ? '#a855f7'
+                    : rec.type === 'MONEYLINE'     ? 'var(--color-signal)'
+                    : rec.type === 'OVER_UNDER'    ? '#22c55e'
+                    : 'var(--color-warning)';
+
+    return `<div class="bot-bet-row">
+      <div class="bot-bet-main">
+        <div class="bot-bet-header">
+          <span class="bot-bet-type" style="background:${typeColor}20;color:${typeColor}">${typeLabel}</span>
+          <span class="bot-bet-match">${away} @ ${home}</span>
+          <span class="bot-bet-date">${dateFmt}</span>
+        </div>
+        <div class="bot-bet-label">${betLabel}</div>
+      </div>
+      <div class="bot-bet-stats">
+        <div class="bot-bet-odds"><span class="bot-bet-odds-val">${odds}</span><span class="bot-bet-odds-src">${source}</span></div>
+        <div class="bot-bet-edge" style="color:${edgeColor}">+${rec.edge}%</div>
+        <div class="bot-bet-reliability">
+          <div style="color:${relColor};font-weight:700;font-size:13px">${stars}</div>
+          <div style="font-size:9px;color:var(--color-muted);text-align:center">${reliability}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="bot-bets-panel">
+    <div class="bot-bets-title">🎯 Paris disponibles (edge ≥ 5%) · ${bets.length} recos</div>
+    <div class="bot-bets-help">
+      Triées par fiabilité (edge × qualité data × confidence). Plus d'étoiles = plus fiable.
+    </div>
+    <div class="bot-bets-list">${rows}</div>
+  </div>
+  <style>
+    .bot-bets-panel {
+      background: var(--color-card); border-radius: 10px; padding: 16px 18px;
+      margin-bottom: 16px; border: 1px solid var(--color-border);
+    }
+    .bot-bets-title {
+      font-size: 14px; font-weight: 700; margin-bottom: 4px; color: var(--color-text-primary);
+    }
+    .bot-bets-help {
+      font-size: 11px; color: var(--color-muted); margin-bottom: 12px;
+    }
+    .bot-bets-list { display: flex; flex-direction: column; gap: 8px; }
+    .bot-bet-row {
+      display: grid; grid-template-columns: 1fr auto; gap: 16px;
+      background: var(--color-bg); border-radius: 8px; padding: 10px 14px;
+      align-items: center;
+    }
+    .bot-bet-main { min-width: 0; }
+    .bot-bet-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+    .bot-bet-type {
+      font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .bot-bet-match { font-size: 11px; color: var(--color-text-secondary); font-weight: 600; }
+    .bot-bet-date  { font-size: 10px; color: var(--color-muted); margin-left: auto; }
+    .bot-bet-label { font-size: 13px; font-weight: 700; color: var(--color-text-primary); }
+    .bot-bet-stats {
+      display: flex; gap: 16px; align-items: center;
+    }
+    .bot-bet-odds {
+      display: flex; flex-direction: column; align-items: center; min-width: 50px;
+    }
+    .bot-bet-odds-val { font-size: 15px; font-weight: 700; color: var(--color-signal); }
+    .bot-bet-odds-src { font-size: 9px; color: var(--color-muted); }
+    .bot-bet-edge { font-size: 16px; font-weight: 800; min-width: 48px; text-align: center; }
+    .bot-bet-reliability { min-width: 60px; }
+  </style>`;
+}
 
 function _renderDeepAnalysis(logs, phaseFilter = 'all', sport = 'nba') {
   if (!logs?.length) return '';
