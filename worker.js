@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.66
+ * MANI BET PRO — Cloudflare Worker v6.67
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -337,6 +337,12 @@ export default {
       if (path === '/mlb/team-stats' && request.method === 'GET')
         return await handleMLBTeamStats(env, origin);
 
+      if (path === '/mlb/bullpen-stats' && request.method === 'GET')
+        return await handleMLBBullpenStats(env, origin);
+
+      if (path === '/mlb/weather' && request.method === 'GET')
+        return jsonResponse(await _fetchWeatherForVenue(url.searchParams.get('venue'), env), 200, origin);
+
       if (path === '/mlb/bot/run' && request.method === 'POST')
         return await handleMLBBotRun(request, env, origin);
 
@@ -390,7 +396,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.66.0',
+          version:   '6.67.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -6086,6 +6092,59 @@ async function handleMLBStandings(origin) {
   }
 }
 
+// ── HANDLER : BULLPEN STATS MLB (via splits starter/reliever) ────────────────
+// Calcule bullpen ERA en agrégeant les stats par rôle via MLB Stats API
+async function handleMLBBullpenStats(env, origin) {
+  const CACHE_KEY = 'mlb_bullpen_stats_cache';
+  if (env.PAPER_TRADING) {
+    try {
+      const cached = await env.PAPER_TRADING.get(CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.fetched_at < 6 * 3600 * 1000) {
+          return jsonResponse({ ...parsed, source: 'cache' }, 200, origin);
+        }
+      }
+    } catch (_) {}
+  }
+
+  try {
+    // Essai : stats=season avec subGroup=starter et reliever séparément
+    const [starterResp, relieverResp] = await Promise.all([
+      fetchTimeout(`${MLB_STATS_API}/teams/stats?season=2026&sportId=1&stats=season&group=pitching&subGroup=starter`, {}, 10000),
+      fetchTimeout(`${MLB_STATS_API}/teams/stats?season=2026&sportId=1&stats=season&group=pitching&subGroup=reliever`, {}, 10000),
+    ]);
+
+    const teams = {};
+
+    const processSplit = (data, keyPrefix) => {
+      for (const split of (data?.stats?.[0]?.splits ?? [])) {
+        const name = split.team?.name;
+        if (!name) continue;
+        if (!teams[name]) teams[name] = {};
+        const s = split.stat ?? {};
+        teams[name][`${keyPrefix}_era`]      = parseFloat(s.era)               || null;
+        teams[name][`${keyPrefix}_whip`]     = parseFloat(s.whip)              || null;
+        teams[name][`${keyPrefix}_k_per_9`]  = parseFloat(s.strikeoutsPer9Inn) || null;
+        teams[name][`${keyPrefix}_hr_per_9`] = parseFloat(s.homeRunsPer9)      || null;
+        teams[name][`${keyPrefix}_ip`]       = parseFloat(s.inningsPitched)    || null;
+      }
+    };
+
+    if (starterResp?.ok) processSplit(await starterResp.json(), 'starter');
+    if (relieverResp?.ok) processSplit(await relieverResp.json(), 'bullpen');
+
+    const result = { available: true, teams, fetched_at: Date.now() };
+
+    if (env.PAPER_TRADING) {
+      try { await env.PAPER_TRADING.put(CACHE_KEY, JSON.stringify(result), { expirationTtl: 6 * 3600 }); } catch (_) {}
+    }
+    return jsonResponse({ ...result, source: 'mlb_stats_api' }, 200, origin);
+  } catch (err) {
+    return jsonResponse({ available: false, note: err.message, teams: {} }, 200, origin);
+  }
+}
+
 // ── HANDLER : TEAM STATS MLB (hitting + pitching, saison) ─────────────────────
 // Fetch team-level offensive et défensive stats · cache KV 6h
 async function handleMLBTeamStats(env, origin) {
@@ -6182,6 +6241,87 @@ const MLB_PARK_FACTORS_W = {
   'Rogers Centre':102,'Nationals Park':99,
 };
 
+// Coordonnées stadiums MLB pour météo · lat/lon (Wrigley, Yankee...)
+const MLB_STADIUM_COORDS = {
+  'Coors Field':               { lat: 39.7559, lon: -104.9942, outdoor: true  },
+  'Great American Ball Park':  { lat: 39.0974, lon: -84.5068,  outdoor: true  },
+  'Fenway Park':               { lat: 42.3467, lon: -71.0972,  outdoor: true  },
+  'Globe Life Field':          { lat: 32.7473, lon: -97.0847,  outdoor: false },  // dome
+  'Yankee Stadium':            { lat: 40.8296, lon: -73.9262,  outdoor: true  },
+  'Wrigley Field':             { lat: 41.9484, lon: -87.6553,  outdoor: true  },
+  'Oracle Park':               { lat: 37.7786, lon: -122.3893, outdoor: true  },
+  'T-Mobile Park':             { lat: 47.5914, lon: -122.3326, outdoor: true  },  // roof rétract.
+  'Petco Park':                { lat: 32.7073, lon: -117.1566, outdoor: true  },
+  'Dodger Stadium':            { lat: 34.0739, lon: -118.2399, outdoor: true  },
+  'Tropicana Field':           { lat: 27.7683, lon: -82.6534,  outdoor: false },  // dome
+  'Oakland Coliseum':          { lat: 37.7515, lon: -122.2006, outdoor: true  },
+  'loanDepot Park':            { lat: 25.7781, lon: -80.2197,  outdoor: false },  // dome
+  'Truist Park':               { lat: 33.8908, lon: -84.4683,  outdoor: true  },
+  'American Family Field':     { lat: 43.0280, lon: -87.9712,  outdoor: true  },  // roof rétract.
+  'Target Field':              { lat: 44.9817, lon: -93.2776,  outdoor: true  },
+  'Busch Stadium':             { lat: 38.6226, lon: -90.1928,  outdoor: true  },
+  'Minute Maid Park':          { lat: 29.7570, lon: -95.3555,  outdoor: true  },  // roof rétract.
+  'Angel Stadium':             { lat: 33.8003, lon: -117.8827, outdoor: true  },
+  'Chase Field':               { lat: 33.4453, lon: -112.0667, outdoor: false },  // dome
+  'Kauffman Stadium':          { lat: 39.0517, lon: -94.4803,  outdoor: true  },
+  'Progressive Field':         { lat: 41.4962, lon: -81.6852,  outdoor: true  },
+  'PNC Park':                  { lat: 40.4469, lon: -80.0057,  outdoor: true  },
+  'Citizens Bank Park':        { lat: 39.9061, lon: -75.1665,  outdoor: true  },
+  'Citi Field':                { lat: 40.7571, lon: -73.8458,  outdoor: true  },
+  'Camden Yards':              { lat: 39.2838, lon: -76.6217,  outdoor: true  },
+  'Guaranteed Rate Field':     { lat: 41.8299, lon: -87.6338,  outdoor: true  },
+  'Comerica Park':             { lat: 42.3390, lon: -83.0485,  outdoor: true  },
+  'Rogers Centre':             { lat: 43.6414, lon: -79.3894,  outdoor: false },  // dome
+  'Nationals Park':            { lat: 38.8729, lon: -77.0074,  outdoor: true  },
+};
+
+// ── WEATHER MLB (OpenWeatherMap) ──────────────────────────────────────────────
+// Fetch météo pour un stadium outdoor, cache KV 1h · API key gratuite 1000/jour
+async function _fetchWeatherForVenue(venue, env) {
+  if (!venue) return null;
+  const coords = MLB_STADIUM_COORDS[venue];
+  if (!coords) return null;
+  if (!coords.outdoor) return { indoor: true, venue };
+
+  if (!env.WEATHER_API_KEY) return { error: 'no_api_key', venue };
+
+  const cacheKey = `mlb_weather_${venue.replace(/\s+/g, '_')}`;
+  if (env.PAPER_TRADING) {
+    try {
+      const cached = await env.PAPER_TRADING.get(cacheKey, { type: 'json' });
+      if (cached?._ts && (Date.now() - cached._ts) < 60 * 60 * 1000) {
+        return cached.data;
+      }
+    } catch (_) {}
+  }
+
+  try {
+    const url = `https://api.openweathermap.org/data/2.5/weather?lat=${coords.lat}&lon=${coords.lon}&appid=${env.WEATHER_API_KEY}&units=metric`;
+    const resp = await fetchTimeout(url, { headers: { Accept: 'application/json' } }, 8000);
+    if (!resp.ok) return { error: `weather_api_${resp.status}`, venue };
+    const data = await resp.json();
+
+    const result = {
+      venue,
+      indoor:          false,
+      temp_celsius:    data.main?.temp ?? null,
+      humidity_pct:    data.main?.humidity ?? null,
+      wind_speed_mps:  data.wind?.speed ?? null,
+      wind_deg:        data.wind?.deg ?? null,
+      conditions:      data.weather?.[0]?.main ?? null,
+      description:     data.weather?.[0]?.description ?? null,
+      fetched_at:      Date.now(),
+    };
+
+    if (env.PAPER_TRADING) {
+      try { await env.PAPER_TRADING.put(cacheKey, JSON.stringify({ _ts: Date.now(), data: result }), { expirationTtl: 3600 }); } catch (_) {}
+    }
+    return result;
+  } catch (err) {
+    return { error: err.message, venue };
+  }
+}
+
 // ── CRON MLB BOT ──────────────────────────────────────────────────────────────
 async function _runMLBBotCron(env, forceRun = false) {
   const now     = new Date();
@@ -6230,27 +6370,31 @@ async function _runMLBBotCron(env, forceRun = false) {
   const fakeOddsUrl = new URL('https://manibetpro.emmanueldelasse.workers.dev/mlb/odds/comparison');
   const fakeStandUrl = new URL('https://manibetpro.emmanueldelasse.workers.dev/mlb/standings');
 
-  const [pitchersResp, oddsResp, standingsResp, teamStatsResp] = await Promise.allSettled([
+  const [pitchersResp, oddsResp, standingsResp, teamStatsResp, bullpenResp] = await Promise.allSettled([
     handleMLBPitchers(fakeUrl, env, fakeOrigin),
     handleMLBOdds(fakeOddsUrl, env, fakeOrigin),
     handleMLBStandings(fakeOrigin),
     handleMLBTeamStats(env, fakeOrigin),
+    handleMLBBullpenStats(env, fakeOrigin),
   ]);
 
   const pitchersData  = pitchersResp.status  === 'fulfilled' ? await pitchersResp.value.json()  : null;
   const oddsData      = oddsResp.status      === 'fulfilled' ? await oddsResp.value.json()      : null;
   const standingsData = standingsResp.status === 'fulfilled' ? await standingsResp.value.json() : null;
   const teamStatsData = teamStatsResp.status === 'fulfilled' ? await teamStatsResp.value.json() : null;
+  const bullpenData   = bullpenResp.status   === 'fulfilled' ? await bullpenResp.value.json()   : null;
 
-  console.log(`[MLB BOT] Pitchers: ${Object.keys(pitchersData?.pitchers ?? {}).length}, Odds: ${oddsData?.matches?.length ?? 0}, Team stats: ${Object.keys(teamStatsData?.teams ?? {}).length}`);
+  console.log(`[MLB BOT] Pitchers: ${Object.keys(pitchersData?.pitchers ?? {}).length}, Odds: ${oddsData?.matches?.length ?? 0}, Team stats: ${Object.keys(teamStatsData?.teams ?? {}).length}, Bullpen: ${Object.keys(bullpenData?.teams ?? {}).length}`);
 
-  // 5. Analyser chaque match
+  // 5. Analyser chaque match (weather fetch en parallèle par match car dépend du venue)
   const logs       = [];
   const edgesFound = [];
 
   for (const match of matches) {
     try {
-      const log = _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData);
+      // Fetch météo pour ce venue (cache KV 1h · skip indoor)
+      const weather = await _fetchWeatherForVenue(match.venue, env);
+      const log = _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData, bullpenData, weather);
       if (!log) continue;
       if (env.PAPER_TRADING) {
         await env.PAPER_TRADING.put(
@@ -6281,26 +6425,29 @@ async function _runMLBBotCron(env, forceRun = false) {
 }
 
 // ── ANALYSER UN MATCH MLB ─────────────────────────────────────────────────────
-function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData) {
+function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData, bullpenData, weather) {
   const homeName = match.home_team?.name;
   const awayName = match.away_team?.name;
   if (!homeName || !awayName) return null;
 
-  const pitchers   = pitchersData?.pitchers ?? {};
-  const standings  = standingsData?.standings ?? {};
-  const teamStats  = teamStatsData?.teams ?? {};
-  const homePit    = pitchers[homeName]  ?? match.home_pitcher ?? null;
-  const awayPit    = pitchers[awayName]  ?? match.away_pitcher ?? null;
-  const homeStand  = standings[homeName] ?? null;
-  const awayStand  = standings[awayName] ?? null;
-  const homeStats  = teamStats[homeName] ?? null;
-  const awayStats  = teamStats[awayName] ?? null;
+  const pitchers    = pitchersData?.pitchers ?? {};
+  const standings   = standingsData?.standings ?? {};
+  const teamStats   = teamStatsData?.teams ?? {};
+  const bullpenMap  = bullpenData?.teams ?? {};
+  const homePit     = pitchers[homeName]  ?? match.home_pitcher ?? null;
+  const awayPit     = pitchers[awayName]  ?? match.away_pitcher ?? null;
+  const homeStand   = standings[homeName] ?? null;
+  const awayStand   = standings[awayName] ?? null;
+  const homeStats   = teamStats[homeName] ?? null;
+  const awayStats   = teamStats[awayName] ?? null;
+  const homeBullpen = bullpenMap[homeName] ?? null;
+  const awayBullpen = bullpenMap[awayName] ?? null;
 
   // Trouver les cotes pour ce match
   const marketOdds = _mlbGetMarketOdds(oddsData, homeName, awayName);
 
-  // Build season data avec splits + team stats
-  const buildSeason = (stand, tstats) => {
+  // Build season data avec splits + team stats + bullpen
+  const buildSeason = (stand, tstats, bullpen) => {
     if (!stand && !tstats) return null;
     const games = (stand?.wins ?? 0) + (stand?.losses ?? 0);
     return {
@@ -6322,6 +6469,11 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData,
       team_era:      tstats?.team_era ?? null,
       team_whip:     tstats?.team_whip ?? null,
       team_k_per_9:  tstats?.team_k_per_9 ?? null,
+      // Bullpen isolé (v6.67)
+      starter_era:   bullpen?.starter_era ?? null,
+      bullpen_era:   bullpen?.bullpen_era ?? null,
+      bullpen_whip:  bullpen?.bullpen_whip ?? null,
+      bullpen_k_per_9: bullpen?.bullpen_k_per_9 ?? null,
     };
   };
 
@@ -6332,8 +6484,9 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData,
     venue:        match.venue,
     home_pitcher: homePit,
     away_pitcher: awayPit,
-    home_season:  buildSeason(homeStand, homeStats),
-    away_season:  buildSeason(awayStand, awayStats),
+    home_season:  buildSeason(homeStand, homeStats, homeBullpen),
+    away_season:  buildSeason(awayStand, awayStats, awayBullpen),
+    weather:      weather,
     market_odds:  marketOdds,
   };
 
@@ -6406,7 +6559,7 @@ function _mlbGetMarketOdds(oddsData, homeName, awayName) {
 // Variables : starter FIP · rest · run_diff · team OPS · team ERA ·
 //             home/away split · last10 form
 function _mlbEngineCompute(matchData) {
-  const { home_pitcher, away_pitcher, home_season, away_season, venue, market_odds } = matchData;
+  const { home_pitcher, away_pitcher, home_season, away_season, venue, market_odds, weather } = matchData;
 
   // 1. Starting pitcher FIP edge (cœur du moteur MLB · poids 0.20)
   const hFIP = home_pitcher?.fip ?? home_pitcher?.era ?? 4.20;
@@ -6457,7 +6610,40 @@ function _mlbEngineCompute(matchData) {
     formAdv = Math.tanh((hLast10Pct - aLast10Pct) / 0.300) * 0.04;
   }
 
-  let homeProb = 0.536 + pitcherAdv + restAdv + runDiffAdv + opsAdv + teamEraAdv + splitAdv + formAdv;
+  // 8. Bullpen ERA isolé (poids 0.05) · impact fort sur les manches 6-9
+  let bullpenAdv = 0;
+  if (home_season?.bullpen_era != null && away_season?.bullpen_era != null) {
+    bullpenAdv = Math.tanh((away_season.bullpen_era - home_season.bullpen_era) / 1.0) * 0.05;
+  }
+
+  // 9. Park factor × qualité offensive (poids 0.03)
+  // Parc hitters-friendly favorise l'équipe avec meilleure offensive
+  let parkAdv = 0;
+  const pf = MLB_PARK_FACTORS_W[venue] ?? 100;
+  if (home_season?.ops != null && away_season?.ops != null) {
+    const opsDiffSign = Math.sign(home_season.ops - away_season.ops);
+    parkAdv = Math.tanh((pf - 100) / 10) * 0.03 * opsDiffSign;
+  }
+
+  // 10. Météo (poids 0.04) · vent vers l'extérieur + chaleur → +HR
+  // Favorise l'équipe avec meilleure offensive (plus de HR = plus de runs pour elle)
+  let weatherAdv = 0;
+  if (weather && !weather.indoor && !weather.error && weather.wind_speed_mps != null) {
+    // Vent > 5 m/s affecte le jeu · modèle simplifié : vent fort → plus de variance
+    // Chaleur (>25°C) augmente le scoring (balle vole mieux)
+    let score = 0;
+    if (weather.wind_speed_mps > 5)  score += 0.5;
+    if (weather.wind_speed_mps > 8)  score += 0.3;
+    if (weather.temp_celsius   > 25) score += 0.4;
+    if (weather.temp_celsius   < 10) score -= 0.3;
+    // Favorise meilleure offensive si conditions favorables au scoring
+    if (home_season?.ops != null && away_season?.ops != null && score !== 0) {
+      const opsDiffSign = Math.sign(home_season.ops - away_season.ops);
+      weatherAdv = Math.tanh(score) * 0.04 * opsDiffSign;
+    }
+  }
+
+  let homeProb = 0.536 + pitcherAdv + restAdv + runDiffAdv + opsAdv + teamEraAdv + splitAdv + formAdv + bullpenAdv + parkAdv + weatherAdv;
   homeProb     = Math.max(0.20, Math.min(0.80, homeProb));
 
   const missing = [];
@@ -6466,8 +6652,10 @@ function _mlbEngineCompute(matchData) {
   if (!away_pitcher?.fip && !away_pitcher?.era) { missing.push('away_pitcher'); dataQuality = 'LOW'; }
   if (home_season?.ops == null || away_season?.ops == null) missing.push('team_ops');
   if (home_season?.team_era == null || away_season?.team_era == null) missing.push('team_era');
+  if (home_season?.bullpen_era == null || away_season?.bullpen_era == null) missing.push('bullpen_era');
+  if (!weather || weather.error) missing.push('weather');
   if (hLast10Games < 5 || aLast10Games < 5) missing.push('last10_form');
-  if (home_pitcher?.fip && home_season?.ops != null && home_season?.team_era != null) dataQuality = 'HIGH';
+  if (home_pitcher?.fip && home_season?.ops != null && home_season?.team_era != null && home_season?.bullpen_era != null) dataQuality = 'HIGH';
 
   const recommendations = [];
   const BOOK_PRIORITY_W = ['pinnacle', 'draftkings', 'fanduel', 'betmgm'];
@@ -6544,17 +6732,23 @@ function _mlbEngineCompute(matchData) {
     data_quality: dataQuality,
     missing_vars: missing,
     variables:    {
-      pitcher_fip_diff:  Math.round(fipDiff * 100) / 100,
-      pitcher_adv_pct:   Math.round(pitcherAdv * 1000) / 10,
-      rest_adv_pct:      Math.round(restAdv * 1000) / 10,
-      run_diff_adv_pct:  Math.round(runDiffAdv * 1000) / 10,
-      ops_adv_pct:       Math.round(opsAdv * 1000) / 10,
-      team_era_adv_pct:  Math.round(teamEraAdv * 1000) / 10,
+      pitcher_fip_diff:    Math.round(fipDiff * 100) / 100,
+      pitcher_adv_pct:     Math.round(pitcherAdv * 1000) / 10,
+      rest_adv_pct:        Math.round(restAdv * 1000) / 10,
+      run_diff_adv_pct:    Math.round(runDiffAdv * 1000) / 10,
+      ops_adv_pct:         Math.round(opsAdv * 1000) / 10,
+      team_era_adv_pct:    Math.round(teamEraAdv * 1000) / 10,
+      bullpen_adv_pct:     Math.round(bullpenAdv * 1000) / 10,
       home_away_split_pct: Math.round(splitAdv * 1000) / 10,
-      last10_form_pct:   Math.round(formAdv * 1000) / 10,
-      park_factor:       MLB_PARK_FACTORS_W[venue] ?? 100,
-      home_pitcher:      home_pitcher?.name ?? null,
-      away_pitcher:      away_pitcher?.name ?? null,
+      last10_form_pct:     Math.round(formAdv * 1000) / 10,
+      park_adv_pct:        Math.round(parkAdv * 1000) / 10,
+      weather_adv_pct:     Math.round(weatherAdv * 1000) / 10,
+      park_factor:         pf,
+      weather_conditions:  weather?.indoor ? 'indoor' : weather?.conditions ?? null,
+      weather_wind_mps:    weather?.wind_speed_mps ?? null,
+      weather_temp_c:      weather?.temp_celsius ?? null,
+      home_pitcher:        home_pitcher?.name ?? null,
+      away_pitcher:        away_pitcher?.name ?? null,
     },
     recommendations,
     best:          recommendations[0] ?? null,
