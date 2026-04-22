@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.74
+ * MANI BET PRO — Cloudflare Worker v6.75
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -397,7 +397,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.74.0',
+          version:   '6.75.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -5939,6 +5939,23 @@ function parseESPNMLBMatches(data, dateStr) {
     const homePitcher = _extractESPNPitcher(competition, 'home');
     const awayPitcher = _extractESPNPitcher(competition, 'away');
 
+    // Score série post-saison MLB (Wild Card BO3 · Division BO5 · LCS/WS BO7)
+    const seriesRaw = competition.series ?? event.series ?? null;
+    let playoffSeries = null;
+    if (seriesRaw) {
+      const srcCompetitors = Array.isArray(seriesRaw.competitors) ? seriesRaw.competitors : [];
+      const homeSrc = srcCompetitors.find(c => c.id === home?.team?.id);
+      const awaySrc = srcCompetitors.find(c => c.id === away?.team?.id);
+      playoffSeries = {
+        title:       seriesRaw.title      ?? null,
+        summary:     seriesRaw.summary    ?? seriesRaw.description ?? null,
+        type:        seriesRaw.type       ?? null,
+        total_games: seriesRaw.totalCompetitions ?? null,
+        home_wins:   homeSrc?.wins ?? null,
+        away_wins:   awaySrc?.wins ?? null,
+      };
+    }
+
     return {
       id:            event.id,
       espn_id:       event.id,
@@ -5955,6 +5972,7 @@ function parseESPNMLBMatches(data, dateStr) {
       away_pitcher:  awayPitcher,
       venue:         competition.venue?.fullName ?? null,
       venue_city:    competition.venue?.address?.city ?? null,
+      playoff_series: playoffSeries,
       source:        'espn',
       fetched_at:    new Date().toISOString(),
     };
