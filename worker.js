@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.67
+ * MANI BET PRO — Cloudflare Worker v6.68
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -374,6 +374,9 @@ export default {
       if (path === '/bot/settle-logs' && request.method === 'POST')
         return await handleBotSettleLogs(request, env, origin);
 
+      if (path === '/bot/calibration/analyze' && request.method === 'GET')
+        return await handleBotCalibration(url, env, origin);
+
       if (path === '/bot/run' && request.method === 'POST')
         return await handleBotRun(request, env, origin);
 
@@ -396,7 +399,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.67.0',
+          version:   '6.68.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -3796,6 +3799,174 @@ async function handleBotSettleLogs(request, env, origin) {
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
 
+// ── CALIBRATION AUTO (v6.69) ──────────────────────────────────────────────────
+// GET /bot/calibration/analyze?sport=nba|mlb
+// Analyse les logs settlés · calcule quelles variables corrèlent avec les bons picks
+// Retour : suggestions d'ajustement poids par variable
+
+async function handleBotCalibration(url, env, origin) {
+  if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
+
+  const sport  = (url.searchParams.get('sport') ?? 'nba').toLowerCase();
+  const prefix = sport === 'mlb' ? MLB_BOT_LOG_PREFIX : BOT_LOG_PREFIX;
+
+  try {
+    const list = await env.PAPER_TRADING.list({ prefix });
+    const keys = (list.keys ?? []).map(k => k.name);
+
+    const logs = [];
+    await Promise.all(keys.map(async key => {
+      try {
+        const raw = await env.PAPER_TRADING.get(key);
+        if (!raw) return;
+        const log = JSON.parse(raw);
+        if (log.motor_was_right === null || log.motor_was_right === undefined) return;
+        logs.push(log);
+      } catch (_) {}
+    }));
+
+    if (logs.length === 0) {
+      return jsonResponse({
+        sport,
+        logs_analyzed: 0,
+        note:  'Aucun match settlé. Relance après nightly-settle ou force settle manuel.',
+        suggestions: {},
+      }, 200, origin);
+    }
+
+    const MIN_SAMPLE = 20;
+    const isSmall    = logs.length < MIN_SAMPLE;
+
+    // Extraire les variables numériques utilisées · signature diffère NBA/MLB
+    const extractVars = (log) => {
+      if (sport === 'mlb') {
+        const v = log.variables ?? {};
+        return {
+          pitcher_fip_diff:    v.pitcher_fip_diff ?? null,
+          rest_adv_pct:        v.rest_adv_pct ?? null,
+          run_diff_adv_pct:    v.run_diff_adv_pct ?? null,
+          ops_adv_pct:         v.ops_adv_pct ?? null,
+          team_era_adv_pct:    v.team_era_adv_pct ?? null,
+          bullpen_adv_pct:     v.bullpen_adv_pct ?? null,
+          home_away_split_pct: v.home_away_split_pct ?? null,
+          last10_form_pct:     v.last10_form_pct ?? null,
+          park_adv_pct:        v.park_adv_pct ?? null,
+          weather_adv_pct:     v.weather_adv_pct ?? null,
+          babip_adv_pct:       v.babip_adv_pct ?? null,
+        };
+      }
+      // NBA : variables_used contient {name: {value, weight, quality}}
+      const vu = log.variables_used ?? {};
+      const out = {};
+      for (const [k, obj] of Object.entries(vu)) {
+        if (typeof obj === 'object' && obj.value != null) out[k] = obj.value;
+      }
+      return out;
+    };
+
+    // Pour chaque variable, calcule :
+    //  - mean_when_right / mean_when_wrong
+    //  - correlation_strength (abs(mean diff) / stddev)
+    //  - directional consistency (sign correlation)
+    const varAnalysis = {};
+    const varNames = new Set();
+    const varsPerLog = logs.map(extractVars);
+    for (const vars of varsPerLog) {
+      for (const k of Object.keys(vars)) varNames.add(k);
+    }
+
+    for (const varName of varNames) {
+      const rightValues = [], wrongValues = [];
+      for (let i = 0; i < logs.length; i++) {
+        const v = varsPerLog[i]?.[varName];
+        if (v == null || !Number.isFinite(v)) continue;
+        if (logs[i].motor_was_right === true)  rightValues.push(v);
+        else if (logs[i].motor_was_right === false) wrongValues.push(v);
+      }
+      const n = rightValues.length + wrongValues.length;
+      if (n < 10) {
+        varAnalysis[varName] = { n, note: 'échantillon trop petit' };
+        continue;
+      }
+
+      const mean = arr => arr.reduce((s, x) => s + x, 0) / arr.length;
+      const variance = arr => {
+        const m = mean(arr);
+        return arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length;
+      };
+
+      const meanR   = rightValues.length > 0 ? mean(rightValues) : 0;
+      const meanW   = wrongValues.length > 0 ? mean(wrongValues) : 0;
+      const diff    = meanR - meanW;
+      const allVar  = variance([...rightValues, ...wrongValues]);
+      const stdDev  = Math.sqrt(allVar);
+      // Effect size (Cohen's d approximé)
+      const effect  = stdDev > 0 ? Math.abs(diff / stdDev) : 0;
+
+      let verdict, direction;
+      if (effect < 0.15)        { verdict = 'bruit';       direction = 'reduce_or_remove'; }
+      else if (effect < 0.30)   { verdict = 'faible';      direction = 'reduce'; }
+      else if (effect < 0.50)   { verdict = 'utile';       direction = 'keep'; }
+      else                      { verdict = 'fort';        direction = 'increase'; }
+
+      varAnalysis[varName] = {
+        n,
+        mean_when_right:  Math.round(meanR * 1000) / 1000,
+        mean_when_wrong:  Math.round(meanW * 1000) / 1000,
+        mean_diff:        Math.round(diff  * 1000) / 1000,
+        effect_size:      Math.round(effect * 100) / 100,
+        verdict,
+        direction,
+      };
+    }
+
+    // Hit rate global + par bucket edge
+    const correct = logs.filter(l => l.motor_was_right === true).length;
+    const hitRate = Math.round(correct / logs.length * 1000) / 10;
+
+    const edgeBuckets = {
+      edge_10_plus: logs.filter(l => (l.best_edge ?? 0) >= 10),
+      edge_7_10:    logs.filter(l => (l.best_edge ?? 0) >= 7 && (l.best_edge ?? 0) < 10),
+      edge_5_7:     logs.filter(l => (l.best_edge ?? 0) >= 5 && (l.best_edge ?? 0) < 7),
+      edge_0_5:     logs.filter(l => (l.best_edge ?? 0) >= 0 && (l.best_edge ?? 0) < 5),
+    };
+    const bucketStats = Object.fromEntries(
+      Object.entries(edgeBuckets).map(([name, bucket]) => {
+        const c = bucket.filter(l => l.motor_was_right === true).length;
+        const p = bucket.length > 0 ? Math.round(c / bucket.length * 1000) / 10 : null;
+        return [name, { n: bucket.length, correct: c, pct: p }];
+      })
+    );
+
+    return jsonResponse({
+      sport,
+      logs_analyzed: logs.length,
+      small_sample:  isSmall,
+      small_sample_note: isSmall ? `Moins de ${MIN_SAMPLE} matchs — résultats à prendre avec prudence.` : null,
+      global: {
+        hit_rate:    hitRate,
+        correct:     correct,
+        total:       logs.length,
+      },
+      edge_buckets: bucketStats,
+      variable_analysis: varAnalysis,
+      interpretation: {
+        effect_size_guide: {
+          '<0.15': 'bruit — probablement inutile',
+          '0.15-0.30': 'faible — utile marginalement',
+          '0.30-0.50': 'utile — signal clair',
+          '>0.50': 'fort — moteur discriminant sur cette variable',
+        },
+        recommendation: isSmall
+          ? 'Attendre au moins 30 matchs settlés pour tirer des conclusions fiables.'
+          : 'Variables "bruit" → réduire leur poids. Variables "fort" → augmenter leur poids.',
+      },
+    }, 200, origin);
+  } catch (err) {
+    return jsonResponse({ error: err.message }, 500, origin);
+  }
+}
+
 // Expanse 'YYYYMMDD' from → to en liste de dates · inclusif aux deux bouts
 function _expandDateRange(fromStr, toStr) {
   const parse = (s) => {
@@ -6175,16 +6346,24 @@ async function handleMLBTeamStats(env, origin) {
         const name = split.team?.name;
         if (!name) continue;
         const s = split.stat ?? {};
+        const pa = parseInt(s.plateAppearances) || null;
+        const so = parseInt(s.strikeOuts)       || null;
+        const bb = parseInt(s.baseOnBalls)      || null;
         teams[name] = {
           ops:         parseFloat(s.ops)          || null,
           obp:         parseFloat(s.obp)          || null,
           slg:         parseFloat(s.slg)          || null,
           avg:         parseFloat(s.avg)          || null,
+          babip:       parseFloat(s.babip)        || null,
           runs:        parseInt(s.runs)           || null,
           home_runs:   parseInt(s.homeRuns)       || null,
           hits:        parseInt(s.hits)           || null,
-          strikeouts:  parseInt(s.strikeOuts)     || null,
-          walks:       parseInt(s.baseOnBalls)    || null,
+          strikeouts:  so,
+          walks:       bb,
+          plate_appearances: pa,
+          // Batting K/BB rate (nouveau v6.68) — taux offensif, pas pitching
+          batting_k_rate:  (pa && so != null) ? Math.round(so / pa * 10000) / 10000 : null,
+          batting_bb_rate: (pa && bb != null) ? Math.round(bb / pa * 10000) / 10000 : null,
           games:       parseInt(s.gamesPlayed)    || null,
         };
       }
@@ -6466,6 +6645,9 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData,
       ops:           tstats?.ops ?? null,
       obp:           tstats?.obp ?? null,
       slg:           tstats?.slg ?? null,
+      babip:         tstats?.babip ?? null,
+      batting_k_rate:  tstats?.batting_k_rate ?? null,
+      batting_bb_rate: tstats?.batting_bb_rate ?? null,
       team_era:      tstats?.team_era ?? null,
       team_whip:     tstats?.team_whip ?? null,
       team_k_per_9:  tstats?.team_k_per_9 ?? null,
@@ -6625,7 +6807,19 @@ function _mlbEngineCompute(matchData) {
     parkAdv = Math.tanh((pf - 100) / 10) * 0.03 * opsDiffSign;
   }
 
-  // 10. Météo (poids 0.04) · vent vers l'extérieur + chaleur → +HR
+  // 10. BABIP regression (poids 0.02) · indicateur chance/malchance récente
+  // BABIP élevé vs moyenne ligue (~0.295) = probablement chanceux → régression à venir
+  // L'équipe chanceuse récemment est légèrement défavorisée (correction statistique)
+  let babipAdv = 0;
+  if (home_season?.babip != null && away_season?.babip != null) {
+    const LEAGUE_BABIP = 0.295;
+    const hDiff = home_season.babip - LEAGUE_BABIP;  // positif = chanceux
+    const aDiff = away_season.babip - LEAGUE_BABIP;
+    // L'équipe avec BABIP plus haut est "chanceuse" → pénalisée (régression)
+    babipAdv = Math.tanh((aDiff - hDiff) / 0.030) * 0.02;
+  }
+
+  // 11. Météo (poids 0.04) · vent vers l'extérieur + chaleur → +HR
   // Favorise l'équipe avec meilleure offensive (plus de HR = plus de runs pour elle)
   let weatherAdv = 0;
   if (weather && !weather.indoor && !weather.error && weather.wind_speed_mps != null) {
@@ -6643,7 +6837,7 @@ function _mlbEngineCompute(matchData) {
     }
   }
 
-  let homeProb = 0.536 + pitcherAdv + restAdv + runDiffAdv + opsAdv + teamEraAdv + splitAdv + formAdv + bullpenAdv + parkAdv + weatherAdv;
+  let homeProb = 0.536 + pitcherAdv + restAdv + runDiffAdv + opsAdv + teamEraAdv + splitAdv + formAdv + bullpenAdv + parkAdv + weatherAdv + babipAdv;
   homeProb     = Math.max(0.20, Math.min(0.80, homeProb));
 
   const missing = [];
@@ -6743,6 +6937,7 @@ function _mlbEngineCompute(matchData) {
       last10_form_pct:     Math.round(formAdv * 1000) / 10,
       park_adv_pct:        Math.round(parkAdv * 1000) / 10,
       weather_adv_pct:     Math.round(weatherAdv * 1000) / 10,
+      babip_adv_pct:       Math.round(babipAdv * 1000) / 10,
       park_factor:         pf,
       weather_conditions:  weather?.indoor ? 'indoor' : weather?.conditions ?? null,
       weather_wind_mps:    weather?.wind_speed_mps ?? null,
@@ -6779,6 +6974,8 @@ function _botPredictMLBStrikeouts(matchData) {
     return 5.0;
   };
 
+  const LEAGUE_BATTING_K_RATE = 0.222;  // moyenne MLB 2024+ ~22%
+
   const buildProjection = (pitcher, opposingTeam) => {
     if (!pitcher || !pitcher.k_per_9) return null;
     const k9       = pitcher.k_per_9;
@@ -6788,12 +6985,16 @@ function _botPredictMLBStrikeouts(matchData) {
     // Base projection : K/9 × IP / 9
     const baseKs = (k9 * ip) / 9;
 
-    // Ajustement équipe adverse (certaines équipes font plus/moins de K)
-    // Sans stats K% par équipe, on utilise team_k_per_9 (K pitchers adverses)
-    // et on inverse : équipe qui fait subir bcp de K = leurs batters font aussi bcp de K
+    // Ajustement équipe adverse — fix v6.68 : utilise batting_k_rate (offensif)
+    // au lieu de team_k_per_9 (pitching). Plus précis.
     let opponentMult = 1.0;
-    if (opposingTeam?.team_k_per_9 != null) {
-      const diff = opposingTeam.team_k_per_9 - LEAGUE_TEAM_K_PER_9;
+    if (opposingTeam?.batting_k_rate != null) {
+      // Si équipe adverse fait beaucoup de K offensifs → notre pitcher fera plus de K
+      const diff = opposingTeam.batting_k_rate - LEAGUE_BATTING_K_RATE;
+      opponentMult = Math.max(0.85, Math.min(1.15, 1 + diff * 3));
+    } else if (opposingTeam?.team_k_per_9 != null) {
+      // Fallback ancien modèle si batting_k_rate pas dispo
+      const diff = opposingTeam.team_k_per_9 - 8.5;
       opponentMult = Math.max(0.88, Math.min(1.12, 1 + diff / 30));
     }
 
@@ -6805,6 +7006,7 @@ function _botPredictMLBStrikeouts(matchData) {
       expected_ip:  Math.round(ip * 10) / 10,
       base_ks:      Math.round(baseKs * 10) / 10,
       opponent_mult: Math.round(opponentMult * 1000) / 1000,
+      opponent_k_rate: opposingTeam?.batting_k_rate ?? null,
       projected_ks: Math.round(projKs * 10) / 10,
       fip:          pitcher.fip ?? null,
       games_started: pitcher.games ?? null,
