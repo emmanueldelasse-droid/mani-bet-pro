@@ -9,6 +9,9 @@
  *   - Formatage (date, rejet, HTML)
  */
 
+import { americanToDecimal, decimalToAmerican } from '../utils/utils.odds.js';
+export { americanToDecimal, decimalToAmerican };
+
 export const WORKER_URL = 'https://manibetpro.emmanueldelasse.workers.dev';
 
 export const SIGNAL_LABELS = {
@@ -24,19 +27,6 @@ export const SIGNAL_LABELS = {
   'back_to_back':      'Fatigue (match consécutif)',
   'rest_days_diff':    'Repos',
 };
-
-export function americanToDecimal(american) {
-  if (!american) return null;
-  const n = Number(american);
-  if (n > 0) return Math.round((n / 100 + 1) * 100) / 100;
-  return Math.round((100 / Math.abs(n) + 1) * 100) / 100;
-}
-
-export function decimalToAmerican(decimal) {
-  if (!decimal || decimal <= 1) return null;
-  if (decimal >= 2) return Math.round((decimal - 1) * 100);
-  return Math.round(-100 / (decimal - 1));
-}
 
 export function simplifyLabel(label, variable) {
   return SIGNAL_LABELS[variable] ?? label ?? variable;
@@ -81,15 +71,23 @@ export function formatMatchTime(match) {
 
 export function formatRejection(reason) {
   const labels = {
-    WEIGHTS_NOT_CALIBRATED:      'Pondérations non calibrées',
-    MISSING_CRITICAL_DATA:       'Données critiques manquantes',
-    DATA_QUALITY_BELOW_THRESHOLD: 'Qualité des données insuffisante',
-    ROBUSTNESS_BELOW_THRESHOLD:  'Analyse trop instable',
-    ABSENCES_NOT_CONFIRMED:      'Absences non confirmées',
+    WEIGHTS_NOT_CALIBRATED:          'Pondérations non calibrées',
+    MISSING_CRITICAL_DATA:           'Données critiques manquantes',
+    DATA_QUALITY_BELOW_THRESHOLD:    'Qualité des données insuffisante',
+    ROBUSTNESS_BELOW_THRESHOLD:      'Analyse trop instable',
+    ABSENCES_NOT_CONFIRMED:          'Absences non confirmées',
+    SPORT_NOT_SUPPORTED_OR_DISABLED: 'Sport non activé',
+    ENGINE_NOT_IMPLEMENTED:          'Moteur non implémenté',
+    MISSING_PITCHER_DATA:            'Données pitchers manquantes',
   };
   return labels[reason] ?? reason;
 }
 
 export function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

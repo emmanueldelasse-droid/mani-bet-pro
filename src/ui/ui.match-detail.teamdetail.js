@@ -20,6 +20,7 @@
  */
 
 import { Logger } from '../utils/utils.logger.js';
+import { escapeHtml as _escapeHtml } from './ui.match-detail.helpers.js';
 
 // ── LOADER ASYNCHRONE ─────────────────────────────────────────────────────────
 
@@ -117,15 +118,6 @@ function _fmtDateFR(dateStr) {
   const m = parseInt(dateStr.slice(4,6)) - 1;
   const d = parseInt(dateStr.slice(6,8));
   return `${d} ${MOIS[m] ?? ''}`;
-}
-
-function _escapeHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 function _renderLatestInfoBlock(teamData, teamAbv) {

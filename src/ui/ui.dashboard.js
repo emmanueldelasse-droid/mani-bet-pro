@@ -14,6 +14,7 @@ import { DataOrchestrator } from '../orchestration/data.orchestrator.js';
 import { LoadingUI }        from './ui.loading.js';
 import { Logger }           from '../utils/utils.logger.js';
 import { americanToDecimal } from '../utils/utils.odds.js';
+import { formatRejection as _formatRejection } from './ui.match-detail.helpers.js';
 
 function _injectStyles() {
   if (document.querySelector('#mbp-dash-v5-styles')) return;
@@ -1115,20 +1116,6 @@ function _decisionConfig(decision) {
     'REJETÉ':      { label: 'Rejeté',      cssClass: 'badge--rejete' },
   };
   return map[decision] ?? { label: 'Inconclus', cssClass: 'badge--inconclusive' };
-}
-
-function _formatRejection(reason) {
-  const labels = {
-    WEIGHTS_NOT_CALIBRATED:          'Pondérations non calibrées',
-    MISSING_CRITICAL_DATA:           'Données critiques manquantes',
-    DATA_QUALITY_BELOW_THRESHOLD:    'Qualité données insuffisante',
-    ROBUSTNESS_BELOW_THRESHOLD:      'Robustesse insuffisante',
-    SPORT_NOT_SUPPORTED_OR_DISABLED: 'Sport non activé',
-    ENGINE_NOT_IMPLEMENTED:          'Moteur non implémenté',
-    ABSENCES_NOT_CONFIRMED:          'Absences non confirmées',
-    MISSING_PITCHER_DATA:            'Données pitchers manquantes',
-  };
-  return labels[reason] ?? reason;
 }
 
 function _getTodayDate() {

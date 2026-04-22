@@ -16,6 +16,7 @@
 
 import { PaperEngine, STRATEGIES } from '../paper/paper.engine.js';
 import { API_CONFIG } from '../config/api.config.js';
+import { americanToDecimal as _americanToDecimal } from '../utils/utils.odds.js';
 
 export async function render(container, storeInstance) {
   await _renderPage(container, storeInstance);
@@ -647,13 +648,6 @@ function _metricCell(label, value, color, subtitle) {
     subtitle ? '<div style="font-size:9px;color:var(--color-text-secondary);margin-top:1px">' + subtitle + '</div>' : '',
     '</div>',
   ].join('');
-}
-
-function _americanToDecimal(american) {
-  if (!american) return null;
-  const n = Number(american);
-  if (n > 0) return Math.round((n / 100 + 1) * 100) / 100;
-  return Math.round((100 / Math.abs(n) + 1) * 100) / 100;
 }
 
 function _formatDate(iso) {
