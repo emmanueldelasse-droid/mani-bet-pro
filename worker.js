@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.64
+ * MANI BET PRO — Cloudflare Worker v6.65
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -390,7 +390,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.64.0',
+          version:   '6.65.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -3615,7 +3615,8 @@ async function handleBotLogs(url, env, origin) {
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
 
-async function _botSettleDate(env, dateStr) {
+async function _botSettleDate(env, dateStr, options = {}) {
+  const { force = false } = options;
   const espnData = await espnFetch(`${ESPN_SCOREBOARD}?dates=${dateStr}&limit=25`);
   if (!espnData) return { settled: 0, error: 'ESPN unavailable' };
 
@@ -3628,7 +3629,8 @@ async function _botSettleDate(env, dateStr) {
       const raw = await env.PAPER_TRADING.get(key);
       if (!raw) continue;
       const log = JSON.parse(raw);
-      if (log.motor_was_right !== null) continue;
+      // force=true : re-settle même si déjà settlé (pour enrichir avec nouveaux champs)
+      if (!force && log.motor_was_right !== null) continue;
 
       const homeScore = parseInt(result.home_team?.score ?? 0);
       const awayScore = parseInt(result.away_team?.score ?? 0);
@@ -3762,12 +3764,51 @@ async function _fetchESPNBoxScore(eventId) {
 async function handleBotSettleLogs(request, env, origin) {
   if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
   try {
-    const body    = await request.json().catch(() => ({}));
+    const body  = await request.json().catch(() => ({}));
+    const force = body.force === true;
+
+    // Mode rétroactif : body = { from: 'YYYYMMDD', to: 'YYYYMMDD', force: true }
+    if (body.from && body.to) {
+      const dates = _expandDateRange(body.from, body.to);
+      if (dates.length > 30) return jsonResponse({ error: 'range > 30 days' }, 400, origin);
+      const results = [];
+      for (const ds of dates) {
+        try {
+          const r = await _botSettleDate(env, ds, { force });
+          results.push({ date: ds, settled: r.settled, error: r.error });
+        } catch (err) { results.push({ date: ds, error: err.message }); }
+      }
+      const totalSettled = results.reduce((s, r) => s + (r.settled ?? 0), 0);
+      return jsonResponse({ success: true, mode: 'range', force, dates_processed: dates.length, total_settled: totalSettled, details: results }, 200, origin);
+    }
+
+    // Mode simple (un seul jour)
     const dateStr = body.date ?? formatDateESPN(new Date());
-    const res     = await _botSettleDate(env, dateStr);
+    const res     = await _botSettleDate(env, dateStr, { force });
     if (res.error) return jsonResponse({ error: res.error }, 502, origin);
-    return jsonResponse({ success: true, ...res }, 200, origin);
+    return jsonResponse({ success: true, force, ...res }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
+}
+
+// Expanse 'YYYYMMDD' from → to en liste de dates · inclusif aux deux bouts
+function _expandDateRange(fromStr, toStr) {
+  const parse = (s) => {
+    const str = String(s).replace(/-/g, '');
+    if (str.length !== 8) return null;
+    const d = new Date(Date.UTC(
+      parseInt(str.slice(0, 4), 10),
+      parseInt(str.slice(4, 6), 10) - 1,
+      parseInt(str.slice(6, 8), 10)
+    ));
+    return isNaN(d.getTime()) ? null : d;
+  };
+  const from = parse(fromStr), to = parse(toStr);
+  if (!from || !to) return [];
+  const out = [];
+  for (let d = new Date(from); d <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+    out.push(formatDateESPN(d));
+  }
+  return out;
 }
 
 async function handleBotRun(request, env, origin) {
@@ -6657,7 +6698,8 @@ async function handleMLBBotLogs(url, env, origin) {
 }
 
 // ── HANDLER SETTLER MLB ───────────────────────────────────────────────────────
-async function _mlbBotSettleDate(env, dateStr) {
+async function _mlbBotSettleDate(env, dateStr, options = {}) {
+  const { force = false } = options;
   const espnData = await espnFetch(`${ESPN_MLB_SCOREBOARD}?dates=${dateStr}&limit=25`);
   if (!espnData) return { settled: 0, error: 'ESPN unavailable' };
 
@@ -6670,7 +6712,7 @@ async function _mlbBotSettleDate(env, dateStr) {
       const raw = await env.PAPER_TRADING.get(key);
       if (!raw) continue;
       const log = JSON.parse(raw);
-      if (log.motor_was_right !== null) continue;
+      if (!force && log.motor_was_right !== null) continue;
 
       const homeScore = parseInt(result.home_team?.score ?? 0);
       const awayScore = parseInt(result.away_team?.score ?? 0);
@@ -6798,10 +6840,27 @@ async function _fetchMLBPitcherActualKs(espnEventId) {
 async function handleMLBBotSettleLogs(request, env, origin) {
   if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
   try {
-    const body    = await request.json().catch(() => ({}));
+    const body  = await request.json().catch(() => ({}));
+    const force = body.force === true;
+
+    // Mode rétroactif range
+    if (body.from && body.to) {
+      const dates = _expandDateRange(body.from, body.to);
+      if (dates.length > 30) return jsonResponse({ error: 'range > 30 days' }, 400, origin);
+      const results = [];
+      for (const ds of dates) {
+        try {
+          const r = await _mlbBotSettleDate(env, ds, { force });
+          results.push({ date: ds, settled: r.settled, error: r.error });
+        } catch (err) { results.push({ date: ds, error: err.message }); }
+      }
+      const totalSettled = results.reduce((s, r) => s + (r.settled ?? 0), 0);
+      return jsonResponse({ success: true, mode: 'range', force, dates_processed: dates.length, total_settled: totalSettled, details: results }, 200, origin);
+    }
+
     const dateStr = body.date ?? new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const res     = await _mlbBotSettleDate(env, dateStr);
+    const res     = await _mlbBotSettleDate(env, dateStr, { force });
     if (res.error) return jsonResponse({ error: res.error }, 502, origin);
-    return jsonResponse({ success: true, ...res }, 200, origin);
+    return jsonResponse({ success: true, force, ...res }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
