@@ -1,8 +1,17 @@
 # Mani Bet Pro
 
+## Règles update SESSION (IA OBLIGATOIRE)
+Début tâche → "En cours": branche + étape 1/N · Fin étape → incrémenter · Merge/push → vider "En cours" + bump version + cocher TODO · User mentionne future tâche → ajouter TODO sans P · demander priorité · Commit SESSION après chaque step >5min ou >3 tool calls.
+
+## En cours
+néant
+
+## TODO
+néant (demander P quand user ajoute)
+
 ## État
 Worker `manibetpro` v6.70 · `manibetpro.workers.dev`
-Front: GitHub Pages · KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
+Front GH Pages · KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
 Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 
 ## Routes
@@ -16,7 +25,7 @@ Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 - Cron `0 * * * *` · bot NBA+MLB · 10h UTC nightly-settle J-1/J-2 · snapshot cotes ESPN→KV `odds_snap_{matchId}`
 
 ## Fichiers
-- `worker.js` backend monolithe (~4900L) · `wrangler.jsonc` config CF
+- `worker.js` backend monolithe (~7262L) · `wrangler.jsonc` config CF
 - `src/ui/` → ui.match-detail.teamdetail.js · ui.dashboard.js · ui.bot.js
 
 ## Pièges Tank01
@@ -26,14 +35,14 @@ Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 - Quota limité → cache 24h KV obligatoire rosters
 - `?bust=1` vide cache team-detail + roster
 - Cache team-detail 6h/8h · roster 24h
-- Box scores: 5 derniers/équipe cachés KV 7j par `gameID` → `last5_ppg` actif, ~5 calls max premier hit, ~0 ensuite
+- Box scores: 5 derniers/équipe cachés KV 7j par `gameID` → `last5_ppg` actif
 - Bundle calls séquentiels (anti rate-limit)
 
 ## Pièges TheOddsAPI
 - `player_points` sans `bookmakers=` → API renvoie books dispo · avec filtre spécifique → 422 si book absent (worker.js:2463)
 
 ## Bugs actifs
-- néant
+néant
 
 ## Deploy
 `git push origin main` → CF auto-deploy · pas de `wrangler deploy`.
@@ -41,10 +50,6 @@ Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 ## Hors SESSION (charger à la demande)
 - Secrets/reprise nouveau compte → `.claude/onboarding.md`
 - Historique → `git log --oneline`
-- TODO → GitHub issues
 
-## Règle
-Merge main → update SI impact critique. Format: voir CLAUDE.md.
-
-## Règle OBLIGATOIRE réponses user
-Vocabulaire simple · exemples concrets · détails CLI explicités. Voir CLAUDE.md.
+## Règle format
+CLAUDE.md · télégraphique · `·` sep · `→` cause · refs `file:line` · < 2500 octets

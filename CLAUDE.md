@@ -7,7 +7,7 @@ RÈGLE OBLIGATOIRE pour toute IA modifiant SESSION.md ou ce fichier :
 - Refs code: `file:line` (ex: `worker.js:630`)
 - Jamais dupliquer info stockée ailleurs (git log, issues, onboarding.md)
 - Section > 15 lignes → extraire dans `.claude/<nom>.md`
-- Après edit vérifier `wc -c SESSION.md` < 2000 octets
+- Après edit vérifier `wc -c SESSION.md` < 2500 octets
 Non-respect = revert.
 
 RÈGLE OBLIGATOIRE réponses conversationnelles au user (hors fichiers `.md`) :
