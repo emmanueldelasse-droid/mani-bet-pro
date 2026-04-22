@@ -1,7 +1,7 @@
 # Mani Bet Pro
 
 ## État
-Worker `manibetpro` v6.66 · `manibetpro.workers.dev`
+Worker `manibetpro` v6.67 · `manibetpro.workers.dev`
 Front: GitHub Pages · KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
 Stack: CF Worker + KV + Tank01 (RapidAPI) + ESPN + Claude API + Telegram
 
