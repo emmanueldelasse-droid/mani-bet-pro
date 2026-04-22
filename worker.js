@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.63
+ * MANI BET PRO — Cloudflare Worker v6.64
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -390,7 +390,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.63.0',
+          version:   '6.64.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -6308,12 +6308,18 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData,
     date:            dateStr,
     datetime:        match.datetime,
     venue:           match.venue,
-    home_pitcher:    homePit?.name ?? null,
-    away_pitcher:    awayPit?.name ?? null,
+    home_pitcher:     homePit?.name ?? null,
+    away_pitcher:     awayPit?.name ?? null,
     home_pitcher_era: homePit?.era ?? null,
     home_pitcher_fip: homePit?.fip ?? null,
+    home_pitcher_k9:  homePit?.k_per_9 ?? null,
+    home_pitcher_ip:  homePit?.innings ?? null,
+    home_pitcher_gs:  homePit?.games ?? null,
     away_pitcher_era: awayPit?.era ?? null,
     away_pitcher_fip: awayPit?.fip ?? null,
+    away_pitcher_k9:  awayPit?.k_per_9 ?? null,
+    away_pitcher_ip:  awayPit?.innings ?? null,
+    away_pitcher_gs:  awayPit?.games ?? null,
     home_prob:       analysis.home_prob,
     away_prob:       analysis.away_prob,
     motor_prob:      analysis.home_prob,  // alias NBA pour UI réutilisable
@@ -6329,6 +6335,8 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData,
     best_edge:   analysis.best?.edge ?? null,
     best_market: analysis.best?.type ?? null,     // parité NBA (MONEYLINE / OVER_UNDER)
     best_side:   analysis.best?.side ?? null,
+    // Props MLB : strikeouts projection
+    pitcher_strikeouts_prediction: analysis.pitcher_strikeouts_prediction ?? null,
     // Pour le settler
     result_home_score:   null,
     result_away_score:   null,
@@ -6486,6 +6494,9 @@ function _mlbEngineCompute(matchData) {
 
   recommendations.sort((a, b) => b.edge - a.edge);
 
+  // Projections strikeouts starters (props joueur MLB Phase 1)
+  const pitcherStrikeouts = _botPredictMLBStrikeouts(matchData);
+
   return {
     home_prob:    Math.round(homeProb * 100),
     away_prob:    Math.round((1 - homeProb) * 100),
@@ -6507,6 +6518,77 @@ function _mlbEngineCompute(matchData) {
     recommendations,
     best:          recommendations[0] ?? null,
     est_total_runs: Math.round(estTotal * 10) / 10,
+    pitcher_strikeouts_prediction: pitcherStrikeouts,
+  };
+}
+
+// ── MOTEUR PROPS MLB — Strikeouts starting pitcher ────────────────────────────
+// Projection : (K/9 × IP_attendu / 9) × ajustement équipe adverse
+// Retourne { available, phase: 1, home_pitcher: {...}, away_pitcher: {...} }
+function _botPredictMLBStrikeouts(matchData) {
+  const { home_pitcher, away_pitcher, home_season, away_season } = matchData;
+
+  // League avg strikeout rate ~ 22-23% en 2025+ · team K/9 ~8.5
+  const LEAGUE_TEAM_K_PER_9 = 8.5;
+
+  // IP attendu par starter (cap 5.5-7 selon qualité)
+  const expectedIP = (pitcher) => {
+    if (!pitcher) return null;
+    const gs  = pitcher.games || pitcher.innings ? parseFloat(pitcher.innings) / Math.max(1, pitcher.games) : null;
+    if (gs && Number.isFinite(gs)) return Math.min(7.5, Math.max(3.5, gs));
+    // Fallback : basé sur FIP (bon pitcher → plus d'IP)
+    const fip = pitcher.fip ?? pitcher.era ?? 4.5;
+    if (fip < 3.5)      return 6.2;
+    if (fip < 4.0)      return 5.8;
+    if (fip < 4.5)      return 5.4;
+    return 5.0;
+  };
+
+  const buildProjection = (pitcher, opposingTeam) => {
+    if (!pitcher || !pitcher.k_per_9) return null;
+    const k9       = pitcher.k_per_9;
+    const ip       = expectedIP(pitcher);
+    if (!ip) return null;
+
+    // Base projection : K/9 × IP / 9
+    const baseKs = (k9 * ip) / 9;
+
+    // Ajustement équipe adverse (certaines équipes font plus/moins de K)
+    // Sans stats K% par équipe, on utilise team_k_per_9 (K pitchers adverses)
+    // et on inverse : équipe qui fait subir bcp de K = leurs batters font aussi bcp de K
+    let opponentMult = 1.0;
+    if (opposingTeam?.team_k_per_9 != null) {
+      const diff = opposingTeam.team_k_per_9 - LEAGUE_TEAM_K_PER_9;
+      opponentMult = Math.max(0.88, Math.min(1.12, 1 + diff / 30));
+    }
+
+    const projKs = baseKs * opponentMult;
+
+    return {
+      name:         pitcher.name ?? null,
+      k_per_9:      Math.round(k9 * 100) / 100,
+      expected_ip:  Math.round(ip * 10) / 10,
+      base_ks:      Math.round(baseKs * 10) / 10,
+      opponent_mult: Math.round(opponentMult * 1000) / 1000,
+      projected_ks: Math.round(projKs * 10) / 10,
+      fip:          pitcher.fip ?? null,
+      games_started: pitcher.games ?? null,
+    };
+  };
+
+  const homeProj = buildProjection(home_pitcher, away_season);
+  const awayProj = buildProjection(away_pitcher, home_season);
+
+  if (!homeProj && !awayProj) {
+    return { available: false, phase: 1, missing: 'pitcher_k_per_9' };
+  }
+
+  return {
+    available:     true,
+    phase:         1,
+    home_pitcher:  homeProj,
+    away_pitcher:  awayProj,
+    league_avg_k_per_9: LEAGUE_TEAM_K_PER_9,
   };
 }
 
@@ -6629,6 +6711,24 @@ async function _mlbBotSettleDate(env, dateStr) {
         clvPostMatch = Math.round((log.home_prob - homeMlReco.implied_prob) * 100) / 100;
       }
 
+      // Settlement props pitcher : récupérer strikeouts réels via MLB Stats API
+      if (log.pitcher_strikeouts_prediction?.available) {
+        try {
+          const actualKs = await _fetchMLBPitcherActualKs(result.id);
+          if (actualKs) {
+            const enrichPitcher = (proj, teamSide) => {
+              if (!proj) return null;
+              const actual = actualKs[proj.name] ?? null;
+              return actual != null
+                ? { ...proj, actual_ks: actual.strikeouts, actual_ip: actual.innings_pitched }
+                : proj;
+            };
+            log.pitcher_strikeouts_prediction.home_pitcher = enrichPitcher(log.pitcher_strikeouts_prediction.home_pitcher, 'home');
+            log.pitcher_strikeouts_prediction.away_pitcher = enrichPitcher(log.pitcher_strikeouts_prediction.away_pitcher, 'away');
+          }
+        } catch (err) { console.warn(`[MLB] pitcher Ks settle ${result.id}:`, err.message); }
+      }
+
       log.result_home_score   = homeScore;
       log.result_away_score   = awayScore;
       log.result_winner       = winner;
@@ -6648,6 +6748,51 @@ async function _mlbBotSettleDate(env, dateStr) {
   }
 
   return { settled, date: dateStr };
+}
+
+// Fetch boxscore MLB Stats API pour obtenir les strikeouts réels des starting pitchers
+// Retour : { "Nom du pitcher": { strikeouts, innings_pitched }, ... }
+async function _fetchMLBPitcherActualKs(espnEventId) {
+  if (!espnEventId) return null;
+  try {
+    // ESPN summary pour un match MLB a la boxscore dans event.boxscore.players
+    const resp = await fetchTimeout(
+      `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/summary?event=${espnEventId}`,
+      { headers: { Accept: 'application/json' } }, 10000
+    );
+    if (!resp?.ok) return null;
+    const data = await resp.json();
+
+    const out = {};
+    for (const teamGroup of (data.boxscore?.players ?? [])) {
+      // MLB boxscore structure : statistics par groupe (batting, pitching)
+      for (const section of (teamGroup.statistics ?? [])) {
+        // On ne prend que les pitchers (type=pitching et starter=true ou GS>0)
+        const sectionType = (section.type ?? section.name ?? '').toLowerCase();
+        if (!sectionType.includes('pitch')) continue;
+
+        const keys   = section.keys ?? section.labels?.map(l => l.toLowerCase()) ?? [];
+        const kIdx   = keys.indexOf('strikeouts') !== -1 ? keys.indexOf('strikeouts') : keys.indexOf('K');
+        const ipIdx  = keys.indexOf('inningsPitched') !== -1 ? keys.indexOf('inningsPitched') : keys.indexOf('IP');
+        if (kIdx === -1) continue;
+
+        for (const athlete of (section.athletes ?? [])) {
+          if (!athlete.starter) continue;  // Seulement les starting pitchers
+          const name = athlete.athlete?.displayName ?? athlete.athlete?.shortName;
+          if (!name) continue;
+          const ks  = parseInt(athlete.stats?.[kIdx] ?? '0', 10);
+          const ip  = ipIdx >= 0 ? parseFloat(athlete.stats?.[ipIdx] ?? '0') : null;
+          if (Number.isFinite(ks)) {
+            out[name] = { strikeouts: ks, innings_pitched: ip };
+          }
+        }
+      }
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  } catch (err) {
+    console.warn(`MLB pitcher Ks fetch error for ${espnEventId}:`, err.message);
+    return null;
+  }
 }
 
 async function handleMLBBotSettleLogs(request, env, origin) {

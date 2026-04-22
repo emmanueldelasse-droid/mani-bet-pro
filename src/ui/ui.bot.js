@@ -441,6 +441,31 @@ function _renderDeepAnalysis(logs, phaseFilter = 'all', sport = 'nba') {
     }
   }
 
+  // MLB : Strikeouts pitcher prédictions vs actual
+  let mlbStrikeoutStats = null;
+  if (sport === 'mlb') {
+    const allPitchers = logsForPhase.flatMap(l => {
+      const p = l.pitcher_strikeouts_prediction;
+      if (!p?.available) return [];
+      return [p.home_pitcher, p.away_pitcher].filter(Boolean);
+    });
+    const ptchSettled = allPitchers.filter(p => p.actual_ks != null);
+    if (ptchSettled.length > 0) {
+      const avgErr   = ptchSettled.reduce((s, p) => s + Math.abs(p.actual_ks - p.projected_ks), 0) / ptchSettled.length;
+      const within1  = ptchSettled.filter(p => Math.abs(p.actual_ks - p.projected_ks) <= 1.5).length;
+      const within2  = ptchSettled.filter(p => Math.abs(p.actual_ks - p.projected_ks) <= 2.5).length;
+      mlbStrikeoutStats = {
+        total:        ptchSettled.length,
+        total_tracked: allPitchers.length,
+        avg_err:      Math.round(avgErr * 10) / 10,
+        within1_pct:  Math.round(within1 / ptchSettled.length * 1000) / 10,
+        within2_pct:  Math.round(within2 / ptchSettled.length * 1000) / 10,
+      };
+    } else if (allPitchers.length > 0) {
+      mlbStrikeoutStats = { total: 0, total_tracked: allPitchers.length };
+    }
+  }
+
   const phaseLabel = phaseFilter === 'regular' ? ' · Saison régulière' : phaseFilter === 'playoffs' ? ' · Playoffs & Play-in' : '';
 
   return `<div class="bot-analysis-panel">
@@ -487,7 +512,23 @@ function _renderDeepAnalysis(logs, phaseFilter = 'all', sport = 'nba') {
         </div>
       </div>
 
-      <div class="bot-analysis-section">
+      ${sport === 'mlb' ? `<div class="bot-analysis-section">
+        <div class="bot-analysis-subtitle">Strikeouts pitcher (projections)</div>
+        <div class="bot-analysis-help">Précision de nos projections Ks par starting pitcher. Plus l'écart moyen est faible, plus le modèle est utile pour des paris props.</div>
+        ${mlbStrikeoutStats && mlbStrikeoutStats.total > 0 ? `
+          <div class="bot-analysis-row" style="font-weight:600;background:var(--color-bg-elevated);padding-left:6px;padding-right:6px;border-radius:4px;margin-bottom:4px">
+            <span>Écart moyen</span>
+            <span style="color:${mlbStrikeoutStats.avg_err <= 1.5 ? 'var(--color-success)' : mlbStrikeoutStats.avg_err <= 2.5 ? 'var(--color-warning)' : 'var(--color-danger)'};font-weight:800">± ${mlbStrikeoutStats.avg_err} K</span>
+          </div>
+          <div class="bot-analysis-row"><span>Écart ≤ 1.5 K (bon)</span><span style="font-weight:700">${mlbStrikeoutStats.within1_pct}%</span></div>
+          <div class="bot-analysis-row"><span>Écart ≤ 2.5 K (correct)</span><span style="font-weight:700">${mlbStrikeoutStats.within2_pct}%</span></div>
+          <div class="bot-analysis-row"><span>Pitchers analysés / trackés</span><span style="font-weight:700">${mlbStrikeoutStats.total} / ${mlbStrikeoutStats.total_tracked}</span></div>
+        ` : mlbStrikeoutStats ? `
+          <div class="bot-analysis-row"><span style="color:var(--color-muted);font-size:11px">${mlbStrikeoutStats.total_tracked} pitchers trackés, pas encore settlés</span></div>
+        ` : `
+          <div class="bot-analysis-row"><span style="color:var(--color-muted);font-size:11px">Aucune projection strikeout pour le moment</span></div>
+        `}
+      </div>` : `<div class="bot-analysis-section">
         <div class="bot-analysis-subtitle">Props joueur</div>
         <div class="bot-analysis-help">Un joueur a-t-il dépassé (ou pas) sa ligne de points ? Settlement automatique via box scores ESPN après chaque match.</div>
         ${ppPct != null ? `
@@ -501,7 +542,7 @@ function _renderDeepAnalysis(logs, phaseFilter = 'all', sport = 'nba') {
         ` : `<div class="bot-analysis-row"><span style="color:var(--color-muted);font-size:11px">Aucune reco PLAYER_POINTS settlée pour le moment</span></div>`}
         <div class="bot-analysis-row"><span>Matchs avec projections</span><span style="font-weight:700">${withPP}</span></div>
         <div class="bot-analysis-row"><span>Recos PLAYER_POINTS total</span><span style="font-weight:700">${totalPPRecs}</span></div>
-      </div>
+      </div>`}
     </div>
   </div>
   <style>
@@ -729,6 +770,7 @@ function _renderDetailPanel(log) {
     </div>` : ''}
 
     ${_renderPlayerPropsSection(log)}
+    ${_renderMLBPitcherStrikeoutsSection(log)}
 
     ${log.star_absence_modifier != null && log.star_absence_modifier !== 1 ? `<div class="bot-detail-section">
       <div class="bot-detail-title">Modificateur star absence</div>
@@ -772,6 +814,34 @@ function _renderPlayerPropsSection(log) {
 
   return `<div class="bot-detail-section">
     <div class="bot-detail-title">${title}</div>
+    ${rows}
+  </div>`;
+}
+
+// Render strikeouts projections pour match MLB · section détail panel
+function _renderMLBPitcherStrikeoutsSection(log) {
+  const pp = log.pitcher_strikeouts_prediction;
+  if (!pp?.available) return '';
+
+  const pitchers = [pp.home_pitcher, pp.away_pitcher].filter(Boolean);
+  if (pitchers.length === 0) return '';
+
+  const rows = pitchers.map(p => {
+    const actualHtml = p.actual_ks != null
+      ? ` · <strong style="color:${Math.abs(p.actual_ks - p.projected_ks) <= 1.5 ? 'var(--color-success)' : 'var(--color-warning)'}">réel ${p.actual_ks}K en ${p.actual_ip ?? '—'}IP</strong>`
+      : '';
+    return `<div class="bot-detail-row">
+      <span>${p.name ?? '—'}</span>
+      <span class="bot-detail-row__val">
+        proj ${p.projected_ks}K · base ${p.base_ks}K (K/9=${p.k_per_9} · IP=${p.expected_ip})
+        ${p.opponent_mult !== 1 ? ` · matchup ×${p.opponent_mult}` : ''}
+        ${actualHtml}
+      </span>
+    </div>`;
+  }).join('');
+
+  return `<div class="bot-detail-section">
+    <div class="bot-detail-title">Strikeouts pitcher (Phase ${pp.phase} · projection)</div>
     ${rows}
   </div>`;
 }
