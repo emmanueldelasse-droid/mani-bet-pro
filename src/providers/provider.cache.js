@@ -17,7 +17,7 @@ import { Logger }     from '../utils/utils.logger.js';
 
 const CACHE_PREFIX  = 'mbp_cache_';
 const QUOTA_PREFIX  = 'mbp_quota_';
-const CACHE_VERSION = 'v6'; // bump v5→v6 (v6.72) → purge cache localStorage utilisateurs · ajout playoff_series
+const CACHE_VERSION = 'v7'; // bump v6→v7 (v6.76) → purge cache tennis avec cotes foireuses
 const VERSION_KEY   = 'mbp_version_tag';  // NE PAS préfixer par CACHE_PREFIX — serait supprimé par invalidateAll()
 
 export class ProviderCache {

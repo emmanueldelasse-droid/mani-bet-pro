@@ -944,7 +944,20 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
         status:     'STATUS_SCHEDULED',
         home_team:  { name: p1, abbreviation: p1.split(' ').pop() ?? p1, score: null },
         away_team:  { name: p2, abbreviation: p2.split(' ').pop() ?? p2, score: null },
-        odds:       m.odds?.h2h ? { home_ml: m.odds.h2h.p1, away_ml: m.odds.h2h.p2 } : null,
+        // Cotes tennis déjà en décimal · stocker dans market_odds.*_decimal
+        // pour éviter la conversion _amToDec (qui attend américain).
+        market_odds: m.odds?.h2h ? {
+          home_ml_decimal: m.odds.h2h.p1,
+          away_ml_decimal: m.odds.h2h.p2,
+          best_book: m.odds.source ?? 'TheOddsAPI',
+          bookmakers: [{
+            key: 'tennis_h2h',
+            title: m.odds.source ?? 'TheOddsAPI',
+            home_ml: m.odds.h2h.p1,
+            away_ml: m.odds.h2h.p2,
+          }],
+        } : null,
+        odds: null,
       };
       matchesMap[m.id] = matchObj;
 
