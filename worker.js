@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.76
+ * MANI BET PRO — Cloudflare Worker v6.77
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -399,7 +399,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.76.0',
+          version:   '6.77.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',

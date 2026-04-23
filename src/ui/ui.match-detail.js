@@ -405,9 +405,12 @@ function _renderMLBMatchDetail(data) {
 function renderShell(match, analysis, storeInstance) {
   const sport     = String(match?.sport ?? 'NBA').toUpperCase();
   const isMLB     = sport === 'MLB';
-  const sportTag  = isMLB
-    ? '<span class="sport-tag sport-tag--mlb">⚾ MLB</span>'
-    : '<span class="sport-tag sport-tag--nba">🏀 NBA</span>';
+  const isTennis  = sport === 'TENNIS';
+  const sportTag  = isTennis
+    ? '<span class="sport-tag sport-tag--tennis">🎾 Tennis</span>'
+    : isMLB
+      ? '<span class="sport-tag sport-tag--mlb">⚾ MLB</span>'
+      : '<span class="sport-tag sport-tag--nba">🏀 NBA</span>';
 
   // Bandeau Série playoff · scoreboard adapté sport (NBA orange · MLB rouge)
   const ps = match?.playoff_series;
@@ -501,8 +504,10 @@ function renderShell(match, analysis, storeInstance) {
             <div class="match-detail__team-abbr">${match.home_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.home_team?.name ?? '—'}</div>
             ${homeStr ? pill('home', favHome) : ''}
-            <div style="display:inline-flex;align-self:flex-start;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">🏠 Domicile</div>
-            <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.home_team?.record ?? ''}</div>
+            ${isTennis
+              ? `<div class="text-muted" style="font-size:11px;margin-top:2px">${match.surface ?? ''}${match.surface && match.tournament ? ' · ' : ''}${match.tournament ?? ''}</div>`
+              : `<div style="display:inline-flex;align-self:flex-start;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">🏠 Domicile</div>
+                 <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.home_team?.record ?? ''}</div>`}
           </div>
           <div class="match-detail__separator">
             <span class="match-detail__vs">VS</span>
@@ -511,8 +516,10 @@ function renderShell(match, analysis, storeInstance) {
             <div class="match-detail__team-abbr">${match.away_team?.abbreviation ?? '—'}</div>
             <div class="match-detail__team-name">${match.away_team?.name ?? '—'}</div>
             ${awayStr ? pill('away', favAway) : ''}
-            <div style="display:inline-flex;align-self:flex-end;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">✈️ Extérieur</div>
-            <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.away_team?.record ?? ''}</div>
+            ${isTennis
+              ? ''
+              : `<div style="display:inline-flex;align-self:flex-end;align-items:center;font-size:10px;font-weight:600;color:var(--color-text-secondary);background:var(--color-bg);border:1px solid var(--color-border);border-radius:4px;padding:1px 6px;margin-top:2px">✈️ Extérieur</div>
+                 <div class="text-muted mono" style="font-size:11px;margin-top:2px">${match.away_team?.record ?? ''}</div>`}
           </div>
         </div>`;
         })()}
