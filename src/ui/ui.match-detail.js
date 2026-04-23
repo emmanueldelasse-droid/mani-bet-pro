@@ -502,11 +502,12 @@ function renderShell(match, analysis, storeInstance) {
 
       ${renderBlocSyntheseSummary(analysis, match)}
       ${renderBlocProbas(analysis, match)}
+      ${renderBlocSynthese(analysis, match)}
       ${isMLB
         ? `<div id="mlb-stats-container"><div class="bot-loading" style="padding:20px">Chargement marchés + stats MLB…</div></div>`
         : `<div id="bloc-tous-paris">${renderBlocTousLesParis(analysis, match)}</div>
            <div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>`}
-      ${renderBlocFiabiliteEtSynthese(analysis, match)}
+      ${renderBlocFiabilite(analysis, match)}
     </div>
   `;
 }
@@ -1358,14 +1359,29 @@ export function renderBlocAbsences(analysis, match, storeInstance) {
     </div>`;
 }
 
-// ── BLOC FIABILITÉ + SOURCES + SYNTHÈSE (fusionné) ───────────────────────────
+// ── BLOC SYNTHÈSE (placé haut) ───────────────────────────────────────────────
 
-function renderBlocFiabiliteEtSynthese(analysis, match) {
+function renderBlocSynthese(analysis, match) {
+  if (!analysis) return '';
+  const lines = _buildSyntheseLines(analysis, match);
+  if (!lines.length) return '';
+  return `
+    <div class="card match-detail__bloc">
+      <div class="bloc-header" style="margin-bottom:var(--space-2)">
+        <span class="bloc-header__title">Synthèse</span>
+        <span style="font-size:10px;color:var(--color-text-secondary)">Analyse locale</span>
+      </div>
+      <div style="font-size:13px;line-height:1.7;color:var(--color-text)">${lines.join('')}</div>
+    </div>`;
+}
+
+// ── BLOC FIABILITÉ + SOURCES (placé bas) ─────────────────────────────────────
+
+function renderBlocFiabilite(analysis, match) {
   const isMLB = String(match?.sport ?? '').toUpperCase() === 'MLB';
 
   let score = null;
   if (isMLB) {
-    // MLB : mappe data_quality (HIGH/MEDIUM/LOW) → score numérique
     const dq = analysis?.data_quality;
     if      (dq === 'HIGH')   score = 85;
     else if (dq === 'MEDIUM') score = 60;
@@ -1383,18 +1399,12 @@ function renderBlocFiabiliteEtSynthese(analysis, match) {
   else                  { fiabLabel = 'Faible';  fiabColor = 'var(--color-danger)'; }
 
   const missingSimple = (analysis?.missing_variables ?? []).map(v => SIGNAL_LABELS[v] ?? v).slice(0, 2);
-
-  // Synthèse en paragraphe fluide
-  const synthese = _buildSynthese(analysis, match);
-
-  // Sources — toujours visibles sous forme de tags compacts
   const sourcesList = ['ESPN', 'BallDontLie', 'Tank01', 'Pinnacle'];
 
   return `
     <div class="card match-detail__bloc">
-      <!-- Fiabilité -->
       <div class="bloc-header" style="margin-bottom:var(--space-2)">
-        <span class="bloc-header__title">Fiabilité</span>
+        <span class="bloc-header__title">Fiabilité & sources</span>
         ${score !== null ? `<span style="font-weight:700;color:${fiabColor}">${fiabLabel} · ${score}%</span>` : ''}
       </div>
       ${score !== null ? `
@@ -1403,64 +1413,66 @@ function renderBlocFiabiliteEtSynthese(analysis, match) {
         </div>
         ${missingSimple.length ? `<div style="font-size:11px;color:var(--color-warning);padding:5px 8px;background:rgba(255,165,0,0.08);border-radius:5px;margin-bottom:10px">⚠ Données manquantes : ${missingSimple.join(' · ')}</div>` : ''}
       ` : ''}
-
-      <!-- Sources visibles -->
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
         ${sourcesList.map(s => `<span style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--color-bg);border:1px solid var(--color-border);color:var(--color-text-secondary)">${s}</span>`).join('')}
       </div>
-
-      <!-- Séparateur -->
-      <div style="height:1px;background:var(--color-border);margin-bottom:12px"></div>
-
-      <!-- Synthèse -->
-      <div class="bloc-header" style="margin-bottom:var(--space-2)">
-        <span class="bloc-header__title">Synthèse</span>
-      </div>
-      <div style="font-size:13px;line-height:1.8;color:var(--color-text)">${synthese}</div>
-      <div style="font-size:10px;color:var(--color-text-secondary);margin-top:8px">Analyse locale · pas d'IA utilisée ici</div>
     </div>`;
 }
 
-function _buildSynthese(analysis, match) {
-  if (!analysis) return '<span style="color:var(--color-text-secondary)">Analyse non disponible.</span>';
-
+function _buildSyntheseLines(analysis, match) {
   const home       = match?.home_team?.name ?? 'Domicile';
   const away       = match?.away_team?.name ?? 'Extérieur';
   const predictive = analysis.predictive_score != null ? Math.round(analysis.predictive_score * 100) : null;
   const keySignals = (analysis.key_signals ?? []).slice(0, 2).map(s => _simplifyLabel(s.label, s.variable)).filter(Boolean);
   const best       = analysis.betting_recommendations?.best ?? null;
 
-  // Phrase 1 — favori
-  let phrase1;
-  if (predictive == null)        phrase1 = 'Données insuffisantes pour déterminer un favori.';
-  else if (predictive > 55)      phrase1 = `${home} ressort favori à ${predictive}% de probabilité.`;
-  else if (predictive < 45)      phrase1 = `${away} ressort favori à ${100 - predictive}% de probabilité.`;
-  else                           phrase1 = 'Match très serré — les deux équipes sont à niveau comparable.';
+  const lines = [];
+  const line = (icon, text) => `<div style="display:flex;gap:8px;padding:4px 0"><span style="flex-shrink:0">${icon}</span><div>${text}</div></div>`;
 
-  // Phrase 2 — signaux + raison
-  const signalStr = keySignals.length ? keySignals.join(' et ') : 'les données disponibles';
-  const phrase2   = `Le signal dominant est ${signalStr}.`;
-
-  // Phrase 3 — recommandation avec raison
-  let phrase3;
-  if (!best) {
-    phrase3 = 'Aucune cote sous-évaluée détectée sur ce match.';
+  // Ligne 1 — qui est favori et à combien
+  if (predictive != null) {
+    const favName  = predictive > 50 ? home : away;
+    const favProb  = predictive > 50 ? predictive : 100 - predictive;
+    const othProb  = 100 - favProb;
+    if (Math.abs(predictive - 50) < 5) {
+      lines.push(line('⚖️', `Match équilibré selon notre analyse : <strong>${escapeHtml(home)}</strong> ${predictive}% contre <strong>${escapeHtml(away)}</strong> ${100 - predictive}%.`));
+    } else {
+      lines.push(line('🎯', `Favori : <strong>${escapeHtml(favName)}</strong> à <strong>${favProb}%</strong> de chances estimées (vs ${othProb}%).`));
+    }
   } else {
-    const typeLabel = best.type === 'MONEYLINE' ? 'la victoire'
-                    : best.type === 'SPREAD' ? 'le handicap'
-                    : best.type === 'PLAYER_POINTS' ? `les points de ${best.player}`
-                    : 'le total de points';
-    const sideLabel = best.type === 'PLAYER_POINTS' ? `${best.side === 'OVER' ? 'Over' : 'Under'} ${best.line}`
-                    : best.side === 'HOME' ? home : best.side === 'AWAY' ? away : best.side === 'OVER' ? 'Over' : 'Under';
-    // Chercher la raison principale de l'edge
-    const starMod   = analysis.star_absence_modifier;
-    let reason = '';
-    if (starMod !== null && Math.abs(starMod - 1) > 0.03) reason = 'une absence importante non encore pricée par le book';
-    else if (keySignals.length)                             reason = `un avantage en ${keySignals[0].toLowerCase()}`;
-    phrase3 = `Valeur détectée sur ${typeLabel} (${sideLabel}, cote sous-évaluée de ${best.edge}%)${reason ? ` — ${reason}` : ''}.`;
+    lines.push(line('⚠️', 'Données insuffisantes pour déterminer un favori.'));
   }
 
-  return `${escapeHtml(phrase1)} ${escapeHtml(phrase2)} ${escapeHtml(phrase3)}`;
+  // Ligne 2 — comparaison marché vs analyse
+  if (best && best.implied_prob != null && best.edge != null) {
+    const oddsDec = best.odds_decimal ? Number(best.odds_decimal).toFixed(2) : '—';
+    lines.push(line('💰', `Cote bookmaker <strong>${oddsDec}</strong> = marché donne <strong>${best.implied_prob}%</strong> de chances. Notre analyse voit <strong>${best.edge}% de plus</strong> → valeur détectée.`));
+  }
+
+  // Ligne 3 — raisons (sans redondance)
+  if (keySignals.length) {
+    const listed = keySignals.map(s => `<strong>${escapeHtml(s.toLowerCase())}</strong>`).join(' et ');
+    lines.push(line('📊', `Raisons principales : ${listed}.`));
+  }
+
+  // Ligne 4 — action recommandée
+  if (best) {
+    const typeLabel = best.type === 'MONEYLINE' ? 'Victoire'
+                    : best.type === 'SPREAD' ? 'Handicap'
+                    : best.type === 'PLAYER_POINTS' ? `Points ${best.player ?? ''}`
+                    : 'Total de points';
+    let sideLabel;
+    if (best.type === 'PLAYER_POINTS') sideLabel = `${best.side === 'OVER' ? '+' : '−'}${best.line}`;
+    else if (best.side === 'HOME')     sideLabel = home;
+    else if (best.side === 'AWAY')     sideLabel = away;
+    else if (best.side === 'OVER')     sideLabel = `Plus de ${best.ou_line ?? '—'}`;
+    else                               sideLabel = `Moins de ${best.ou_line ?? '—'}`;
+    lines.push(line('👉', `Pari suggéré : <strong>${escapeHtml(typeLabel)} — ${escapeHtml(sideLabel)}</strong>.`));
+  } else {
+    lines.push(line('🚫', 'Aucune cote sous-évaluée — passer ce match.'));
+  }
+
+  return lines;
 }
 
 // ── COTES MULTI-BOOKS ─────────────────────────────────────────────────────────
