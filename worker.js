@@ -1,5 +1,5 @@
 /**
- * MANI BET PRO — Cloudflare Worker v6.75
+ * MANI BET PRO — Cloudflare Worker v6.76
  *
  * CORRECTIONS v6.39 :
  *   1. Fix critique bot — emaLambda non défini dans _botEngineCompute.
@@ -399,7 +399,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.75.0',
+          version:   '6.76.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -5900,8 +5900,18 @@ async function handleTennisStats(url, env, origin) {
     if (!allRows.length) return jsonResponse({ available: false, note: `CSV Sackmann ${tour.toUpperCase()} indisponible` }, 200, origin);
 
     const today = new Date();
+    const eloTable = _computeTennisEloTable(allRows);
     const stats = {};
-    for (const pName of players) stats[pName] = _computeTennisPlayerStats(allRows, pName, surface, today);
+    for (const pName of players) {
+      const s = _computeTennisPlayerStats(allRows, pName, surface, today);
+      if (s && eloTable[pName]) {
+        s.elo_overall         = eloTable[pName].elo_overall;
+        s.elo_surface         = eloTable[pName].elo_surface[surface] ?? null;
+        s.elo_surface_matches = eloTable[pName].elo_surface_matches[surface] ?? 0;
+        s.elo_matches         = eloTable[pName].elo_matches;
+      }
+      stats[pName] = s;
+    }
     if (players.length === 2 && stats[players[0]] && stats[players[1]]) {
       const h2h = _computeTennisH2H(allRows, players[0], players[1], surface);
       stats[players[0]].h2h = { [players[1]]: { p1_wins: h2h.p1_wins, p2_wins: h2h.p2_wins } };
@@ -5985,6 +5995,54 @@ function _computeTennisH2H(rows, p1, p2, surface) {
     r.surface === surface
   );
   return { p1_wins: h2h.filter(r => r.winner_name === p1).length, p2_wins: h2h.filter(r => r.winner_name === p2).length };
+}
+
+// Elo overall + par surface · K=32 · init 1500 · walk chronologique · surfaces: Hard/Clay/Grass
+// Absolue noise élevé avec 1-2 ans de données, mais DIFF entre joueurs actifs reste informatif.
+function _computeTennisEloTable(rows) {
+  const sorted = [...rows].sort((a, b) =>
+    parseInt(a.tourney_date || '0') - parseInt(b.tourney_date || '0')
+  );
+  const INIT = 1500, K = 32;
+  const SURFACES = ['Hard', 'Clay', 'Grass'];
+  const elo = new Map();
+  const get = (n) => {
+    let e = elo.get(n);
+    if (!e) {
+      e = { overall: INIT, matches: 0, surface: {}, surfaceMatches: {} };
+      for (const s of SURFACES) { e.surface[s] = INIT; e.surfaceMatches[s] = 0; }
+      elo.set(n, e);
+    }
+    return e;
+  };
+  const exp = (a, b) => 1 / (1 + Math.pow(10, (b - a) / 400));
+  for (const r of sorted) {
+    const w = r.winner_name, l = r.loser_name;
+    if (!w || !l) continue;
+    const we = get(w), le = get(l);
+    const eW = exp(we.overall, le.overall);
+    we.overall += K * (1 - eW);
+    le.overall += K * (0 - (1 - eW));
+    we.matches += 1; le.matches += 1;
+    const surf = r.surface;
+    if (surf && SURFACES.includes(surf)) {
+      const eWs = exp(we.surface[surf], le.surface[surf]);
+      we.surface[surf] += K * (1 - eWs);
+      le.surface[surf] += K * (0 - (1 - eWs));
+      we.surfaceMatches[surf] += 1;
+      le.surfaceMatches[surf] += 1;
+    }
+  }
+  const out = {};
+  for (const [name, e] of elo.entries()) {
+    out[name] = {
+      elo_overall:          Math.round(e.overall),
+      elo_matches:          e.matches,
+      elo_surface:          { Hard: Math.round(e.surface.Hard), Clay: Math.round(e.surface.Clay), Grass: Math.round(e.surface.Grass) },
+      elo_surface_matches:  { Hard: e.surfaceMatches.Hard,      Clay: e.surfaceMatches.Clay,      Grass: e.surfaceMatches.Grass },
+    };
+  }
+  return out;
 }
 
 // ── UTILITAIRES ───────────────────────────────────────────────────────────────

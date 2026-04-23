@@ -23,6 +23,8 @@ import { Logger }         from '../utils/utils.logger.js';
 
 const MIN_SURFACE_MATCHES = 8;   // minimum matchs sur la surface sur 12 mois
 const EMA_N               = 10;  // nombre de matchs pour le calcul EMA
+const MIN_ELO_MATCHES     = 20;  // minimum matchs pour fiabilité Elo overall
+const MIN_ELO_SURFACE     = 10;  // minimum matchs surface pour Elo surface fiable
 
 // ── MOTEUR PRINCIPAL ──────────────────────────────────────────────────────
 
@@ -72,7 +74,7 @@ export class EngineTennis {
 
   static _extractVariables(p1, p2, surface, match) {
     return {
-      ranking_elo_diff:     this._rankingDiff(p1, p2),
+      ranking_elo_diff:     this._rankingDiff(p1, p2, surface),
       surface_winrate_diff: this._surfaceWinrateDiff(p1, p2, surface),
       recent_form_ema:      this._recentFormEma(p1, p2),
       h2h_surface:          this._h2hSurface(p1, p2, surface),
@@ -81,9 +83,31 @@ export class EngineTennis {
     };
   }
 
-  // ── SIGNAL 1 : Classement ATP ─────────────────────────────────────────
+  // ── SIGNAL 1 : Elo / Classement ───────────────────────────────────────
+  // Priorité : Elo surface (si assez de matchs) > Elo overall > rank ATP
 
-  static _rankingDiff(p1, p2) {
+  static _rankingDiff(p1, p2, surface) {
+    // Tentative Elo surface
+    const eSurf1 = p1?.elo_surface ?? null;
+    const eSurf2 = p2?.elo_surface ?? null;
+    const nSurf1 = p1?.elo_surface_matches ?? 0;
+    const nSurf2 = p2?.elo_surface_matches ?? 0;
+    if (eSurf1 !== null && eSurf2 !== null && nSurf1 >= MIN_ELO_SURFACE && nSurf2 >= MIN_ELO_SURFACE) {
+      return this._eloDiffSignal(eSurf1, eSurf2, `elo_${String(surface ?? '').toLowerCase()}`, 'VERIFIED',
+        { p1_elo: eSurf1, p2_elo: eSurf2, p1_n: nSurf1, p2_n: nSurf2 });
+    }
+
+    // Fallback Elo overall
+    const eAll1 = p1?.elo_overall ?? null;
+    const eAll2 = p2?.elo_overall ?? null;
+    const nAll1 = p1?.elo_matches ?? 0;
+    const nAll2 = p2?.elo_matches ?? 0;
+    if (eAll1 !== null && eAll2 !== null && nAll1 >= MIN_ELO_MATCHES && nAll2 >= MIN_ELO_MATCHES) {
+      return this._eloDiffSignal(eAll1, eAll2, 'elo_overall', 'PARTIAL',
+        { p1_elo: eAll1, p2_elo: eAll2, p1_n: nAll1, p2_n: nAll2 });
+    }
+
+    // Fallback final : rank ATP/WTA
     const r1 = p1?.current_rank ?? null;
     const r2 = p2?.current_rank ?? null;
 
@@ -105,6 +129,20 @@ export class EngineTennis {
       p2_rank:    r2,
       source:    'sackmann_csv',
       quality:   (r1 && r2) ? 'VERIFIED' : 'PARTIAL',
+    };
+  }
+
+  // Convertit un diff Elo en signal centré -1..+1 via proba attendue standard.
+  static _eloDiffSignal(elo1, elo2, sourceId, quality, extras = {}) {
+    const expectedP1 = 1 / (1 + Math.pow(10, (elo2 - elo1) / 400));
+    const normalized = (expectedP1 - 0.5) * 2;
+    return {
+      value:           Math.round(normalized * 100) / 100,
+      expected_p1_win: Math.round(expectedP1 * 100),
+      raw_diff:        Math.round(elo1 - elo2),
+      source:          sourceId,
+      quality,
+      ...extras,
     };
   }
 
