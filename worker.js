@@ -2010,6 +2010,7 @@ const BU_DEBUG_TEAMS = {
   MIN: ['minnesota timberwolves', 'minnesota', 'timberwolves', 'wolves'],
   NOP: ['new orleans pelicans', 'new orleans', 'pelicans', 'pels'],
   NYK: ['new york knicks', 'new york', 'knicks', 'ny knicks'],
+  NY:  ['new york knicks', 'new york', 'knicks', 'ny knicks'],
   OKC: ['oklahoma city thunder', 'oklahoma city', 'thunder', 'okc'],
   ORL: ['orlando magic', 'orlando', 'magic'],
   PHI: ['philadelphia 76ers', 'philadelphia', '76ers', 'sixers', 'philly', 'philadelphie sixers'],
@@ -2069,7 +2070,23 @@ function _buExtractCandidatesFromHtml(html, baseUrl) {
 }
 
 function _buScoreCandidate(article, home, away) {
-  const text = _buNormalizeText(`${article.title}`);
+  // Truncate au 1er marqueur fréquent d'extrait WordPress (date FR, categorie, tiret long)
+  // pour éviter les faux-positifs sur keywords dans l'extrait (ex: "Game 1" mentionné pour un
+  // autre match).
+  const rawTitle = String(article.title ?? '');
+  const cutMarkers = [
+    /\s+Le\s+\d{1,2}\s+[a-zéèêûîôâù]+\s+\d{4}/i,  // "Le 22 avril 2026"
+    /\s+-\s+[A-Z]+\s+-\s+/,                         // " NBA - "
+    /\s+\|\s+/,                                     // " | "
+  ];
+  let cleanTitle = rawTitle;
+  for (const re of cutMarkers) {
+    const m = cleanTitle.match(re);
+    if (m && m.index != null) cleanTitle = cleanTitle.slice(0, m.index);
+  }
+  if (cleanTitle.length > 140) cleanTitle = cleanTitle.slice(0, 140);
+
+  const text = _buNormalizeText(cleanTitle);
   const homeAliases = BU_DEBUG_TEAMS[home] ?? [];
   const awayAliases = BU_DEBUG_TEAMS[away] ?? [];
   let score = 0;
@@ -2092,6 +2109,9 @@ function _buScoreCandidate(article, home, away) {
       break;
     }
   }
+
+  // Filtre dur : sans aucune mention équipe, reject (évite articles sans rapport)
+  if (!homeHit && !awayHit) return -999;
 
   if (homeHit && awayHit) score += 2;
 
