@@ -1,6 +1,11 @@
 Lis SESSION.md. `.claude/onboarding.md` uniquement pour deploy/setup/reprise compte.
 Branches: `claude/<topic>`. Update SESSION.md seulement si merge a impact critique.
 
+RÈGLE OBLIGATOIRE workflow PR/merge :
+- Fin tâche code → push branche · ouvrir PR GitHub · merger dans main · sans demander
+- Cloudflare auto-deploy sur main → user voit changements en prod
+- Skip uniquement si user dit explicitement "ne merge pas"
+
 RÈGLE OBLIGATOIRE pour toute IA modifiant SESSION.md ou ce fichier :
 - Télégraphique français · pas de prose · pas d'articles superflus · pas d'emoji
 - Listes à puces courtes · symboles `·` séparateur · `→` cause/résultat
