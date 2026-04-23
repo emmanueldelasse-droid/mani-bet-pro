@@ -5658,13 +5658,13 @@ const TENNIS_TOURNAMENTS = [
   { key: 'atp_cincinnati',      label: 'Cincinnati Open',        tour: 'atp', surface: 'Hard',  start: '2026-08-10', end: '2026-08-17', sport_key: 'tennis_atp_cincinnati_open' },
   { key: 'atp_shanghai',        label: 'Shanghai Masters',       tour: 'atp', surface: 'Hard',  start: '2026-10-05', end: '2026-10-18', sport_key: 'tennis_atp_shanghai_masters' },
   { key: 'atp_paris_masters',   label: 'Paris Masters',          tour: 'atp', surface: 'Hard',  start: '2026-10-26', end: '2026-11-01', sport_key: 'tennis_atp_paris_masters' },
-  // ── ATP 500 (sélection) ──
+  // ── ATP 500 ──
   { key: 'atp_barcelona',       label: 'Barcelona Open',         tour: 'atp', surface: 'Clay',  start: '2026-04-20', end: '2026-04-27', sport_key: 'tennis_atp_barcelona_open' },
-  { key: 'atp_halle',           label: 'Halle Open',             tour: 'atp', surface: 'Grass', start: '2026-06-15', end: '2026-06-21', sport_key: 'tennis_atp_halle' },
-  { key: 'atp_queens',          label: "Queen's Club",           tour: 'atp', surface: 'Grass', start: '2026-06-15', end: '2026-06-21', sport_key: 'tennis_atp_queens' },
-  { key: 'atp_washington',      label: 'Washington Open',        tour: 'atp', surface: 'Hard',  start: '2026-07-20', end: '2026-07-26', sport_key: 'tennis_atp_washington' },
-  { key: 'atp_vienna',          label: 'Vienna Open',            tour: 'atp', surface: 'Hard',  start: '2026-10-19', end: '2026-10-25', sport_key: 'tennis_atp_vienna_open' },
-  { key: 'atp_basel',           label: 'Basel Open',             tour: 'atp', surface: 'Hard',  start: '2026-10-19', end: '2026-10-25', sport_key: 'tennis_atp_basel' },
+  { key: 'atp_dubai',           label: 'Dubai Championships',    tour: 'atp', surface: 'Hard',  start: '2026-02-23', end: '2026-03-01', sport_key: 'tennis_atp_dubai' },
+  { key: 'atp_qatar',           label: 'Qatar Open (Doha)',      tour: 'atp', surface: 'Hard',  start: '2026-02-16', end: '2026-02-22', sport_key: 'tennis_atp_qatar_open' },
+  { key: 'atp_china',           label: 'China Open (Beijing)',   tour: 'atp', surface: 'Hard',  start: '2026-09-28', end: '2026-10-04', sport_key: 'tennis_atp_china_open' },
+  // ── ATP 250 (actuellement visibles sur TheOddsAPI) ──
+  { key: 'atp_munich',          label: 'BMW Open Munich',        tour: 'atp', surface: 'Clay',  start: '2026-04-20', end: '2026-04-26', sport_key: 'tennis_atp_munich' },
 
   // ── WTA Grand Slams ──
   { key: 'wta_australian_open', label: 'WTA Australian Open',    tour: 'wta', surface: 'Hard',  start: '2026-01-19', end: '2026-02-01', sport_key: 'tennis_wta_aus_open_singles' },
@@ -5678,10 +5678,12 @@ const TENNIS_TOURNAMENTS = [
   { key: 'wta_rome',            label: 'WTA Rome',               tour: 'wta', surface: 'Clay',  start: '2026-05-11', end: '2026-05-18', sport_key: 'tennis_wta_italian_open' },
   { key: 'wta_canadian',        label: 'WTA Canadian Open',      tour: 'wta', surface: 'Hard',  start: '2026-07-27', end: '2026-08-09', sport_key: 'tennis_wta_canadian_open' },
   { key: 'wta_cincinnati',      label: 'WTA Cincinnati',         tour: 'wta', surface: 'Hard',  start: '2026-08-10', end: '2026-08-17', sport_key: 'tennis_wta_cincinnati_open' },
-  // ── WTA 500 (sélection) ──
-  { key: 'wta_stuttgart',       label: 'WTA Stuttgart',          tour: 'wta', surface: 'Clay',  start: '2026-04-20', end: '2026-04-27', sport_key: 'tennis_wta_stuttgart' },
-  { key: 'wta_berlin',          label: 'WTA Berlin',             tour: 'wta', surface: 'Grass', start: '2026-06-15', end: '2026-06-21', sport_key: 'tennis_wta_berlin' },
-  { key: 'wta_charleston',      label: 'WTA Charleston',         tour: 'wta', surface: 'Clay',  start: '2026-03-30', end: '2026-04-05', sport_key: 'tennis_wta_charleston' },
+  { key: 'wta_china',           label: 'WTA China Open',         tour: 'wta', surface: 'Hard',  start: '2026-09-28', end: '2026-10-04', sport_key: 'tennis_wta_china_open' },
+  { key: 'wta_dubai',           label: 'WTA Dubai Championships',tour: 'wta', surface: 'Hard',  start: '2026-02-16', end: '2026-02-22', sport_key: 'tennis_wta_dubai' },
+  { key: 'wta_qatar',           label: 'WTA Qatar Open (Doha)',  tour: 'wta', surface: 'Hard',  start: '2026-02-09', end: '2026-02-15', sport_key: 'tennis_wta_qatar_open' },
+  // ── WTA 500 ──
+  { key: 'wta_stuttgart',       label: 'WTA Stuttgart',          tour: 'wta', surface: 'Clay',  start: '2026-04-20', end: '2026-04-27', sport_key: 'tennis_wta_stuttgart_open' },
+  { key: 'wta_charleston',      label: 'WTA Charleston',         tour: 'wta', surface: 'Clay',  start: '2026-03-30', end: '2026-04-05', sport_key: 'tennis_wta_charleston_open' },
 ];
 
 function _activeTennisTournaments(dateStr) {
