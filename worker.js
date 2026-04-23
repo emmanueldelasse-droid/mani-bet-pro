@@ -5695,13 +5695,14 @@ async function handleTennisTournaments(url, env, origin) {
   const tourFilter = url.searchParams.get('tour');  // optionnel : 'atp' ou 'wta'
   const validate   = url.searchParams.get('validate') === '1';
   const all        = !!url.searchParams.get('all');  // ?all=1 retourne tous, pas juste actifs
-  const candidates = (all ? TENNIS_TOURNAMENTS : _activeTennisTournaments(date))
+  const inWindow   = _activeTennisTournaments(date);
+
+  let candidates = (all ? TENNIS_TOURNAMENTS : inWindow)
     .filter(t => !tourFilter || t.tour === tourFilter);
 
   let tournaments = candidates;
-  let availableTennisKeys = null;  // toutes clés tennis existantes sur TheOddsAPI
+  let availableTennisKeys = null;
 
-  // Validation live : cross-ref sport_key avec TheOddsAPI sports-list
   if (validate) {
     const oddsKey = env.ODDS_API_KEY_1 ?? env.ODDS_API_KEY_2;
     if (!oddsKey) {
@@ -5715,9 +5716,21 @@ async function handleTennisTournaments(url, env, origin) {
         if (resp.ok) {
           const sports = await resp.json();
           const arr    = Array.isArray(sports) ? sports : [];
-          // Check existence (pas s.active : active=false = pas en saison, key reste valide)
           const existingKeys = new Set(arr.map(s => s.key));
           const activeKeys   = new Set(arr.filter(s => s.active).map(s => s.key));
+
+          // Mode actif (non ?all=1) : union fenetre hardcodee + tournois actifs
+          // sur TheOddsAPI (dates pas toujours alignees · bets ouverts en avance)
+          if (!all) {
+            const inWindowKeys = new Set(inWindow.map(t => t.key));
+            const extraActive  = TENNIS_TOURNAMENTS.filter(t =>
+              !inWindowKeys.has(t.key) &&
+              activeKeys.has(t.sport_key) &&
+              (!tourFilter || t.tour === tourFilter)
+            );
+            candidates = [...candidates, ...extraActive];
+          }
+
           tournaments = candidates.map(t => ({
             ...t,
             key_exists:       existingKeys.has(t.sport_key),
@@ -5732,7 +5745,6 @@ async function handleTennisTournaments(url, env, origin) {
         tournaments = candidates.map(t => ({ ...t, validated: null, note: err.message }));
       }
     }
-    // Filtre hors tournois invalides pour usage orchestrator
     if (!all) tournaments = tournaments.filter(t => t.validated !== false);
   }
 
