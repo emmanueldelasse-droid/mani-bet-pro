@@ -956,11 +956,22 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
     const edge = best.edge ?? 0;
     if (edge < 5) return;
 
-    const quality = a.data_quality_score ?? 0.5;
-    const divergence = a.market_divergence?.flag ?? 'low';
-    const divPenalty = divergence === 'critical' ? 0.5 : divergence === 'high' ? 0.3 : 0;
-    const mlPenalty = best.type === 'MONEYLINE' && Math.abs(edge) > 10 ? 0.2 : 0;
-    const score = edge * quality * (1 - divPenalty) * (1 - mlPenalty);
+    // Exclusions dures : données critiques manquantes ou confiance faible
+    if (Array.isArray(a.missing_critical) && a.missing_critical.length > 0) return;
+    if (a.confidence_level === 'LOW' || a.confidence_level === 'INCONCLUSIVE') return;
+
+    const quality     = a.data_quality_score ?? 0.5;
+    const robustness  = a.robustness_score   ?? 0.5;
+    const reliability = (quality + robustness) / 2;
+    const divergence  = a.market_divergence?.flag ?? 'low';
+    const divPenalty  = divergence === 'critical' ? 0.5 : divergence === 'high' ? 0.3 : 0;
+    // Moneyline : book très efficace · edge > 15 = red flag (on a loupé une info)
+    const mlPenalty   = best.type === 'MONEYLINE' && Math.abs(edge) > 15 ? 0.5
+                      : best.type === 'MONEYLINE' && Math.abs(edge) > 10 ? 0.2
+                      : 0;
+    // Edge capé à 15 dans le scoring (au-delà = suspect, pas valorisant)
+    const cappedEdge  = Math.min(edge, 15);
+    const score       = cappedEdge * reliability * (1 - divPenalty) * (1 - mlPenalty);
 
     if (score > bestScore) {
       bestScore = score;
