@@ -666,9 +666,13 @@ function _createMatchCard(match) {
   const ouOverFmt  = overDec  != null ? Number(overDec).toFixed(2)  : null;
   const ouUnderFmt = underDec != null ? Number(underDec).toFixed(2) : null;
 
+  const tennisTour = isTennis ? (String(match?.tour ?? 'atp').toUpperCase()) : null;
+  const sportLabel = isTennis ? `Tennis ${tennisTour}`
+                   : isMLB ? 'MLB' : 'NBA';
+
   card.innerHTML = `
     <div class="match-card__header" style="display:flex;align-items:center;gap:6px">
-      <span class="sport-tag ${isTennis ? 'sport-tag--tennis' : isMLB ? 'sport-tag--mlb' : 'sport-tag--nba'}">${isTennis ? 'Tennis' : isMLB ? 'MLB' : 'NBA'}</span>
+      <span class="sport-tag ${isTennis ? 'sport-tag--tennis' : isMLB ? 'sport-tag--mlb' : 'sport-tag--nba'}">${sportLabel}</span>
       ${!isFinal ? countdownHtml : ''}
       <span class="mc-header-date" style="margin-left:auto">${isFinal ? 'Terminé' : time}</span>
       <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}" style="font-size:10px;padding:2px 7px">

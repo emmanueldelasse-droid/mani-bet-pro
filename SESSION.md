@@ -19,7 +19,7 @@ Stack: CF Worker + KV + Tank01 + ESPN + Claude API + Telegram
 - `/nba/{roster,boxscore,schedule}-debug` · `/debug/basketusa` (`?secret=X` obligatoire)
 - `/mlb/{matches,odds,pitchers,standings,team-stats,bullpen-stats,weather}`
 - `/bot/{run POST,logs,settle-logs POST,logs/export.csv,odds-history?matchId=X,calibration}`
-- `/tennis/{sports-list,odds,stats}`
+- `/tennis/{sports-list,tournaments,odds,stats}` · ATP+WTA · `tour=atp|wta` param stats
 - Cron `0 * * * *` · bot NBA+MLB · 10-11h UTC nightly-settle J-1/J-2 · 22h UTC AI props · snapshot ESPN→KV `odds_snap_{id}`
 
 ## Fichiers

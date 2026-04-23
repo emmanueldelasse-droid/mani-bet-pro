@@ -899,76 +899,84 @@ function _isBackToBack(recentForm, matchDate) {
 
 DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
   const WORKER = API_CONFIG.WORKER_BASE_URL;
-  const TOURNAMENTS = [
-    { key: 'monte_carlo', label: 'Monte-Carlo Masters', surface: 'Clay',  start: '2026-04-13', end: '2026-04-20' },
-    { key: 'madrid',      label: 'Madrid Open',         surface: 'Clay',  start: '2026-04-28', end: '2026-05-10' },
-    { key: 'rome',        label: 'Rome Masters',        surface: 'Clay',  start: '2026-05-11', end: '2026-05-18' },
-    { key: 'french_open', label: 'Roland Garros',       surface: 'Clay',  start: '2026-05-25', end: '2026-06-08' },
-    { key: 'wimbledon',   label: 'Wimbledon',           surface: 'Grass', start: '2026-06-29', end: '2026-07-12' },
-    { key: 'us_open',     label: 'US Open',             surface: 'Hard',  start: '2026-08-31', end: '2026-09-13' },
-  ];
-
-  const d          = date ?? new Date().toISOString().slice(0, 10);
-  const tournament = TOURNAMENTS.find(t => d >= t.start && d <= t.end) ?? null;
-
-  if (!tournament) {
-    Logger.info('TENNIS_NO_ACTIVE_TOURNAMENT', { date: d });
-    return { matches: [], analyses: {} };
-  }
+  const d = date ?? new Date().toISOString().slice(0, 10);
 
   try {
-    LoadingUI.update('Tennis odds...', 0);
-    const oddsResp = await fetch(`${WORKER}/tennis/odds?tournament=${tournament.key}`, {
+    // 1. Liste tournois actifs (ATP + WTA) depuis worker - source unique de verite
+    const tournResp = await fetch(`${WORKER}/tennis/tournaments?date=${d}`, {
       headers: { Accept: 'application/json' },
     });
-    if (!oddsResp.ok) return { matches: [], analyses: {} };
-    const oddsData = await oddsResp.json();
-    if (!oddsData.available || !oddsData.matches?.length) {
+    if (!tournResp.ok) {
+      Logger.warn('TENNIS_TOURNAMENTS_FETCH_FAILED', { status: tournResp.status });
+      return { matches: [], analyses: {} };
+    }
+    const tournData  = await tournResp.json();
+    const activeList = tournData?.tournaments ?? [];
+    if (!activeList.length) {
+      Logger.info('TENNIS_NO_ACTIVE_TOURNAMENT', { date: d });
       return { matches: [], analyses: {} };
     }
 
     const matchesMap = {};
     const analyses   = {};
+    let loaded = 0;
 
-    for (const m of oddsData.matches) {
-      const p1 = m.home_player;
-      const p2 = m.away_player;
-      if (!p1 || !p2) continue;
+    // 2. Boucle sur chaque tournoi actif (peut etre plusieurs meme jour · ex: ATP 500 + WTA 500)
+    for (const tournament of activeList) {
+      LoadingUI.update(`Tennis odds ${tournament.label}...`, Math.round(loaded / activeList.length * 100));
 
-      const matchObj = {
-        id:         m.id,
-        sport:      'TENNIS',
-        datetime:   m.commence_time,
-        tournament: tournament.label,
-        surface:    tournament.surface,
-        status:     'STATUS_SCHEDULED',
-        home_team:  { name: p1, abbreviation: p1.split(' ').pop() ?? p1, score: null },
-        away_team:  { name: p2, abbreviation: p2.split(' ').pop() ?? p2, score: null },
-        odds:       m.odds?.h2h ? { home_ml: m.odds.h2h.p1, away_ml: m.odds.h2h.p2 } : null,
-      };
-      matchesMap[m.id] = matchObj;
-
-      try {
-        LoadingUI.update(`Stats ${p1} vs ${p2}...`, 50);
-        const statsResp = await fetch(
-          `${WORKER}/tennis/stats?players=${encodeURIComponent(p1)},${encodeURIComponent(p2)}&surface=${tournament.surface}`,
-          { headers: { Accept: 'application/json' } }
-        );
-        const statsData = statsResp.ok ? await statsResp.json() : null;
-        const csvStats  = statsData?.available ? (statsData.stats ?? {}) : {};
-
-        const engineResult = EngineTennis.analyze(
-          { ...m, surface: tournament.surface },
-          csvStats
-        );
-
-        const analysis      = EngineCore.analyze('TENNIS', engineResult, matchObj, matchObj);
-        analysis.match_id   = m.id;
-        analyses[m.id]      = analysis;
-
-      } catch (err) {
-        Logger.warn('TENNIS_MATCH_ERROR', { match: `${p1} vs ${p2}`, message: err.message });
+      const oddsResp = await fetch(`${WORKER}/tennis/odds?tournament=${tournament.key}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!oddsResp.ok) {
+        Logger.warn('TENNIS_ODDS_FETCH_FAILED', { tournament: tournament.key, status: oddsResp.status });
+        loaded++;
+        continue;
       }
+      const oddsData = await oddsResp.json();
+      if (!oddsData.available || !oddsData.matches?.length) { loaded++; continue; }
+
+      for (const m of oddsData.matches) {
+        const p1 = m.home_player;
+        const p2 = m.away_player;
+        if (!p1 || !p2) continue;
+
+        const matchObj = {
+          id:         m.id,
+          sport:      'TENNIS',
+          tour:       tournament.tour,
+          datetime:   m.commence_time,
+          tournament: tournament.label,
+          surface:    tournament.surface,
+          status:     'STATUS_SCHEDULED',
+          home_team:  { name: p1, abbreviation: p1.split(' ').pop() ?? p1, score: null },
+          away_team:  { name: p2, abbreviation: p2.split(' ').pop() ?? p2, score: null },
+          odds:       m.odds?.h2h ? { home_ml: m.odds.h2h.p1, away_ml: m.odds.h2h.p2 } : null,
+        };
+        matchesMap[m.id] = matchObj;
+
+        try {
+          const statsResp = await fetch(
+            `${WORKER}/tennis/stats?players=${encodeURIComponent(p1)},${encodeURIComponent(p2)}&surface=${tournament.surface}&tour=${tournament.tour}`,
+            { headers: { Accept: 'application/json' } }
+          );
+          const statsData = statsResp.ok ? await statsResp.json() : null;
+          const csvStats  = statsData?.available ? (statsData.stats ?? {}) : {};
+
+          const engineResult = EngineTennis.analyze(
+            { ...m, surface: tournament.surface },
+            csvStats
+          );
+
+          const analysis      = EngineCore.analyze('TENNIS', engineResult, matchObj, matchObj);
+          analysis.match_id   = m.id;
+          analyses[m.id]      = analysis;
+
+        } catch (err) {
+          Logger.warn('TENNIS_MATCH_ERROR', { match: `${p1} vs ${p2}`, message: err.message });
+        }
+      }
+      loaded++;
     }
 
     store.set({ matches: matchesMap, analyses });
