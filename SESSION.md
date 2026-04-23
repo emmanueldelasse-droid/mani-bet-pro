@@ -60,6 +60,7 @@ néant
 ## Hors SESSION (charger à la demande)
 - Secrets/nouveau compte → `.claude/onboarding.md`
 - Historique → `git log --oneline`
+- Agent `alon` (analyse calibration bot) → `.claude/agents/alon.md`
 
 ## Règle format
 CLAUDE.md · télégraphique · `·` sep · `→` cause · refs `file:line` · < 3000 octets
