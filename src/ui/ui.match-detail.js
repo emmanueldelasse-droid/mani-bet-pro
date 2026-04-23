@@ -468,8 +468,27 @@ function renderShell(match, analysis, storeInstance) {
         </div>
         ${seriesHeaderBadge}
         ${(() => {
-          const homeMlDec = match?.odds?.home_ml_decimal ?? _americanToDecimal(match?.odds?.home_ml) ?? null;
-          const awayMlDec = match?.odds?.away_ml_decimal ?? _americanToDecimal(match?.odds?.away_ml) ?? null;
+          // MLB : cotes dans match.market_odds.bookmakers (décimal direct via TheOddsAPI)
+          // NBA : cotes dans match.odds.home_ml (format américain via ESPN) ou home_ml_decimal
+          const pickMlbBook = () => {
+            const books = match?.market_odds?.bookmakers ?? [];
+            if (!books.length) return null;
+            const priority = ['pinnacle', 'draftkings', 'fanduel', 'betmgm'];
+            for (const key of priority) {
+              const b = books.find(x => x.key === key);
+              if (b?.home_ml && b?.away_ml) return b;
+            }
+            return books.find(b => b.home_ml && b.away_ml) ?? null;
+          };
+          const mlbBook   = isMLB ? pickMlbBook() : null;
+          const homeMlDec = mlbBook?.home_ml
+                         ?? match?.odds?.home_ml_decimal
+                         ?? _americanToDecimal(match?.odds?.home_ml)
+                         ?? null;
+          const awayMlDec = mlbBook?.away_ml
+                         ?? match?.odds?.away_ml_decimal
+                         ?? _americanToDecimal(match?.odds?.away_ml)
+                         ?? null;
           const fmt = (d) => d ? Number(d).toFixed(2) : null;
           const homeStr = fmt(homeMlDec);
           const awayStr = fmt(awayMlDec);
@@ -1452,7 +1471,7 @@ function _buildSyntheseLines(analysis, match) {
   // Ligne 3 — raisons (sans redondance)
   if (keySignals.length) {
     const listed = keySignals.map(s => `<strong>${escapeHtml(s.toLowerCase())}</strong>`).join(' et ');
-    lines.push(line('📊', `Raisons principales : ${listed}.`));
+    lines.push(line('📊', `Ce qui fait pencher l'analyse : ${listed}.`));
   }
 
   // Ligne 4 — action recommandée
