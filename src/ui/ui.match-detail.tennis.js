@@ -14,7 +14,7 @@
  */
 
 import { Logger } from '../utils/utils.logger.js';
-import { escapeHtml as _escapeHtml } from './ui.match-detail.helpers.js';
+import { escapeHtml as _escapeHtml, WORKER_URL } from './ui.match-detail.helpers.js';
 
 export async function loadAndRenderTennisDetail(container, match, storeInstance) {
   const detailEl = container.querySelector('#tennis-detail-container');
@@ -22,14 +22,28 @@ export async function loadAndRenderTennisDetail(container, match, storeInstance)
 
   try {
     const tennisStats = storeInstance?.get('tennisStats') ?? {};
-    const data        = tennisStats[match.id] ?? null;
+    let data = tennisStats[match.id] ?? null;
 
-    if (!data || !data.p1 || !data.p2) {
+    // Fallback : fetch direct si pas dans le store (deep-link ou orchestrator pas encore tourné)
+    if (!data) {
+      data = await _fetchTennisStatsForMatch(match);
+      if (data && storeInstance) {
+        const updated = { ...(storeInstance.get('tennisStats') ?? {}), [match.id]: data };
+        try { storeInstance.set({ tennisStats: updated }); } catch (_) {}
+      }
+    }
+
+    const hasP1Data = data?.p1 && Object.keys(data.p1).some(k => k !== 'name' && data.p1[k] != null);
+    const hasP2Data = data?.p2 && Object.keys(data.p2).some(k => k !== 'name' && data.p2[k] != null);
+
+    if (!data || (!hasP1Data && !hasP2Data)) {
+      const p1n = match?.home_team?.name ?? '?';
+      const p2n = match?.away_team?.name ?? '?';
       detailEl.innerHTML = `
         <div class="card match-detail__bloc" style="text-align:center;padding:22px 16px">
           <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7">
-            Stats tennis indisponibles — actualise le dashboard ou réessaie dans quelques minutes.
-            <br><span style="font-size:11px;color:var(--color-muted)">Source : Jeff Sackmann CSV (lag ~2-3 jours).</span>
+            Stats indisponibles pour ${_escapeHtml(p1n)} vs ${_escapeHtml(p2n)}.
+            <br><span style="font-size:11px;color:var(--color-muted)">Source : Jeff Sackmann CSV (lag ~2-3 j). Joueurs hors classement ATP/WTA top ~300 souvent absents.</span>
           </div>
         </div>`;
       return;
@@ -41,9 +55,38 @@ export async function loadAndRenderTennisDetail(container, match, storeInstance)
     detailEl.innerHTML = `
       <div class="card match-detail__bloc">
         <div style="font-size:12px;color:var(--color-text-secondary);padding:8px 0">
-          Stats tennis temporairement indisponibles.
+          Stats tennis temporairement indisponibles (${_escapeHtml(err.message ?? 'erreur')}).
         </div>
       </div>`;
+  }
+}
+
+// Fetch direct /tennis/stats — fallback quand l'orchestrator n'a pas pré-chargé.
+// Sur un deep-link vers la fiche match, on n'a pas tournée _loadAndAnalyzeTennis.
+async function _fetchTennisStatsForMatch(match) {
+  const p1 = match?.home_team?.name;
+  const p2 = match?.away_team?.name;
+  const surface = match?.surface ?? 'Hard';
+  const tour    = String(match?.tour ?? 'atp').toLowerCase();
+  if (!p1 || !p2) return null;
+
+  try {
+    const url = `${WORKER_URL}/tennis/stats?players=${encodeURIComponent(p1)},${encodeURIComponent(p2)}&surface=${encodeURIComponent(surface)}&tour=${tour}`;
+    const resp = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    if (!json?.available || !json.stats) return null;
+    return {
+      p1:                { name: p1, ...(json.stats[p1] ?? {}) },
+      p2:                { name: p2, ...(json.stats[p2] ?? {}) },
+      surface,
+      tour,
+      tournament_label:  match?.tournament ?? null,
+      fetched_at:        json.fetched_at ?? null,
+    };
+  } catch (err) {
+    Logger.warn('TENNIS_STATS_FETCH_FAILED', { message: err.message });
+    return null;
   }
 }
 
