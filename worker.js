@@ -5992,30 +5992,84 @@ function _parseTennisCSV(text) {
   }).filter(r => r.winner_name || r.loser_name);
 }
 
+// Normalise un nom joueur pour comparaison robuste TheOddsAPI ↔ Sackmann CSV.
+// Tolère : accents (Tsitsipás → tsitsipas), tirets (Auger-Aliassime → auger aliassime),
+// apostrophes, casse, espaces multiples.
+function _normalizeTennisName(name) {
+  return String(name ?? '').toLowerCase().trim()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[-'`.]/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+// Résout le nom officiel CSV Sackmann depuis un nom TheOddsAPI.
+// Stratégie : match exact normalisé · fallback match nom de famille (dernier mot).
+// Retourne null si rien trouvé (évite fake stats sur mauvais joueur).
+function _resolveTennisPlayerName(rows, playerName) {
+  const needle = _normalizeTennisName(playerName);
+  if (!needle) return null;
+
+  // Collecter tous les noms uniques présents dans rows
+  const nameSet = new Set();
+  for (const r of rows) {
+    if (r.winner_name) nameSet.add(r.winner_name);
+    if (r.loser_name)  nameSet.add(r.loser_name);
+  }
+
+  // Pass 1 : match exact normalisé
+  for (const n of nameSet) {
+    if (_normalizeTennisName(n) === needle) return n;
+  }
+
+  // Pass 2 : match strict sur nom de famille + initiale prénom
+  // Ex : "Arthur Fils" → cherche "a fils" dans noms normalisés
+  const parts = needle.split(' ');
+  if (parts.length >= 2) {
+    const firstInit = parts[0][0];
+    const lastName  = parts[parts.length - 1];
+    const pattern   = `${firstInit} ${lastName}`;
+    const candidates = [];
+    for (const n of nameSet) {
+      const norm = _normalizeTennisName(n);
+      const np   = norm.split(' ');
+      if (np.length >= 2 && np[0][0] === firstInit && np[np.length - 1] === lastName) {
+        candidates.push(n);
+      }
+    }
+    // 1 seul candidat → confiance · sinon ambigu → null
+    if (candidates.length === 1) return candidates[0];
+  }
+
+  return null;
+}
+
 function _computeTennisPlayerStats(rows, playerName, surface, today) {
-  const matches = rows.filter(r => r.winner_name === playerName || r.loser_name === playerName)
+  const resolvedName = _resolveTennisPlayerName(rows, playerName);
+  if (!resolvedName) return null;
+
+  const matches = rows.filter(r => r.winner_name === resolvedName || r.loser_name === resolvedName)
     .sort((a, b) => parseInt(b.tourney_date || '0') - parseInt(a.tourney_date || '0'));
   if (!matches.length) return null;
 
   const lastM    = matches[0];
-  const isWinner = lastM.winner_name === playerName;
+  const isWinner = lastM.winner_name === resolvedName;
   const rank     = parseInt(isWinner ? lastM.winner_rank : lastM.loser_rank) || null;
   const cutoff   = new Date(today); cutoff.setFullYear(cutoff.getFullYear() - 1);
   const cutoffStr = cutoff.toISOString().slice(0, 10).replace(/-/g, '');
 
   const surfM    = rows.filter(r =>
-    (r.winner_name === playerName || r.loser_name === playerName) &&
+    (r.winner_name === resolvedName || r.loser_name === resolvedName) &&
     r.surface === surface && (r.tourney_date || '0') >= cutoffStr
   );
-  const surfWins = surfM.filter(r => r.winner_name === playerName).length;
+  const surfWins = surfM.filter(r => r.winner_name === resolvedName).length;
 
   let ema = 0.5;
   const last10 = matches.slice(0, 10);
   for (let i = last10.length - 1; i >= 0; i--) {
-    ema = 0.3 * (last10[i].winner_name === playerName ? 1 : 0) + 0.7 * ema;
+    ema = 0.3 * (last10[i].winner_name === resolvedName ? 1 : 0) + 0.7 * ema;
   }
 
-  const svcRows  = matches.filter(r => r.winner_name === playerName).slice(0, 20);
+  const svcRows  = matches.filter(r => r.winner_name === resolvedName).slice(0, 20);
   const svcStats = svcRows.length > 0 ? {
     aces:            svcRows.reduce((s, r) => s + (parseInt(r.w_ace) || 0), 0) / svcRows.length,
     double_faults:   svcRows.reduce((s, r) => s + (parseInt(r.w_df)  || 0), 0) / svcRows.length,
@@ -6031,7 +6085,9 @@ function _computeTennisPlayerStats(rows, playerName, surface, today) {
   }
 
   return {
-    name: playerName, current_rank: rank,
+    name: playerName,
+    resolved_name:      resolvedName !== playerName ? resolvedName : undefined,
+    current_rank: rank,
     surface_stats: { [surface]: { win_rate: surfM.length > 0 ? surfWins / surfM.length : null, matches: surfM.length } },
     recent_form_ema:    Math.round(ema * 100) / 100,
     service_stats:      svcStats,
@@ -6042,8 +6098,10 @@ function _computeTennisPlayerStats(rows, playerName, surface, today) {
 }
 
 function _computeTennisH2H(rows, p1, p2, surface) {
+  const n1 = _resolveTennisPlayerName(rows, p1) ?? p1;
+  const n2 = _resolveTennisPlayerName(rows, p2) ?? p2;
   const h2h = rows.filter(r =>
-    ((r.winner_name === p1 && r.loser_name === p2) || (r.winner_name === p2 && r.loser_name === p1)) &&
+    ((r.winner_name === n1 && r.loser_name === n2) || (r.winner_name === n2 && r.loser_name === n1)) &&
     r.surface === surface
   );
   return { p1_wins: h2h.filter(r => r.winner_name === p1).length, p2_wins: h2h.filter(r => r.winner_name === p2).length };
