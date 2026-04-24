@@ -1,69 +1,62 @@
 # Mani Bet Pro
 
-## Règles update SESSION (IA OBLIGATOIRE)
-Début tâche → "En cours" étape 1/N · Fin étape → +1 · Merge → vider "En cours" + bump version + cocher TODO · User mentionne future → ajouter TODO + demander P · Commit SESSION si step >5min ou >3 tool calls.
+## Règles update SESSION
+Début tâche → "En cours" 1/N · Fin étape → +1 · Merge → vider "En cours" + cocher TODO · User mention future → TODO + priorité.
 
 ## En cours
 néant
 
-## TODO (bot calibration — diag Alon pré-v6.78)
-- [ ] P1 reduire `recent_form_ema` 0.24→0.15 en playin/playoff (worker.js:4406) · bruité
-- [ ] P1 bump `net_rating_diff` 0.06→0.16 (worker.js:4406) · stat stable
+## TODO
+- [x] P1 `recent_form_ema` 0.24→0.15 playin/playoff (PR #75)
+- [ ] P1 bump `net_rating_diff` 0.06→0.16 (worker.js:4419)
 - [ ] P2 gate `confidence=INCONCLUSIVE` si `data_quality<0.55` (worker.js:5185)
-- [ ] P3 relancer Alon après 50+ logs post-v6.78 · mesurer effet shrinkage+data fix
+- [ ] P2 `/bot/calibration/analyze?sport=tennis` après 30+ logs settlés
+- [ ] P3 relancer Alon après 50+ logs post-v6.78
 
 ## État
-Worker `manibetpro` v6.78 · `manibetpro.emmanueldelasse.workers.dev` · Front GH Pages
-KV `PAPER_TRADING` id=`17eb7ddc41a949dd99bd840142832cfd`
-Stack: CF Worker + KV + Tank01 + ESPN + Claude API + Telegram
+Worker `manibetpro.emmanueldelasse.workers.dev` · Front GH Pages · KV `PAPER_TRADING` `17eb7ddc41a949dd99bd840142832cfd`
+Stack: CF Worker + KV + Tank01 + ESPN + Claude + Telegram · Sackmann CSV tennis
 
 ## Routes
-- `/health` · `/nba/{matches,odds,injuries,standings,results,team-detail,teams/stats,roster-injuries,ai-injuries[-batch],ai-player-props,player-points}`
-- `/nba/{roster,boxscore,schedule}-debug` · `/debug/basketusa` (`?secret=X` obligatoire)
-- `/mlb/{matches,odds,pitchers,standings,team-stats,bullpen-stats,weather}`
-- `/bot/{run POST,logs,settle-logs POST,logs/export.csv,odds-history?matchId=X,calibration}`
-- `/tennis/{sports-list,tournaments,odds,stats}` · ATP+WTA · `tour=atp|wta` param stats
-- Cron `0 * * * *` · bot NBA+MLB · 10-11h UTC nightly-settle J-1/J-2 · 22h UTC AI props · snapshot ESPN→KV `odds_snap_{id}`
+- `/nba/{matches,odds,injuries,standings,results,team-detail,teams/stats,roster-injuries,ai-injuries[-batch],ai-player-props,player-points}` · debug `/nba/{roster,boxscore,schedule}-debug` · `/debug/basketusa?secret=`
+- `/mlb/{matches,odds,pitchers,standings,team-stats,bullpen-stats,weather,bot/run,bot/logs,bot/settle-logs}`
+- `/tennis/{sports-list,tournaments,odds,stats,bot/run POST,bot/logs,bot/settle-logs POST}` · ATP+WTA
+- `/bot/{run,logs,settle-logs,logs/export.csv?sport=,odds-history,calibration/analyze?sport=nba|mlb|tennis}`
+- Cron `0 * * * *` · bots NBA+MLB+tennis · 10-11h UTC nightly-settle J-1/J-2 · 22h UTC AI props · snapshot ESPN→KV `odds_snap_{id}`
 
 ## Fichiers
-- `worker.js` ~7263L monolithe · `wrangler.jsonc`
-- `src/ui/` → match-detail.teamdetail · dashboard · bot · history · match-detail.helpers
-- `src/utils/utils.odds.js` → source canonique conversions cotes
+- `worker.js` ~8000L monolithe · `wrangler.jsonc`
+- `src/ui/match-detail.{js,teamdetail,tennis,helpers}` · dashboard · bot · history
+- `src/engine/engine.tennis.js` front · bot tennis backend worker.js (phases: grand_slam/masters_1000/tour_500/regular/challenger)
+- `src/utils/utils.odds.js` source conversions cotes
 
 ## Pièges Tank01
-- `team.Roster` R maj (fallback `.roster`) · `statsToGet=averages` obligatoire
-- `teamAbv.trim().toUpperCase()` systématique · cache KV rosters 6h · team-detail 6/8h · box 7j
-- `?bust=1` force refetch, overwrite si data>0 · bundle calls séquentiels anti rate-limit
-- `parseFloat(ppg)` → `Number.isFinite` (sinon NaN cascade)
+- `team.Roster` R maj (fallback `.roster`) · `statsToGet=averages` · `teamAbv.trim().toUpperCase()`
+- cache KV rosters 6h · team-detail 6/8h · box 7j · `?bust=1` refetch · `parseFloat(ppg)`→`Number.isFinite`
 
 ## Pièges TheOddsAPI
-- `player_points` sans `bookmakers=` → books dispo · filtre spécifique → 422 si absent (worker.js:2450)
+`player_points` sans `bookmakers=` → books dispo · filtre → 422 si absent (worker.js:2450)
 
 ## Pièges MLB
-- `_mlbSeason()` dynamique · jamais hardcoder (nov-fév = saison précédente)
-- Double-header : pitcher keyé teamName → warn + garde 1er (refacto futur)
-- IP baseball `X.Y` = X innings + Y outs · `parseFloat` faux
-- MLB Stats API `date=YYYY-MM-DD` · ESPN `YYYYMMDD` · logs MLB stockent YYYYMMDD (aligné NBA)
+`_mlbSeason()` dynamique · IP `X.Y` = X innings + Y outs (`parseFloat` faux) · ESPN `YYYYMMDD` aligné logs
+
+## Pièges Tennis
+CSV Sackmann lag 2-3j · tournoi en cours absent → quality PARTIAL · settlement via CSV retro · Elo K=32 init 1500 · clé `tennis_bot_log_{matchId}` TTL 90j
 
 ## Pièges Timezone
-- `getTodayET` + `_botFormatDate` via `Intl.DateTimeFormat` · DST auto
-- Nightly-settle fenêtre 10-11h UTC · idempotent KV
+`_botFormatDate` Intl · DST auto · nightly 10-11h UTC idempotent
 
 ## Sécu
-- Debug routes → `_denyIfNoDebugAuth()` · refuse si DEBUG_SECRET unset/wrong
-- Params user → regex avant KV key (`matchId [a-zA-Z0-9_-]+` · `date \d{8}`)
-- UI innerHTML → `escapeHtml` (helpers.js) pour data tierce
+Debug `_denyIfNoDebugAuth()` · params user regex avant KV key · innerHTML → `escapeHtml`
 
 ## Bugs actifs
 néant
 
 ## Deploy
-`git push origin main` → CF auto-deploy · pas de `wrangler deploy`.
+`git push origin main` → CF auto-deploy
 
-## Hors SESSION (charger à la demande)
-- Secrets/nouveau compte → `.claude/onboarding.md`
-- Historique → `git log --oneline`
-- Agent `alon` (analyse calibration bot) → `.claude/agents/alon.md`
+## Hors SESSION
+`.claude/onboarding.md` · `git log` · `.claude/agents/alon.md`
 
 ## Règle format
-CLAUDE.md · télégraphique · `·` sep · `→` cause · refs `file:line` · < 3000 octets
+télégraphique · `·` sep · `→` cause · refs `file:line` · < 3000 octets

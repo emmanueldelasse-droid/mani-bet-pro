@@ -235,6 +235,7 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(_runBotCron(env));
     ctx.waitUntil(_runMLBBotCron(env));
+    ctx.waitUntil(_runTennisBotCron(env));
     ctx.waitUntil(_runNightlySettle(env));
     ctx.waitUntil(_runOddsSnapshot(env));
     ctx.waitUntil(_runAIPlayerPropsCron(env));
@@ -360,6 +361,13 @@ export default {
         return await handleTennisOdds(url, env, origin);
       if (path === '/tennis/stats' && request.method === 'GET')
         return await handleTennisStats(url, env, origin);
+
+      if (path === '/tennis/bot/run' && request.method === 'POST')
+        return await handleTennisBotRun(request, env, origin);
+      if (path === '/tennis/bot/logs' && request.method === 'GET')
+        return await handleTennisBotLogs(url, env, origin);
+      if (path === '/tennis/bot/settle-logs' && request.method === 'POST')
+        return await handleTennisBotSettleLogs(request, env, origin);
 
       // ── BOT ───────────────────────────────────────────────────────────────
       if (path === '/bot/logs' && request.method === 'GET')
@@ -3800,7 +3808,9 @@ async function handleBotCalibration(url, env, origin) {
   if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
 
   const sport  = (url.searchParams.get('sport') ?? 'nba').toLowerCase();
-  const prefix = sport === 'mlb' ? MLB_BOT_LOG_PREFIX : BOT_LOG_PREFIX;
+  const prefix = sport === 'mlb'    ? MLB_BOT_LOG_PREFIX
+               : sport === 'tennis' ? TENNIS_BOT_LOG_PREFIX
+               :                       BOT_LOG_PREFIX;
 
   try {
     const list = await env.PAPER_TRADING.list({ prefix });
@@ -4019,7 +4029,7 @@ async function _runNightlySettle(env) {
       dates.push(formatDateESPN(dt));
     }
 
-    const results = { nba: [], mlb: [] };
+    const results = { nba: [], mlb: [], tennis: [] };
     for (const ds of dates) {
       try {
         const nba = await _botSettleDate(env, ds);
@@ -4029,6 +4039,10 @@ async function _runNightlySettle(env) {
         const mlb = await _mlbBotSettleDate(env, ds);
         results.mlb.push({ date: ds, settled: mlb.settled, error: mlb.error });
       } catch (err) { console.warn(`[NIGHTLY SETTLE] MLB ${ds}:`, err.message); }
+      try {
+        const ten = await _tennisBotSettleDate(env, ds);
+        results.tennis.push({ date: ds, settled: ten.settled, error: ten.error });
+      } catch (err) { console.warn(`[NIGHTLY SETTLE] TENNIS ${ds}:`, err.message); }
     }
 
     await env.PAPER_TRADING.put(NIGHTLY_SETTLE_RUN_KEY, todayStr, { expirationTtl: 48 * 3600 });
@@ -4249,7 +4263,9 @@ async function handleBotLogsExportCSV(url, env, origin) {
   try {
     const sport  = (url.searchParams.get('sport') ?? 'nba').toLowerCase();
     const days   = Math.min(parseInt(url.searchParams.get('days') ?? '90'), 90);
-    const prefix = sport === 'mlb' ? MLB_BOT_LOG_PREFIX : BOT_LOG_PREFIX;
+    const prefix = sport === 'mlb'    ? MLB_BOT_LOG_PREFIX
+                 : sport === 'tennis' ? TENNIS_BOT_LOG_PREFIX
+                 :                       BOT_LOG_PREFIX;
 
     const list = await env.PAPER_TRADING.list({ prefix });
     const keys = (list.keys ?? []).map(k => k.name);
@@ -7520,6 +7536,507 @@ async function handleMLBBotSettleLogs(request, env, origin) {
     const dateStr = body.date ?? new Date().toISOString().split('T')[0].replace(/-/g, '');
     const res     = await _mlbBotSettleDate(env, dateStr, { force });
     if (res.error) return jsonResponse({ error: res.error }, 502, origin);
+    return jsonResponse({ success: true, force, ...res }, 200, origin);
+  } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TENNIS BOT — Cron + analyse automatique (ATP + WTA)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Pipeline :
+//   _runTennisBotCron()         — fetch tournois actifs + odds + stats, analyse, log KV
+//   _botTennisEngineCompute()   — port backend de engine.tennis.js (6 variables)
+//   _tennisBotSettleDate()      — résolution via CSV Sackmann (lag 2-3j)
+//   handleTennisBotRun()        — POST /tennis/bot/run (déclenchement manuel)
+//   handleTennisBotLogs()       — GET  /tennis/bot/logs (dashboard)
+//   handleTennisBotSettleLogs() — POST /tennis/bot/settle-logs
+//
+// Structure log KV (clé : tennis_bot_log_{matchId}) :
+//   { logged_at, match_id, p1, p2, tournament, surface, tour, phase, date,
+//     motor_prob, score_raw, score_method, confidence_level, data_quality,
+//     missing_variables, signals, variables_used,
+//     odds_at_analysis, betting_recommendations, best_edge, best_side,
+//     result_winner, motor_was_right, prob_delta_pts, upset, clv_post_match, settled_at }
+
+const TENNIS_BOT_LOG_PREFIX = 'tennis_bot_log_';
+const TENNIS_BOT_RUN_KEY    = 'tennis_bot_last_run';
+
+// Tier tournoi — détecté via label (heuristique)
+function _tennisTournamentPhase(label) {
+  const L = String(label ?? '').toLowerCase();
+  if (/australian open|french open|roland[- ]?garros|wimbledon|us open/.test(L)) return 'grand_slam';
+  if (/masters|atp 1000|wta 1000|indian wells|miami open|madrid open|rome|cincinnati|paris masters|shanghai|canadian open|atp finals|wta finals/.test(L)) return 'masters_1000';
+  if (/500|atp 500|wta 500/.test(L)) return 'tour_500';
+  if (/challenger/.test(L)) return 'challenger';
+  return 'regular';
+}
+
+// Poids par phase — plus le tier est élevé, plus Elo/surface dominent (moins bruit forme)
+function _botTennisWeights(phase) {
+  switch (phase) {
+    case 'grand_slam':   return { ranking_elo_diff: 0.42, surface_winrate_diff: 0.30, recent_form_ema: 0.10, h2h_surface: 0.10, service_dominance: 0.04, fatigue_index: 0.04 };
+    case 'masters_1000': return { ranking_elo_diff: 0.40, surface_winrate_diff: 0.28, recent_form_ema: 0.12, h2h_surface: 0.10, service_dominance: 0.05, fatigue_index: 0.05 };
+    case 'tour_500':     return { ranking_elo_diff: 0.35, surface_winrate_diff: 0.26, recent_form_ema: 0.16, h2h_surface: 0.08, service_dominance: 0.08, fatigue_index: 0.07 };
+    case 'challenger':   return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.24, recent_form_ema: 0.20, h2h_surface: 0.08, service_dominance: 0.08, fatigue_index: 0.10 };
+    default:             return { ranking_elo_diff: 0.35, surface_winrate_diff: 0.25, recent_form_ema: 0.18, h2h_surface: 0.10, service_dominance: 0.06, fatigue_index: 0.06 };
+  }
+}
+
+// Convertit diff Elo en signal -1..+1 via proba attendue
+function _tennisEloSignal(e1, e2) {
+  if (e1 == null || e2 == null) return null;
+  const expP1 = 1 / (1 + Math.pow(10, (e2 - e1) / 400));
+  return { value: Math.round(((expP1 - 0.5) * 2) * 100) / 100, expected_p1_win: Math.round(expP1 * 100) };
+}
+
+function _botTennisExtractVariables(p1, p2, surface) {
+  const out = {};
+
+  // 1) ranking_elo_diff : priorité Elo surface (>= 10 matchs) > Elo overall (>= 20) > rank
+  const nSurf1 = p1?.elo_surface_matches ?? 0;
+  const nSurf2 = p2?.elo_surface_matches ?? 0;
+  if (p1?.elo_surface != null && p2?.elo_surface != null && nSurf1 >= 10 && nSurf2 >= 10) {
+    const sig = _tennisEloSignal(p1.elo_surface, p2.elo_surface);
+    out.ranking_elo_diff = { ...sig, source: `elo_${String(surface ?? '').toLowerCase()}`, quality: 'VERIFIED' };
+  } else if (p1?.elo_overall != null && p2?.elo_overall != null && (p1?.elo_matches ?? 0) >= 20 && (p2?.elo_matches ?? 0) >= 20) {
+    const sig = _tennisEloSignal(p1.elo_overall, p2.elo_overall);
+    out.ranking_elo_diff = { ...sig, source: 'elo_overall', quality: 'PARTIAL' };
+  } else if (p1?.current_rank != null && p2?.current_rank != null) {
+    const diff = p2.current_rank - p1.current_rank;
+    out.ranking_elo_diff = { value: Math.max(-1, Math.min(1, diff / 200)), source: 'rank_atp', quality: 'PARTIAL' };
+  } else {
+    out.ranking_elo_diff = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  // 2) surface_winrate_diff — 12 mois
+  const s1 = p1?.surface_stats?.[surface];
+  const s2 = p2?.surface_stats?.[surface];
+  if (s1?.win_rate != null && s2?.win_rate != null) {
+    const n1 = s1.matches ?? 0, n2 = s2.matches ?? 0;
+    const q = (n1 >= 8 && n2 >= 8) ? 'VERIFIED' : (n1 >= 4 && n2 >= 4) ? 'PARTIAL' : 'LOW_SAMPLE';
+    out.surface_winrate_diff = { value: Math.round((s1.win_rate - s2.win_rate) * 100) / 100, source: 'sackmann', quality: q };
+  } else {
+    out.surface_winrate_diff = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  // 3) recent_form_ema — EMA 10 matchs
+  if (p1?.recent_form_ema != null && p2?.recent_form_ema != null) {
+    const lag = Math.max(p1?.csv_lag_days ?? 0, p2?.csv_lag_days ?? 0);
+    out.recent_form_ema = { value: Math.round((p1.recent_form_ema - p2.recent_form_ema) * 100) / 100, source: 'sackmann', quality: lag > 3 ? 'PARTIAL' : 'VERIFIED' };
+  } else {
+    out.recent_form_ema = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  // 4) h2h_surface
+  const h2h = p1?.h2h?.[p2?.name];
+  if (h2h && (h2h.p1_wins + h2h.p2_wins) > 0) {
+    const total = h2h.p1_wins + h2h.p2_wins;
+    const wr = h2h.p1_wins / total;
+    out.h2h_surface = { value: Math.round(((wr - 0.5) * 2) * 100) / 100, total, source: 'sackmann', quality: total >= 3 ? 'VERIFIED' : 'LOW_SAMPLE' };
+  } else {
+    out.h2h_surface = { value: 0, source: 'sackmann', quality: 'LOW_SAMPLE' };
+  }
+
+  // 5) service_dominance — 1st won % + (aces - df) / svpt
+  const svcScore = (st) => {
+    if (!st?.first_serve_won || !st?.svpt) return null;
+    const fw = st.first_serve_won / st.svpt;
+    const ace = ((st.aces ?? 0) - (st.double_faults ?? 0)) / Math.max(st.svpt, 1);
+    return Math.min(1, Math.max(0, fw * 0.7 + (ace + 0.1) * 0.3));
+  };
+  const sc1 = svcScore(p1?.service_stats);
+  const sc2 = svcScore(p2?.service_stats);
+  if (sc1 != null && sc2 != null) {
+    out.service_dominance = { value: Math.round((sc1 - sc2) * 100) / 100, source: 'sackmann', quality: 'PARTIAL' };
+  } else {
+    out.service_dominance = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  // 6) fatigue_index — diff jours depuis dernier match
+  if (p1?.days_since_last_match != null && p2?.days_since_last_match != null) {
+    const diff = p1.days_since_last_match - p2.days_since_last_match;
+    const lag = Math.max(p1?.csv_lag_days ?? 0, p2?.csv_lag_days ?? 0);
+    out.fatigue_index = { value: Math.max(-1, Math.min(1, diff / 7)), source: 'sackmann', quality: lag > 3 ? 'PARTIAL' : 'VERIFIED' };
+  } else {
+    out.fatigue_index = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  return out;
+}
+
+function _botTennisComputeScore(variables, weights) {
+  let weightedSum = 0, totalWeight = 0;
+  const signals = [], missingVars = [];
+
+  for (const [id, w] of Object.entries(weights)) {
+    if (!w) continue;
+    const v = variables[id];
+    const val = v?.value;
+    if (val == null) { missingVars.push(id); continue; }
+    const normalized = (val + 1) / 2; // 0..1
+    weightedSum += normalized * w;
+    totalWeight += w;
+    const contribution = Math.round((normalized - 0.5) * w * 100) / 100;
+    signals.push({
+      variable: id, raw_value: val, normalized, weight: w, contribution,
+      direction: contribution > 0.001 ? 'POSITIVE' : contribution < -0.001 ? 'NEGATIVE' : 'NEUTRAL',
+      data_source: v.source ?? null, data_quality: v.quality ?? null,
+    });
+  }
+
+  const raw = totalWeight > 0 ? weightedSum / totalWeight : null;
+  // clamp [0.1, 0.9] (comme engine.tennis.js)
+  const score = raw != null ? Math.max(0.1, Math.min(0.9, Math.round(raw * 1000) / 1000)) : null;
+  signals.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+  return { score, signals, missingVars };
+}
+
+function _botTennisBettingRecs(score, oddsH2H) {
+  if (score == null || !oddsH2H) return null;
+  const p1Odds = oddsH2H.p1, p2Odds = oddsH2H.p2;
+  if (!p1Odds || !p2Odds) return null;
+
+  const implP1 = 1 / p1Odds, implP2 = 1 / p2Odds;
+  const edgeP1 = score - implP1, edgeP2 = (1 - score) - implP2;
+  const EDGE_MIN = 0.05;
+  const recs = [];
+
+  const pushRec = (side, motorProb, bestOdds) => {
+    const impliedProb = 1 / bestOdds;
+    const realEdge = motorProb - impliedProb;
+    const b = bestOdds - 1;
+    const q = 1 - motorProb;
+    const full = (b * motorProb - q) / b;
+    const kelly = Math.max(0, Math.round(full * 0.25 * 1000) / 1000);
+    recs.push({
+      type: 'MONEYLINE', label: 'Vainqueur du match', side,
+      odds_line: bestOdds, odds_decimal: bestOdds,
+      motor_prob: Math.round(motorProb * 100),
+      implied_prob: Math.round(impliedProb * 100),
+      edge: Math.round(Math.abs(realEdge) * 100),
+      kelly_stake: kelly, has_value: true,
+      is_contrarian: (side === 'HOME' && score <= 0.5) || (side === 'AWAY' && score > 0.5),
+    });
+  };
+
+  if (Math.abs(edgeP1) >= EDGE_MIN) pushRec(edgeP1 > 0 ? 'HOME' : 'AWAY', edgeP1 > 0 ? score : 1 - score, edgeP1 > 0 ? p1Odds : p2Odds);
+  if (recs.length === 0) return null;
+  recs.sort((a, b) => b.edge - a.edge);
+  return { recommendations: recs, best: recs[0] };
+}
+
+function _botTennisDataQuality(variables) {
+  const vals = Object.values(variables);
+  const defined = vals.filter(v => v?.value != null);
+  if (!defined.length) return 0;
+  const qualityScore = { VERIFIED: 1.0, PARTIAL: 0.65, LOW_SAMPLE: 0.40, MISSING: 0 };
+  const sum = defined.reduce((s, v) => s + (qualityScore[v.quality] ?? 0.5), 0);
+  return Math.round((sum / vals.length) * 100) / 100;
+}
+
+function _botTennisConfidence(score, dataQuality, missingCount) {
+  if (score == null || dataQuality < 0.30) return 'INCONCLUSIVE';
+  if (missingCount >= 3) return 'LOW';
+  const deviation = Math.abs(score - 0.5);
+  if (deviation >= 0.20 && dataQuality >= 0.70) return 'HIGH';
+  if (deviation >= 0.10 && dataQuality >= 0.50) return 'MEDIUM';
+  return 'LOW';
+}
+
+async function _runTennisBotCron(env, forceRun = false) {
+  if (!env.PAPER_TRADING) return;
+  const now     = new Date();
+  const dateStr = _botFormatDate(now);
+  console.log(`[TENNIS BOT] Cron démarré — ${now.toISOString()}, date (Paris): ${dateStr}`);
+
+  // Idempotence horaire (sauf forceRun)
+  if (!forceRun) {
+    try {
+      const lastRun = await env.PAPER_TRADING.get(TENNIS_BOT_RUN_KEY);
+      if (lastRun) {
+        const parsed = JSON.parse(lastRun);
+        if (parsed.date === dateStr && (Date.now() - (parsed.ran_at_ts ?? 0)) < 3 * 3600 * 1000) {
+          console.log('[TENNIS BOT] Déjà tourné < 3h — skip');
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+
+  const fakeOrigin = 'https://manibetpro.emmanueldelasse.workers.dev';
+  const isoDate    = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
+
+  // 1) Tournois actifs (ATP + WTA)
+  const tournUrl = new URL(`${fakeOrigin}/tennis/tournaments?date=${isoDate}&validate=1`);
+  const tournResp = await handleTennisTournaments(tournUrl, env, fakeOrigin);
+  const tournData = await tournResp.json();
+  const activeList = tournData?.tournaments ?? [];
+  if (!activeList.length) { console.log('[TENNIS BOT] Aucun tournoi actif'); return; }
+
+  const logs = [], edgesFound = [];
+
+  for (const tournament of activeList) {
+    // 2) Odds du tournoi
+    const oddsUrl = new URL(`${fakeOrigin}/tennis/odds?tournament=${encodeURIComponent(tournament.key)}`);
+    const oddsResp = await handleTennisOdds(oddsUrl, env, fakeOrigin);
+    const oddsData = await oddsResp.json();
+    if (!oddsData?.available || !oddsData.matches?.length) continue;
+
+    for (const m of oddsData.matches) {
+      const p1 = m.home_player, p2 = m.away_player;
+      if (!p1 || !p2) continue;
+
+      // 3) Stats CSV Sackmann
+      const statsUrl = new URL(`${fakeOrigin}/tennis/stats?players=${encodeURIComponent(p1)},${encodeURIComponent(p2)}&surface=${tournament.surface}&tour=${tournament.tour}`);
+      const statsResp = await handleTennisStats(statsUrl, env, fakeOrigin);
+      const statsData = await statsResp.json();
+      const csvStats  = statsData?.available ? (statsData.stats ?? {}) : {};
+
+      const p1Stats = csvStats[p1] ? { name: p1, ...csvStats[p1] } : { name: p1 };
+      const p2Stats = csvStats[p2] ? { name: p2, ...csvStats[p2] } : { name: p2 };
+
+      const phase = _tennisTournamentPhase(tournament.label);
+      const variables = _botTennisExtractVariables(p1Stats, p2Stats, tournament.surface);
+      const weights   = _botTennisWeights(phase);
+      const { score, signals, missingVars } = _botTennisComputeScore(variables, weights);
+      const bettingRecs = _botTennisBettingRecs(score, m.odds?.h2h);
+      const dataQuality = _botTennisDataQuality(variables);
+      const confidence  = _botTennisConfidence(score, dataQuality, missingVars.length);
+
+      const log = {
+        logged_at:        new Date().toISOString(),
+        match_id:         m.id,
+        p1, p2,
+        tournament:       tournament.label,
+        surface:          tournament.surface,
+        tour:             tournament.tour,
+        phase,
+        date:             dateStr,
+        motor_prob:       score != null ? Math.round(score * 100) : null,
+        score_raw:        score,
+        score_method:     'CALIBRATED',
+        confidence_level: confidence,
+        data_quality:     dataQuality,
+        missing_variables: missingVars,
+        signals,
+        variables_used:   variables,
+        odds_at_analysis: m.odds ?? null,
+        betting_recommendations: bettingRecs,
+        best_edge:        bettingRecs?.best?.edge ?? null,
+        best_side:        bettingRecs?.best?.side ?? null,
+        // Post-settle
+        result_winner:    null,
+        motor_was_right:  null,
+        prob_delta_pts:   null,
+        upset:            null,
+        clv_post_match:   null,
+        settled_at:       null,
+      };
+
+      try {
+        await env.PAPER_TRADING.put(`${TENNIS_BOT_LOG_PREFIX}${m.id}`, JSON.stringify(log),
+          { expirationTtl: 90 * 24 * 3600 });
+        logs.push(log);
+        if (log.best_edge && log.best_edge >= 5) edgesFound.push(log);
+      } catch (err) { console.warn('[TENNIS BOT] saveLog error:', err.message); }
+    }
+  }
+
+  try {
+    await env.PAPER_TRADING.put(TENNIS_BOT_RUN_KEY,
+      JSON.stringify({ date: dateStr, ran_at: new Date().toISOString(), ran_at_ts: Date.now(), matches_analyzed: logs.length }),
+      { expirationTtl: 30 * 3600 });
+  } catch (_) {}
+
+  await _tennisBotSendTelegram(env, logs, edgesFound, dateStr);
+  console.log(`[TENNIS BOT] Terminé — ${logs.length} matchs analysés, ${edgesFound.length} edges`);
+}
+
+async function _tennisBotSendTelegram(env, logs, edgesFound, dateStr) {
+  const token = env.TELEGRAM_BOT_TOKEN, chatId = env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId || !logs.length) return;
+
+  const dateFmt = `${dateStr.slice(6,8)}/${dateStr.slice(4,6)}/${dateStr.slice(0,4)}`;
+  let msg = `🎾 *Mani Bet Pro Tennis — ${dateFmt}*\n📊 ${logs.length} matchs analysés\n`;
+  if (edgesFound.length) {
+    msg += `\n🎯 *Edges ≥5% :*\n`;
+    for (const l of edgesFound.slice(0, 8)) {
+      msg += `• ${l.p2} @ ${l.p1} (${l.surface})\n  Edge ${l.best_edge}% · ${l.best_side} · Conf ${l.confidence_level}\n`;
+    }
+  } else {
+    msg += `\nAucun edge détecté.`;
+  }
+  try {
+    await fetchTimeout(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'Markdown' }),
+    }, 8000);
+  } catch (err) { console.warn('[TENNIS BOT] telegram:', err.message); }
+}
+
+// ── SETTLEMENT TENNIS (via CSV Sackmann) ──────────────────────────────────────
+async function _tennisBotSettleDate(env, dateStr, options = {}) {
+  if (!env.PAPER_TRADING) return { settled: 0, error: 'no KV' };
+  const { force = false } = options;
+
+  // Lister les logs pending pour ce dateStr
+  const list = await env.PAPER_TRADING.list({ prefix: TENNIS_BOT_LOG_PREFIX });
+  const keys = (list.keys ?? []).map(k => k.name);
+  const pending = [];
+  await Promise.all(keys.map(async key => {
+    try {
+      const raw = await env.PAPER_TRADING.get(key);
+      if (!raw) return;
+      const log = JSON.parse(raw);
+      if (log.date !== dateStr) return;
+      if (!force && log.motor_was_right !== null) return;
+      pending.push({ key, log });
+    } catch (_) {}
+  }));
+
+  if (!pending.length) return { settled: 0, date: dateStr };
+
+  // Grouper par tour pour économiser fetches CSV (1 par tour)
+  const byTour = {};
+  for (const p of pending) { (byTour[p.log.tour] ??= []).push(p); }
+
+  let settled = 0;
+  for (const [tour, items] of Object.entries(byTour)) {
+    const repoSlug = tour === 'wta' ? 'tennis_wta' : 'tennis_atp';
+    const fileSlug = tour === 'wta' ? 'wta_matches' : 'atp_matches';
+    const year     = dateStr.slice(0, 4);
+    const CSV_URL  = `https://raw.githubusercontent.com/JeffSackmann/${repoSlug}/master/${fileSlug}_${year}.csv`;
+
+    let rows = [];
+    try {
+      const r = await fetchTimeout(CSV_URL, {}, 15000);
+      if (r.ok) rows = _parseTennisCSV(await r.text());
+    } catch (_) { continue; }
+    if (!rows.length) continue;
+
+    // Filtrer matchs récents (dans les 7 derniers jours) pour limiter scan
+    const targetDate = dateStr; // YYYYMMDD
+    const recent = rows.filter(r => {
+      const td = r.tourney_date ?? '';
+      return td >= targetDate && td <= `${parseInt(targetDate) + 14}`;
+    });
+    if (!recent.length) continue;
+
+    for (const { key, log } of items) {
+      // Chercher match : p1 vs p2 (ou p2 vs p1) dans rows
+      const matched = recent.find(r =>
+        (r.winner_name === log.p1 && r.loser_name === log.p2) ||
+        (r.winner_name === log.p2 && r.loser_name === log.p1)
+      );
+      if (!matched) continue;
+
+      const winner = matched.winner_name === log.p1 ? 'HOME' : 'AWAY';
+      const motorPredictedHome = (log.motor_prob ?? 50) > 50;
+      const motorWasRight = (motorPredictedHome && winner === 'HOME') ||
+                            (!motorPredictedHome && winner === 'AWAY');
+
+      const probDelta = log.motor_prob != null
+        ? Math.round((log.motor_prob - (winner === 'HOME' ? 100 : 0)) * 10) / 10
+        : null;
+
+      const upset = log.motor_prob != null && Math.abs(log.motor_prob - 50) > 5 && !motorWasRight;
+
+      let clv = null;
+      if (log.motor_prob != null && log.odds_at_analysis?.h2h?.p1) {
+        const implied = 1 / log.odds_at_analysis.h2h.p1;
+        clv = Math.round((log.motor_prob / 100 - implied) * 10000) / 100;
+      }
+
+      log.result_winner   = winner;
+      log.motor_was_right = motorWasRight;
+      log.prob_delta_pts  = probDelta;
+      log.upset           = upset;
+      log.clv_post_match  = clv;
+      log.settled_at      = new Date().toISOString();
+
+      try {
+        await env.PAPER_TRADING.put(key, JSON.stringify(log), { expirationTtl: 90 * 24 * 3600 });
+        settled++;
+      } catch (_) {}
+    }
+  }
+
+  return { settled, date: dateStr };
+}
+
+// ── HANDLERS ROUTES TENNIS BOT ────────────────────────────────────────────────
+
+async function handleTennisBotRun(request, env, origin) {
+  if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
+  try {
+    await env.PAPER_TRADING.delete(TENNIS_BOT_RUN_KEY);
+    await _runTennisBotCron(env, true);
+    const list = await env.PAPER_TRADING.list({ prefix: TENNIS_BOT_LOG_PREFIX });
+    return jsonResponse({ success: true, note: 'Tennis Bot run terminé', logs_written: list.keys?.length ?? 0 }, 200, origin);
+  } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
+}
+
+async function handleTennisBotLogs(url, env, origin) {
+  if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
+  try {
+    const dateFilter = url.searchParams.get('date') ?? null;
+    const tourFilter = url.searchParams.get('tour') ?? null; // atp | wta
+    const list       = await env.PAPER_TRADING.list({ prefix: TENNIS_BOT_LOG_PREFIX });
+    const keys       = (list.keys ?? []).map(k => k.name);
+
+    const logs = [];
+    await Promise.all(keys.map(async key => {
+      try {
+        const raw = await env.PAPER_TRADING.get(key);
+        if (!raw) return;
+        const log = JSON.parse(raw);
+        if (dateFilter && log.date !== dateFilter) return;
+        if (tourFilter && log.tour !== tourFilter) return;
+        logs.push(log);
+      } catch (_) {}
+    }));
+
+    logs.sort((a, b) => new Date(b.logged_at) - new Date(a.logged_at));
+
+    const settled = logs.filter(l => l.motor_was_right !== null);
+    const correct = settled.filter(l => l.motor_was_right === true);
+    const hitRate = settled.length > 0 ? Math.round(correct.length / settled.length * 1000) / 10 : null;
+    const edgeLogs = logs.filter(l => l.best_edge);
+    const avgEdge = edgeLogs.length ? Math.round(edgeLogs.reduce((s, l) => s + l.best_edge, 0) / edgeLogs.length * 10) / 10 : null;
+
+    // Brier score
+    const brierValid = settled.filter(l => l.motor_prob != null);
+    let brierScore = null;
+    if (brierValid.length) {
+      const sum = brierValid.reduce((s, l) => {
+        const p = l.motor_prob / 100;
+        const actual = l.result_winner === 'HOME' ? 1 : 0;
+        return s + Math.pow(p - actual, 2);
+      }, 0);
+      brierScore = Math.round(sum / brierValid.length * 10000) / 10000;
+    }
+
+    return jsonResponse({
+      available: true, logs,
+      stats: {
+        total_analyzed: logs.length,
+        total_settled:  settled.length,
+        hit_rate:       hitRate,
+        avg_edge:       avgEdge,
+        brier_score:    brierScore,
+      },
+    }, 200, origin);
+  } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
+}
+
+async function handleTennisBotSettleLogs(request, env, origin) {
+  if (!env.PAPER_TRADING) return jsonResponse({ error: 'KV not configured' }, 500, origin);
+  try {
+    const body    = await request.json().catch(() => ({}));
+    const force   = body.force === true;
+    const dateStr = body.date ?? _botFormatDate(new Date());
+    const res     = await _tennisBotSettleDate(env, dateStr, { force });
     return jsonResponse({ success: true, force, ...res }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
