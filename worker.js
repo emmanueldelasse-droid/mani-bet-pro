@@ -5916,11 +5916,12 @@ async function handleTennisStats(url, env, origin) {
   const surface      = url.searchParams.get('surface') ?? 'Clay';
   const tourParam    = String(url.searchParams.get('tour') ?? 'atp').toLowerCase();
   const tour         = tourParam === 'wta' ? 'wta' : 'atp';
+  const bust         = url.searchParams.get('bust') === '1';
   const players      = playersParam.split(',').map(p => p.trim()).filter(Boolean);
   if (!players.length) return jsonResponse({ available: false, note: 'players parameter required' }, 400, origin);
 
   const cacheKey = `${TENNIS_CSV_KEY}_${tour}_${surface}_${[...players].sort().join('_')}`.slice(0, 512);
-  if (env.PAPER_TRADING) {
+  if (env.PAPER_TRADING && !bust) {
     try {
       const cached = await env.PAPER_TRADING.get(cacheKey);
       if (cached) {
@@ -5954,13 +5955,16 @@ async function handleTennisStats(url, env, origin) {
     const today = new Date();
     const eloTable = _computeTennisEloTable(allRows);
     const stats = {};
+    const resolvedMap = {};
     for (const pName of players) {
+      const resolved = _resolveTennisPlayerName(allRows, pName);
+      resolvedMap[pName] = resolved;
       const s = _computeTennisPlayerStats(allRows, pName, surface, today);
-      if (s && eloTable[pName]) {
-        s.elo_overall         = eloTable[pName].elo_overall;
-        s.elo_surface         = eloTable[pName].elo_surface[surface] ?? null;
-        s.elo_surface_matches = eloTable[pName].elo_surface_matches[surface] ?? 0;
-        s.elo_matches         = eloTable[pName].elo_matches;
+      if (s && resolved && eloTable[resolved]) {
+        s.elo_overall         = eloTable[resolved].elo_overall;
+        s.elo_surface         = eloTable[resolved].elo_surface[surface] ?? null;
+        s.elo_surface_matches = eloTable[resolved].elo_surface_matches[surface] ?? 0;
+        s.elo_matches         = eloTable[resolved].elo_matches;
       }
       stats[pName] = s;
     }
@@ -5969,13 +5973,20 @@ async function handleTennisStats(url, env, origin) {
       stats[players[0]].h2h = { [players[1]]: { p1_wins: h2h.p1_wins, p2_wins: h2h.p2_wins } };
       stats[players[1]].h2h = { [players[0]]: { p1_wins: h2h.p2_wins, p2_wins: h2h.p1_wins } };
     }
-    if (env.PAPER_TRADING) {
+
+    // Ne pas cacher (ou cacher court) si toutes les résolutions ont échoué.
+    // Empêche le cache 12h de masquer un fix backend ultérieur.
+    const allMissing = players.every(p => stats[p] == null);
+    const someMissing = players.some(p => stats[p] == null);
+    if (env.PAPER_TRADING && !allMissing) {
       try {
+        const ttl = someMissing ? 30 * 60 : 12 * 3600;   // 30 min si partiel, 12h sinon
         await env.PAPER_TRADING.put(cacheKey, JSON.stringify({ fetched_at: Date.now(), stats }),
-          { expirationTtl: 12 * 3600 });
+          { expirationTtl: ttl });
       } catch (err) { console.warn('Tennis CSV cache write:', err.message); }
     }
     return jsonResponse({ available: true, source: `sackmann_${tour}_csv_github`, tour, surface, players, stats,
+      resolved: resolvedMap,
       fetched_at: new Date().toISOString(), rows_analyzed: allRows.length }, 200, origin);
   } catch (err) { return jsonResponse({ available: false, note: err.message }, 200, origin); }
 }

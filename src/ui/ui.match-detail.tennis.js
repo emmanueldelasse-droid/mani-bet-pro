@@ -63,6 +63,7 @@ export async function loadAndRenderTennisDetail(container, match, storeInstance)
 
 // Fetch direct /tennis/stats — fallback quand l'orchestrator n'a pas pré-chargé.
 // Sur un deep-link vers la fiche match, on n'a pas tournée _loadAndAnalyzeTennis.
+// Si première réponse vide (cache obsolète possible), retente avec bust=1.
 async function _fetchTennisStatsForMatch(match) {
   const p1 = match?.home_team?.name;
   const p2 = match?.away_team?.name;
@@ -70,12 +71,26 @@ async function _fetchTennisStatsForMatch(match) {
   const tour    = String(match?.tour ?? 'atp').toLowerCase();
   if (!p1 || !p2) return null;
 
-  try {
-    const url = `${WORKER_URL}/tennis/stats?players=${encodeURIComponent(p1)},${encodeURIComponent(p2)}&surface=${encodeURIComponent(surface)}&tour=${tour}`;
+  const fetchOnce = async (bust = false) => {
+    const base = `${WORKER_URL}/tennis/stats?players=${encodeURIComponent(p1)},${encodeURIComponent(p2)}&surface=${encodeURIComponent(surface)}&tour=${tour}`;
+    const url  = bust ? `${base}&bust=1` : base;
     const resp = await fetch(url, { headers: { Accept: 'application/json' } });
     if (!resp.ok) return null;
     const json = await resp.json();
     if (!json?.available || !json.stats) return null;
+    const s1 = json.stats[p1], s2 = json.stats[p2];
+    const has = (s) => s && Object.keys(s).length > 1; // plus que juste {name}
+    return { json, hasAnyStats: has(s1) || has(s2) };
+  };
+
+  try {
+    let result = await fetchOnce(false);
+    if (result && !result.hasAnyStats) {
+      // Cache possiblement obsolète (écrit avant fix normalisation noms) → retente bust
+      result = await fetchOnce(true) ?? result;
+    }
+    if (!result?.json) return null;
+    const { json } = result;
     return {
       p1:                { name: p1, ...(json.stats[p1] ?? {}) },
       p2:                { name: p2, ...(json.stats[p2] ?? {}) },
@@ -83,6 +98,7 @@ async function _fetchTennisStatsForMatch(match) {
       tour,
       tournament_label:  match?.tournament ?? null,
       fetched_at:        json.fetched_at ?? null,
+      resolved:          json.resolved ?? null,
     };
   } catch (err) {
     Logger.warn('TENNIS_STATS_FETCH_FAILED', { message: err.message });
