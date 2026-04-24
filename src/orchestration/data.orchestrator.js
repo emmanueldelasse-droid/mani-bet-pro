@@ -918,8 +918,9 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
       return { matches: [], analyses: {} };
     }
 
-    const matchesMap = {};
-    const analyses   = {};
+    const matchesMap  = {};
+    const analyses    = {};
+    const tennisStats = {};
     let loaded = 0;
 
     // 2. Boucle sur chaque tournoi actif (peut etre plusieurs meme jour · ex: ATP 500 + WTA 500)
@@ -986,6 +987,18 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
           analysis.match_id   = m.id;
           analyses[m.id]      = analysis;
 
+          // Stocker stats brutes pour affichage UI fiche match tennis
+          if (csvStats[p1] || csvStats[p2]) {
+            tennisStats[m.id] = {
+              p1:                { name: p1, ...(csvStats[p1] ?? {}) },
+              p2:                { name: p2, ...(csvStats[p2] ?? {}) },
+              surface:           tournament.surface,
+              tour:              tournament.tour,
+              tournament_label:  tournament.label,
+              fetched_at:        statsData?.fetched_at ?? null,
+            };
+          }
+
         } catch (err) {
           Logger.warn('TENNIS_MATCH_ERROR', { match: `${p1} vs ${p2}`, message: err.message });
         }
@@ -993,8 +1006,8 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
       loaded++;
     }
 
-    store.set({ matches: matchesMap, analyses });
-    return { matches: Object.values(matchesMap), analyses };
+    store.set({ matches: matchesMap, analyses, tennisStats });
+    return { matches: Object.values(matchesMap), analyses, tennisStats };
 
   } catch (err) {
     Logger.error('TENNIS_ORCHESTRATOR_ERROR', { message: err.message });

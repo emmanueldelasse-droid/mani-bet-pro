@@ -34,6 +34,10 @@ import {
   renderBlocTeamDetailSkeleton,
   bindLast10Clicks           as _bindLast10Clicks,
 } from './ui.match-detail.teamdetail.js';
+import {
+  loadAndRenderTennisDetail  as _loadAndRenderTennisDetail,
+  renderBlocTennisDetailSkeleton,
+} from './ui.match-detail.tennis.js';
 
 // ── POINT D'ENTRÉE PUBLIC ─────────────────────────────────────────────────────
 
@@ -52,9 +56,13 @@ export async function render(container, storeInstance) {
   bindEvents(container, storeInstance, match, analysis);
   _loadAndRenderMultiBookOdds(container, match, analysis);
 
-  const isMLB = String(match?.sport ?? '').toUpperCase() === 'MLB';
+  const sportUpper = String(match?.sport ?? '').toUpperCase();
+  const isMLB      = sportUpper === 'MLB';
+  const isTennis   = sportUpper === 'TENNIS';
   if (isMLB) {
     _loadAndRenderMLBStats(container, match, storeInstance);
+  } else if (isTennis) {
+    _loadAndRenderTennisDetail(container, match, storeInstance);
   } else {
     _loadAndRenderTeamDetail(container, match, storeInstance);
     _loadAndRenderPlayerPropsFromBot(container, match, analysis, storeInstance);
@@ -531,8 +539,11 @@ function renderShell(match, analysis, storeInstance) {
       ${renderBlocSynthese(analysis, match)}
       ${isMLB
         ? `<div id="mlb-stats-container"><div class="bot-loading" style="padding:20px">Chargement marchés + stats MLB…</div></div>`
-        : `<div id="bloc-tous-paris">${renderBlocTousLesParis(analysis, match)}</div>
-           <div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>`}
+        : isTennis
+          ? `<div id="bloc-tous-paris">${renderBlocTousLesParis(analysis, match)}</div>
+             <div id="tennis-detail-container">${renderBlocTennisDetailSkeleton()}</div>`
+          : `<div id="bloc-tous-paris">${renderBlocTousLesParis(analysis, match)}</div>
+             <div id="team-detail-container">${renderBlocTeamDetailSkeleton()}</div>`}
       ${renderBlocFiabilite(analysis, match)}
     </div>
   `;
