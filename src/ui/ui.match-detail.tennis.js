@@ -39,12 +39,22 @@ export async function loadAndRenderTennisDetail(container, match, storeInstance)
     if (!data || (!hasP1Data && !hasP2Data)) {
       const p1n = match?.home_team?.name ?? '?';
       const p2n = match?.away_team?.name ?? '?';
+      const r = data?.resolved ?? null;
+      const diag1 = r ? (r[p1n] ? `✅ trouvé comme "${r[p1n]}"` : '❌ non trouvé dans CSV Sackmann') : '';
+      const diag2 = r ? (r[p2n] ? `✅ trouvé comme "${r[p2n]}"` : '❌ non trouvé dans CSV Sackmann') : '';
+      const diagHtml = r
+        ? `<div style="font-size:11px;color:var(--color-text);margin-top:10px;text-align:left;padding:8px 10px;background:var(--color-bg);border-radius:6px;line-height:1.6">
+             <div><strong>${_escapeHtml(p1n)}</strong> : ${diag1}</div>
+             <div><strong>${_escapeHtml(p2n)}</strong> : ${diag2}</div>
+           </div>`
+        : '';
       detailEl.innerHTML = `
-        <div class="card match-detail__bloc" style="text-align:center;padding:22px 16px">
-          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7">
+        <div class="card match-detail__bloc" style="padding:22px 16px">
+          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7;text-align:center">
             Stats indisponibles pour ${_escapeHtml(p1n)} vs ${_escapeHtml(p2n)}.
-            <br><span style="font-size:11px;color:var(--color-muted)">Source : Jeff Sackmann CSV (lag ~2-3 j). Joueurs hors classement ATP/WTA top ~300 souvent absents.</span>
+            <br><span style="font-size:11px;color:var(--color-muted)">Source : Jeff Sackmann CSV (lag ~2-3 j). Challengers / juniors absents du tour principal.</span>
           </div>
+          ${diagHtml}
         </div>`;
       return;
     }
