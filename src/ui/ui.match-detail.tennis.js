@@ -39,12 +39,22 @@ export async function loadAndRenderTennisDetail(container, match, storeInstance)
     if (!data || (!hasP1Data && !hasP2Data)) {
       const p1n = match?.home_team?.name ?? '?';
       const p2n = match?.away_team?.name ?? '?';
+      const r = data?.resolved ?? null;
+      const diag1 = r ? (r[p1n] ? `✅ trouvé comme "${r[p1n]}"` : '❌ non trouvé dans CSV Sackmann') : '';
+      const diag2 = r ? (r[p2n] ? `✅ trouvé comme "${r[p2n]}"` : '❌ non trouvé dans CSV Sackmann') : '';
+      const diagHtml = r
+        ? `<div style="font-size:11px;color:var(--color-text);margin-top:10px;text-align:left;padding:8px 10px;background:var(--color-bg);border-radius:6px;line-height:1.6">
+             <div><strong>${_escapeHtml(p1n)}</strong> : ${diag1}</div>
+             <div><strong>${_escapeHtml(p2n)}</strong> : ${diag2}</div>
+           </div>`
+        : '';
       detailEl.innerHTML = `
-        <div class="card match-detail__bloc" style="text-align:center;padding:22px 16px">
-          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7">
+        <div class="card match-detail__bloc" style="padding:22px 16px">
+          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7;text-align:center">
             Stats indisponibles pour ${_escapeHtml(p1n)} vs ${_escapeHtml(p2n)}.
-            <br><span style="font-size:11px;color:var(--color-muted)">Source : Jeff Sackmann CSV (lag ~2-3 j). Joueurs hors classement ATP/WTA top ~300 souvent absents.</span>
+            <br><span style="font-size:11px;color:var(--color-muted)">Source : Jeff Sackmann CSV (lag ~2-3 j). Challengers / juniors absents du tour principal.</span>
           </div>
+          ${diagHtml}
         </div>`;
       return;
     }
@@ -62,7 +72,7 @@ export async function loadAndRenderTennisDetail(container, match, storeInstance)
 }
 
 // Fetch direct /tennis/stats — fallback quand l'orchestrator n'a pas pré-chargé.
-// Sur un deep-link vers la fiche match, on n'a pas tournée _loadAndAnalyzeTennis.
+// Sur un deep-link vers la fiche match, on n'a pas tourné _loadAndAnalyzeTennis.
 // Si première réponse vide (cache obsolète possible), retente avec bust=1.
 async function _fetchTennisStatsForMatch(match) {
   const p1 = match?.home_team?.name;
@@ -79,15 +89,14 @@ async function _fetchTennisStatsForMatch(match) {
     const json = await resp.json();
     if (!json?.available || !json.stats) return null;
     const s1 = json.stats[p1], s2 = json.stats[p2];
-    const has = (s) => s && Object.keys(s).length > 1; // plus que juste {name}
+    const has = (s) => s && Object.keys(s).length > 1;
     return { json, hasAnyStats: has(s1) || has(s2) };
   };
 
   try {
     let result = await fetchOnce(false);
     if (result && !result.hasAnyStats) {
-      // Cache possiblement obsolète (écrit avant fix normalisation noms) → retente bust
-      result = await fetchOnce(true) ?? result;
+      result = (await fetchOnce(true)) ?? result;
     }
     if (!result?.json) return null;
     const { json } = result;
