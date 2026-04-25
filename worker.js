@@ -5928,7 +5928,8 @@ async function handleTennisStats(url, env, origin) {
         const parsed = JSON.parse(cached);
         if (Date.now() - parsed.fetched_at < 12 * 3600 * 1000) {
           return jsonResponse({ available: true, source: 'cache', tour, surface,
-            stats: parsed.stats, fetched_at: new Date(parsed.fetched_at).toISOString() }, 200, origin);
+            stats: parsed.stats, resolved: parsed.resolved ?? null,
+            fetched_at: new Date(parsed.fetched_at).toISOString() }, 200, origin);
         }
       }
     } catch (err) { console.warn('Tennis CSV cache read:', err.message); }
@@ -5956,17 +5957,63 @@ async function handleTennisStats(url, env, origin) {
     const eloTable = _computeTennisEloTable(allRows);
     const stats = {};
     const resolvedMap = {};
+    const sources = {};
+    const unresolvedPlayers = [];
     for (const pName of players) {
       const resolved = _resolveTennisPlayerName(allRows, pName);
       resolvedMap[pName] = resolved;
+      if (!resolved) { unresolvedPlayers.push(pName); continue; }
       const s = _computeTennisPlayerStats(allRows, pName, surface, today);
-      if (s && resolved && eloTable[resolved]) {
+      if (s && eloTable[resolved]) {
         s.elo_overall         = eloTable[resolved].elo_overall;
         s.elo_surface         = eloTable[resolved].elo_surface[surface] ?? null;
         s.elo_surface_matches = eloTable[resolved].elo_surface_matches[surface] ?? 0;
         s.elo_matches         = eloTable[resolved].elo_matches;
       }
       stats[pName] = s;
+      sources[pName] = 'main_tour';
+    }
+
+    // Fallback CSV qual/chall pour joueurs hors tour principal (jeunes, qualifs).
+    // Sackmann : atp_matches_qual_chall_YYYY.csv · wta_matches_qual_itf_YYYY.csv
+    if (unresolvedPlayers.length) {
+      const qualSlug = tour === 'wta' ? 'wta_matches_qual_itf' : 'atp_matches_qual_chall';
+      const QUAL_2026 = `https://raw.githubusercontent.com/JeffSackmann/${repoSlug}/master/${qualSlug}_2026.csv`;
+      const QUAL_2025 = `https://raw.githubusercontent.com/JeffSackmann/${repoSlug}/master/${qualSlug}_2025.csv`;
+      const [q2026, q2025] = await Promise.allSettled([
+        fetchTimeout(QUAL_2026, {}, 15000),
+        fetchTimeout(QUAL_2025, {}, 15000),
+      ]);
+      let qualRows = [];
+      if (q2026.status === 'fulfilled' && q2026.value.ok) qualRows = qualRows.concat(_parseTennisCSV(await q2026.value.text()));
+      if (q2025.status === 'fulfilled' && q2025.value.ok) {
+        const rows = _parseTennisCSV(await q2025.value.text()).filter(r => parseInt(r.tourney_date || '0') >= 20250601);
+        qualRows = qualRows.concat(rows);
+      }
+      if (qualRows.length) {
+        const combinedRows = allRows.concat(qualRows);
+        const eloQual = _computeTennisEloTable(combinedRows);
+        for (const pName of unresolvedPlayers) {
+          const resolved = _resolveTennisPlayerName(combinedRows, pName);
+          if (!resolved) continue;
+          resolvedMap[pName] = resolved;
+          const s = _computeTennisPlayerStats(combinedRows, pName, surface, today);
+          if (s && eloQual[resolved]) {
+            s.elo_overall         = eloQual[resolved].elo_overall;
+            s.elo_surface         = eloQual[resolved].elo_surface[surface] ?? null;
+            s.elo_surface_matches = eloQual[resolved].elo_surface_matches[surface] ?? 0;
+            s.elo_matches         = eloQual[resolved].elo_matches;
+          }
+          stats[pName] = s;
+          sources[pName] = 'qual_chall';
+        }
+        // Recalculer allRows pour h2h (inclut désormais qual/chall si fallback utilisé)
+        allRows = combinedRows;
+      }
+    }
+    // Joueurs toujours non résolus → stats null explicite
+    for (const pName of players) {
+      if (!(pName in stats)) stats[pName] = null;
     }
     if (players.length === 2 && stats[players[0]] && stats[players[1]]) {
       const h2h = _computeTennisH2H(allRows, players[0], players[1], surface);
@@ -5981,12 +6028,12 @@ async function handleTennisStats(url, env, origin) {
     if (env.PAPER_TRADING && !allMissing) {
       try {
         const ttl = someMissing ? 30 * 60 : 12 * 3600;   // 30 min si partiel, 12h sinon
-        await env.PAPER_TRADING.put(cacheKey, JSON.stringify({ fetched_at: Date.now(), stats }),
+        await env.PAPER_TRADING.put(cacheKey, JSON.stringify({ fetched_at: Date.now(), stats, resolved: resolvedMap }),
           { expirationTtl: ttl });
       } catch (err) { console.warn('Tennis CSV cache write:', err.message); }
     }
     return jsonResponse({ available: true, source: `sackmann_${tour}_csv_github`, tour, surface, players, stats,
-      resolved: resolvedMap,
+      resolved: resolvedMap, sources,
       fetched_at: new Date().toISOString(), rows_analyzed: allRows.length }, 200, origin);
   } catch (err) { return jsonResponse({ available: false, note: err.message }, 200, origin); }
 }
