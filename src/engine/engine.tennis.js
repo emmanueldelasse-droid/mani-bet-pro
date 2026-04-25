@@ -54,8 +54,14 @@ export class EngineTennis {
       this._computeScore(variables, weights, config);
 
     // ── RECOMMANDATIONS DE PARIS ──────────────────────────────────────────
+    // Injecter total_matches dans match pour le garde-fou échantillon
+    const matchWithCtx = {
+      ...match,
+      _p1_total_matches: p1Stats?.total_matches ?? null,
+      _p2_total_matches: p2Stats?.total_matches ?? null,
+    };
     const bettingRecs = this._computeBettingRecommendations(
-      score, match.odds, match, variables
+      score, match.odds, matchWithCtx, variables
     );
 
     return {
@@ -383,8 +389,20 @@ export class EngineTennis {
     const edgeP1  = pP1 - implP1;
     const edgeP2  = pP2 - implP2;
 
-    const EDGE_MIN = 0.05;  // 5% minimum
-    const recs     = [];
+    const EDGE_MIN          = 0.05;  // 5% minimum
+    const EDGE_MAX_ML       = 0.25;  // au-delà, modèle probablement faux (marché sharp en tennis)
+    const LONGSHOT_THRESHOLD = 5.0;  // cote ≥ 5.0 = outsider lourd
+    const MIN_TOTAL_MATCHES = 15;    // sous ce seuil, échantillon trop petit pour parier
+    const recs              = [];
+
+    // Garde-fou échantillon : si l'un des joueurs a < 15 matchs recensés,
+    // les stats Elo / surface / forme sont trop bruitées pour recommander.
+    const p1Matches = variables?.ranking_elo_diff?.p1_n ?? variables?.ranking_elo_diff?.p1_rank != null ? null : null;
+    // Lecture brute via match · stats injectées dans variables_used → on récupère via raw helpers
+    const totalP1   = match?._p1_total_matches ?? null;
+    const totalP2   = match?._p2_total_matches ?? null;
+    const lowSample = (totalP1 != null && totalP1 < MIN_TOTAL_MATCHES)
+                   || (totalP2 != null && totalP2 < MIN_TOTAL_MATCHES);
 
     if (Math.abs(edgeP1) >= EDGE_MIN) {
       const side = edgeP1 > 0 ? 'HOME' : 'AWAY';
@@ -392,23 +410,32 @@ export class EngineTennis {
       const bestOdds  = side === 'HOME' ? p1Odds : p2Odds;
       const impliedProb = 1 / bestOdds;
       const realEdge  = motorProb - impliedProb;
-      const kelly     = this._kelly(motorProb, bestOdds);
-      const isContrarian = (side === 'HOME' && score <= 0.5) || (side === 'AWAY' && score > 0.5);
 
-      recs.push({
-        type:         'MONEYLINE',
-        label:        'Vainqueur du match',
-        side,
-        odds_line:    bestOdds,
-        odds_decimal: bestOdds,
-        odds_source:  odds.source ?? 'The Odds API',
-        motor_prob:   Math.round(motorProb * 100),
-        implied_prob: Math.round(impliedProb * 100),
-        edge:         Math.round(Math.abs(realEdge) * 100),
-        kelly_stake:  kelly,
-        has_value:    true,
-        is_contrarian: isContrarian,
-      });
+      // Drop si edge trop grand sur moneyline · marché tennis très efficace
+      // sur outsiders : un edge > 25% sur cote ≥ 5 = quasi toujours erreur modèle.
+      const tooHighEdge   = Math.abs(realEdge) > EDGE_MAX_ML;
+      const longshotTrap  = bestOdds >= LONGSHOT_THRESHOLD && Math.abs(realEdge) > 0.15;
+      if (tooHighEdge || longshotTrap || lowSample) {
+        // skip · pas de reco · modèle insuffisamment fiable
+      } else {
+        const kelly     = this._kelly(motorProb, bestOdds);
+        const isContrarian = (side === 'HOME' && score <= 0.5) || (side === 'AWAY' && score > 0.5);
+
+        recs.push({
+          type:         'MONEYLINE',
+          label:        'Vainqueur du match',
+          side,
+          odds_line:    bestOdds,
+          odds_decimal: bestOdds,
+          odds_source:  odds.source ?? 'The Odds API',
+          motor_prob:   Math.round(motorProb * 100),
+          implied_prob: Math.round(impliedProb * 100),
+          edge:         Math.round(Math.abs(realEdge) * 100),
+          kelly_stake:  kelly,
+          has_value:    true,
+          is_contrarian: isContrarian,
+        });
+      }
     }
 
     if (recs.length === 0) return null;
