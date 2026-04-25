@@ -206,11 +206,18 @@ export class EngineTennis {
   // ── SIGNAL 4 : H2H sur même surface ──────────────────────────────────
 
   static _h2hSurface(p1, p2, surface) {
-    const h2h = p1?.h2h?.[p2?.name]?.[surface] ?? null;
+    // Worker stocke h2h[opponent_name] = { p1_wins, p2_wins } sans dim surface.
+    // On cherche l'entrée pour le nom du joueur 2 (p2.name peut être absent
+    // selon la source · fallback : prendre la première clé du h2h de p1).
+    const h2hMap = p1?.h2h ?? null;
+    const target = p2?.name && h2hMap?.[p2.name]
+      ? h2hMap[p2.name]
+      : (h2hMap ? Object.values(h2hMap)[0] : null);
 
-    if (h2h === null) {
+    if (!target) {
       return { value: null, source: 'sackmann_csv', quality: 'MISSING' };
     }
+    const h2h = target;
 
     const total = (h2h.p1_wins ?? 0) + (h2h.p2_wins ?? 0);
 

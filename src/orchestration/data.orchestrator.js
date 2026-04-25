@@ -94,6 +94,7 @@ import { Logger }           from '../utils/utils.logger.js';
 import { LoadingUI }        from '../ui/ui.loading.js';
 import { API_CONFIG }       from '../config/api.config.js';
 import {
+  SPORTS_CONFIG,
   NBA_TEAM_BY_ESPN,
   getNBAAbvFromEspn,
   getNBAEspnFromAbv,
@@ -983,7 +984,7 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
             csvStats
           );
 
-          const analysis      = EngineCore.analyze('TENNIS', engineResult, matchObj, matchObj);
+          const analysis      = _buildTennisAnalysis(engineResult, matchObj);
           analysis.match_id   = m.id;
           analyses[m.id]      = analysis;
 
@@ -1014,6 +1015,103 @@ DataOrchestrator._loadAndAnalyzeTennis = async function(date, store) {
     return { matches: [], analyses: {} };
   }
 };
+
+// Construit un objet analyse compatible UI (dashboard + fiche match) à partir
+// du résultat brut de EngineTennis. Remplace l'appel à EngineCore.compute qui
+// n'est pas branché pour le tennis (ENGINE_MAP NBA-only).
+function _buildTennisAnalysis(engineResult, matchObj) {
+  const config    = SPORTS_CONFIG.TENNIS;
+  const weights   = config.default_weights;
+  const variables = engineResult.variables_used ?? {};
+  const signals   = engineResult.signals ?? [];
+
+  const QUALITY_SCORE = {
+    VERIFIED: 1.0, PARTIAL: 0.6, ESTIMATED: 0.5,
+    LOW_SAMPLE: 0.4, MISSING: 0.0,
+  };
+  let qSum = 0, qCount = 0;
+  for (const v of config.variables) {
+    const q = variables[v.id]?.quality ?? 'MISSING';
+    qSum   += QUALITY_SCORE[q] ?? 0;
+    qCount += 1;
+  }
+  const dataQualityScore = qCount > 0 ? Math.round((qSum / qCount) * 1000) / 1000 : 0;
+
+  let usedWeight = 0, totalWeight = 0;
+  for (const [id, w] of Object.entries(weights)) {
+    totalWeight += w;
+    if (variables[id]?.value != null) usedWeight += w;
+  }
+  const weightCoverage = totalWeight > 0 ? Math.round((usedWeight / totalWeight) * 1000) / 1000 : null;
+
+  const rawScore   = engineResult.score;
+  const scoreCap   = config.score_cap ?? 0.85;
+  const cappedScore = rawScore != null
+    ? Math.max(1 - scoreCap, Math.min(scoreCap, rawScore))
+    : null;
+
+  const robustnessScore = cappedScore != null ? dataQualityScore : null;
+  let confidenceLevel;
+  if (cappedScore == null || dataQualityScore == null) {
+    confidenceLevel = 'INCONCLUSIVE';
+  } else {
+    const minScore = Math.min(robustnessScore, dataQualityScore);
+    confidenceLevel = minScore >= 0.75 ? 'HIGH' : minScore >= 0.50 ? 'MEDIUM' : 'LOW';
+  }
+
+  const best    = engineResult.betting_recommendations?.best ?? null;
+  const edge    = best?.edge ?? 0;
+  let decision;
+  if (confidenceLevel === 'INCONCLUSIVE' || !best || edge < 5) {
+    decision = 'INSUFFISANT';
+  } else if (edge >= 7 && dataQualityScore >= 0.75 && confidenceLevel === 'HIGH') {
+    decision = 'ANALYSER';
+  } else {
+    decision = 'EXPLORER';
+  }
+
+  let insuffisantReason = null;
+  if (decision === 'INSUFFISANT') {
+    if (!matchObj?.market_odds && !matchObj?.odds) insuffisantReason = 'Cotes non disponibles pour ce match';
+    else if (!best)            insuffisantReason = 'Aucune recommandation de pari détectée';
+    else if (best.edge < 5)    insuffisantReason = `Edge insuffisant (${best.edge}% < 5% minimum)`;
+    else                       insuffisantReason = 'Conditions non remplies';
+  }
+
+  return {
+    analysis_id:          (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `tennis_${matchObj.id}_${Date.now()}`,
+    sport:                'TENNIS',
+    model_version:        '0.3.0',
+    computed_at:          new Date().toISOString(),
+    nba_phase:            null,
+
+    predictive_score:     cappedScore,
+    raw_predictive_score: rawScore !== cappedScore ? rawScore : undefined,
+
+    robustness_score:     robustnessScore,
+    data_quality_score:   dataQualityScore,
+    volatility_index:     engineResult.volatility ?? null,
+
+    confidence_level:     confidenceLevel,
+    decision,
+    rejection_reason:     null,
+    insuffisant_reason:   insuffisantReason,
+
+    key_signals:          signals.filter(s => Math.abs(s.contribution ?? 0) > 0.02),
+    weak_signals:         signals.filter(s => Math.abs(s.contribution ?? 0) <= 0.02),
+
+    missing_variables:    engineResult.missing_variables ?? [],
+    missing_critical:     engineResult.missing_critical ?? [],
+
+    variables_used:       variables,
+    weight_coverage:      weightCoverage,
+    score_method:         engineResult.score_method ?? 'CALIBRATED',
+    market_divergence:    null,
+    confidence_penalty:   null,
+    betting_recommendations: engineResult.betting_recommendations ?? null,
+    no_odds_available:    !matchObj?.market_odds && !matchObj?.odds,
+  };
+}
 
 /**
  * Calcule la moyenne de points marqués sur les 5 derniers matchs.
