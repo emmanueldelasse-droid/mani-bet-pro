@@ -176,21 +176,23 @@ export const SPORTS_CONFIG = {
       { id: 'h2h_surface',          label: 'H2H même surface',            critical: false },
       { id: 'service_dominance',    label: 'Dominance au service',        critical: false },
       { id: 'physical_load_diff',   label: 'Charge physique 14j',         critical: false },
+      { id: 'market_steam_diff',    label: 'Mouvement de cote',           critical: false },
       { id: 'fatigue_index',        label: 'Indice de fatigue',           critical: false },
     ],
 
     // Poids provisoires basés sur littérature tennis betting
     // ranking_diff + pressure_dominance = prédicteurs les plus stables
-    // surface_winrate = essentiel sur terre battue
-    // Somme = 0.30+0.25+0.13+0.12+0.07+0.05+0.05+0.03 = 1.00
+    // market_steam = signal marché efficace · poids modéré (peut amplifier biais)
+    // Somme = 0.28+0.23+0.12+0.12+0.07+0.05+0.05+0.05+0.03 = 1.00
     default_weights: {
-      ranking_elo_diff:     0.30,
-      surface_winrate_diff: 0.25,
-      recent_form_ema:      0.13,
+      ranking_elo_diff:     0.28,
+      surface_winrate_diff: 0.23,
+      recent_form_ema:      0.12,
       pressure_dominance:   0.12,
       h2h_surface:          0.07,
       service_dominance:    0.05,
       physical_load_diff:   0.05,
+      market_steam_diff:    0.05,
       fatigue_index:        0.03,
     },
 

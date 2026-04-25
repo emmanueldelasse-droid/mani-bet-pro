@@ -127,6 +127,7 @@ const TENNIS_CSV_KEY      = 'tennis_csv_stats';
 const TENNIS_ODDS_KEY     = 'tennis_odds_cache';
 const TENNIS_API_BASE     = 'https://api.api-tennis.com/tennis';
 const TENNIS_API_KEYMAP   = 'tennis_api_keymap_v1';   // KV cache name → player_key
+const TENNIS_ODDS_SNAP_PREFIX = 'tennis_odds_snap_';  // KV : historique cotes par match (steam)
 
 const PAPER_BETS_INDEX_KEY = 'paper_bets_index';
 const BOT_LOG_PREFIX       = 'bot_log_';
@@ -5901,6 +5902,27 @@ async function handleTennisOdds(url, env, origin) {
         odds: bestP1 ? { h2h: { p1: bestP1, p2: bestP2 }, source: bestBook } : null,
       };
     });
+    // Augmenter chaque match avec odds_open via snapshot history (steam detection)
+    if (env.PAPER_TRADING) {
+      await Promise.all(matches.map(async m => {
+        if (!m.odds?.h2h || !m.id) return;
+        try {
+          const snapKey = `${TENNIS_ODDS_SNAP_PREFIX}${m.id}`;
+          const raw = await env.PAPER_TRADING.get(snapKey);
+          let history = raw ? JSON.parse(raw) : [];
+          if (!Array.isArray(history)) history = [];
+          // Premier snapshot >= 4h pour considérer comme "open"
+          const fourHoursAgo = Date.now() - 4 * 3600 * 1000;
+          const opener = history.find(s => s.t <= fourHoursAgo);
+          if (opener) m.odds.h2h_open = { p1: opener.p1, p2: opener.p2, t: opener.t };
+          // Append snapshot actuel · trim 24 entries
+          history.push({ t: Date.now(), p1: m.odds.h2h.p1, p2: m.odds.h2h.p2 });
+          if (history.length > 24) history = history.slice(-24);
+          await env.PAPER_TRADING.put(snapKey, JSON.stringify(history),
+            { expirationTtl: 7 * 24 * 3600 });
+        } catch (err) { console.warn('Tennis odds snap:', err.message); }
+      }));
+    }
     if (env.PAPER_TRADING) {
       try {
         await env.PAPER_TRADING.put(cacheKey, JSON.stringify({ fetched_at: Date.now(), matches }),
@@ -7886,14 +7908,14 @@ function _tennisTournamentPhase(label) {
 }
 
 // Poids par phase — plus le tier est élevé, plus Elo/surface/BP dominent (moins bruit forme)
-// 8 variables · somme = 1.00 · pressure_dominance et physical_load_diff ajoutés v6.79
+// 9 variables · somme = 1.00 · market_steam_diff ajouté v6.80
 function _botTennisWeights(phase) {
   switch (phase) {
-    case 'grand_slam':   return { ranking_elo_diff: 0.32, surface_winrate_diff: 0.25, recent_form_ema: 0.10, pressure_dominance: 0.14, h2h_surface: 0.08, service_dominance: 0.04, physical_load_diff: 0.04, fatigue_index: 0.03 };
-    case 'masters_1000': return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.25, recent_form_ema: 0.12, pressure_dominance: 0.12, h2h_surface: 0.07, service_dominance: 0.05, physical_load_diff: 0.06, fatigue_index: 0.03 };
-    case 'tour_500':     return { ranking_elo_diff: 0.27, surface_winrate_diff: 0.23, recent_form_ema: 0.15, pressure_dominance: 0.12, h2h_surface: 0.06, service_dominance: 0.07, physical_load_diff: 0.06, fatigue_index: 0.04 };
-    case 'challenger':   return { ranking_elo_diff: 0.24, surface_winrate_diff: 0.20, recent_form_ema: 0.18, pressure_dominance: 0.12, h2h_surface: 0.06, service_dominance: 0.08, physical_load_diff: 0.07, fatigue_index: 0.05 };
-    default:             return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.25, recent_form_ema: 0.13, pressure_dominance: 0.12, h2h_surface: 0.07, service_dominance: 0.05, physical_load_diff: 0.05, fatigue_index: 0.03 };
+    case 'grand_slam':   return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.23, recent_form_ema: 0.10, pressure_dominance: 0.14, h2h_surface: 0.08, service_dominance: 0.04, physical_load_diff: 0.04, market_steam_diff: 0.04, fatigue_index: 0.03 };
+    case 'masters_1000': return { ranking_elo_diff: 0.28, surface_winrate_diff: 0.23, recent_form_ema: 0.12, pressure_dominance: 0.12, h2h_surface: 0.07, service_dominance: 0.05, physical_load_diff: 0.05, market_steam_diff: 0.05, fatigue_index: 0.03 };
+    case 'tour_500':     return { ranking_elo_diff: 0.25, surface_winrate_diff: 0.22, recent_form_ema: 0.14, pressure_dominance: 0.12, h2h_surface: 0.06, service_dominance: 0.07, physical_load_diff: 0.05, market_steam_diff: 0.05, fatigue_index: 0.04 };
+    case 'challenger':   return { ranking_elo_diff: 0.22, surface_winrate_diff: 0.19, recent_form_ema: 0.17, pressure_dominance: 0.12, h2h_surface: 0.06, service_dominance: 0.08, physical_load_diff: 0.06, market_steam_diff: 0.05, fatigue_index: 0.05 };
+    default:             return { ranking_elo_diff: 0.28, surface_winrate_diff: 0.23, recent_form_ema: 0.12, pressure_dominance: 0.12, h2h_surface: 0.07, service_dominance: 0.05, physical_load_diff: 0.05, market_steam_diff: 0.05, fatigue_index: 0.03 };
   }
 }
 
@@ -7994,6 +8016,22 @@ function _botTennisExtractVariables(p1, p2, surface) {
     out.physical_load_diff = { value: Math.max(-1, Math.min(1, diff / 15)), source: 'sackmann', quality: 'VERIFIED' };
   } else {
     out.physical_load_diff = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  // 9) market_steam_diff — mouvement cote depuis ouverture (≥4h) · injecté par caller
+  // via match.odds.h2h_open. Calculé ici si disponible, sinon MISSING.
+  const odds_now = p1?._odds_now ?? null, odds_open = p1?._odds_open ?? null;
+  if (odds_now?.p1 && odds_now?.p2 && odds_open?.p1 && odds_open?.p2) {
+    const p1Drop = (odds_open.p1 - odds_now.p1) / odds_open.p1;
+    const p2Drop = (odds_open.p2 - odds_now.p2) / odds_open.p2;
+    const diff = p1Drop - p2Drop;
+    if (Math.abs(diff) < 0.03) {
+      out.market_steam_diff = { value: 0, source: 'odds_history', quality: 'VERIFIED' };
+    } else {
+      out.market_steam_diff = { value: Math.max(-1, Math.min(1, diff / 0.15)), source: 'odds_history', quality: 'VERIFIED' };
+    }
+  } else {
+    out.market_steam_diff = { value: null, source: 'odds_history', quality: 'MISSING' };
   }
 
   return out;
@@ -8143,6 +8181,10 @@ async function _runTennisBotCron(env, forceRun = false) {
 
       const p1Stats = csvStats[p1] ? { name: p1, ...csvStats[p1] } : { name: p1 };
       const p2Stats = csvStats[p2] ? { name: p2, ...csvStats[p2] } : { name: p2 };
+
+      // Injection cotes pour variable market_steam_diff
+      p1Stats._odds_now  = m.odds?.h2h ?? null;
+      p1Stats._odds_open = m.odds?.h2h_open ?? null;
 
       const phase = _tennisTournamentPhase(tournament.label);
       const variables = _botTennisExtractVariables(p1Stats, p2Stats, tournament.surface);

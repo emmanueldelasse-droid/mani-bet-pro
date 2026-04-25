@@ -87,6 +87,7 @@ export class EngineTennis {
       service_dominance:    this._serviceDominance(p1, p2),
       pressure_dominance:   this._pressureDominance(p1, p2),
       physical_load_diff:   this._physicalLoadDiff(p1, p2),
+      market_steam_diff:    this._marketSteamDiff(match),
       fatigue_index:        this._fatigueIndex(p1, p2),
     };
   }
@@ -346,6 +347,41 @@ export class EngineTennis {
       p1_matches: l1.matches,
       p2_matches: l2.matches,
       source:   'sackmann_csv',
+      quality:  'VERIFIED',
+    };
+  }
+
+  // ── SIGNAL : MARKET STEAM ────────────────────────────────────────────
+  // Mouvement de cote depuis l'ouverture (≥ 4h avant). Si la cote p1 a baissé
+  // significativement, le marché sait quelque chose → signal vers p1.
+  // Seulement actif si on a un snapshot >= 4h dans odds.h2h_open.
+
+  static _marketSteamDiff(match) {
+    const now  = match?.odds?.h2h ?? null;
+    const open = match?.odds?.h2h_open ?? null;
+    if (!now || !open) {
+      return { value: null, source: 'odds_history', quality: 'MISSING' };
+    }
+    const p1Now = now.p1, p2Now = now.p2;
+    const p1Op  = open.p1, p2Op  = open.p2;
+    if (!p1Now || !p2Now || !p1Op || !p2Op) {
+      return { value: null, source: 'odds_history', quality: 'MISSING' };
+    }
+    // Steam vers p1 : p1Now < p1Op (cote baisse) ET p2Now > p2Op (cote monte)
+    const p1Drop = (p1Op - p1Now) / p1Op;   // > 0 si baisse vers p1
+    const p2Drop = (p2Op - p2Now) / p2Op;   // > 0 si baisse vers p2
+    const diff   = p1Drop - p2Drop;          // > 0 → steam vers p1
+    // Mouvement < 3% = bruit · sinon normalisation sur ±15%
+    if (Math.abs(diff) < 0.03) {
+      return { value: 0, source: 'odds_history', quality: 'VERIFIED' };
+    }
+    const normalized = Math.max(-1, Math.min(1, diff / 0.15));
+    return {
+      value:    Math.round(normalized * 100) / 100,
+      p1_drop:  Math.round(p1Drop * 1000) / 10,  // % display
+      p2_drop:  Math.round(p2Drop * 1000) / 10,
+      hours:    open.t ? Math.round((Date.now() - open.t) / 3600000) : null,
+      source:   'odds_history',
       quality:  'VERIFIED',
     };
   }
