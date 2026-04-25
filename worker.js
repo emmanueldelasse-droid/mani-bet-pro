@@ -7961,19 +7961,33 @@ function _botTennisComputeScore(variables, weights) {
   return { score, signals, missingVars };
 }
 
-function _botTennisBettingRecs(score, oddsH2H) {
+function _botTennisBettingRecs(score, oddsH2H, ctx = {}) {
   if (score == null || !oddsH2H) return null;
   const p1Odds = oddsH2H.p1, p2Odds = oddsH2H.p2;
   if (!p1Odds || !p2Odds) return null;
 
   const implP1 = 1 / p1Odds, implP2 = 1 / p2Odds;
   const edgeP1 = score - implP1, edgeP2 = (1 - score) - implP2;
-  const EDGE_MIN = 0.05;
+  const EDGE_MIN           = 0.05;
+  const EDGE_MAX_ML        = 0.25;
+  const LONGSHOT_THRESHOLD = 5.0;
+  const MIN_TOTAL_MATCHES  = 15;
   const recs = [];
+
+  // Garde-fou échantillon : si l'un des joueurs a < 15 matchs recensés,
+  // les stats sont trop bruitées pour recommander.
+  const totalP1 = ctx?.p1_total_matches ?? null;
+  const totalP2 = ctx?.p2_total_matches ?? null;
+  const lowSample = (totalP1 != null && totalP1 < MIN_TOTAL_MATCHES)
+                 || (totalP2 != null && totalP2 < MIN_TOTAL_MATCHES);
 
   const pushRec = (side, motorProb, bestOdds) => {
     const impliedProb = 1 / bestOdds;
     const realEdge = motorProb - impliedProb;
+    // Drop si edge trop grand (modèle vs marché sharp) ou longshot suspect
+    const tooHighEdge  = Math.abs(realEdge) > EDGE_MAX_ML;
+    const longshotTrap = bestOdds >= LONGSHOT_THRESHOLD && Math.abs(realEdge) > 0.15;
+    if (tooHighEdge || longshotTrap || lowSample) return;
     const b = bestOdds - 1;
     const q = 1 - motorProb;
     const full = (b * motorProb - q) / b;
@@ -8069,7 +8083,10 @@ async function _runTennisBotCron(env, forceRun = false) {
       const variables = _botTennisExtractVariables(p1Stats, p2Stats, tournament.surface);
       const weights   = _botTennisWeights(phase);
       const { score, signals, missingVars } = _botTennisComputeScore(variables, weights);
-      const bettingRecs = _botTennisBettingRecs(score, m.odds?.h2h);
+      const bettingRecs = _botTennisBettingRecs(score, m.odds?.h2h, {
+        p1_total_matches: p1Stats?.total_matches ?? null,
+        p2_total_matches: p2Stats?.total_matches ?? null,
+      });
       const dataQuality = _botTennisDataQuality(variables);
       const confidence  = _botTennisConfidence(score, dataQuality, missingVars.length);
 
