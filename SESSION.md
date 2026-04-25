@@ -1,7 +1,7 @@
 # Mani Bet Pro
 
-## Règles update SESSION
-Début tâche → "En cours" 1/N · Fin étape → +1 · Merge → vider "En cours" + cocher TODO · User mention future → TODO + priorité.
+## Règles update
+Début → "En cours" 1/N · Fin étape → +1 · Merge → vider · User future → TODO+prio
 
 ## En cours
 néant
@@ -15,7 +15,7 @@ néant
 
 ## État
 Worker `manibetpro.emmanueldelasse.workers.dev` · Front GH Pages · KV `PAPER_TRADING` `17eb7ddc41a949dd99bd840142832cfd`
-Stack: CF Worker + KV + Tank01 + ESPN + Claude + Telegram · Sackmann CSV tennis
+Stack: CF Worker + KV + Tank01 + ESPN + Claude + Telegram · Sackmann CSV + api-tennis.com (env `TENNIS_API_KEY`)
 
 ## Routes
 - `/nba/{matches,odds,injuries,standings,results,team-detail,teams/stats,roster-injuries,ai-injuries[-batch],ai-player-props,player-points}` · debug `/nba/{roster,boxscore,schedule}-debug` · `/debug/basketusa?secret=`
@@ -41,16 +41,15 @@ Stack: CF Worker + KV + Tank01 + ESPN + Claude + Telegram · Sackmann CSV tennis
 `_mlbSeason()` dynamique · IP `X.Y` = X innings + Y outs (`parseFloat` faux) · ESPN `YYYYMMDD` aligné logs
 
 ## Pièges Tennis
-CSV Sackmann lag 2-3j · tournoi en cours absent → quality PARTIAL · settlement via CSV retro · Elo K=32 init 1500 · clé `tennis_bot_log_{matchId}` TTL 90j
+Sackmann CSV lag 2-3j · api-tennis comble 60j · fallback CSV qual_chall/qual_itf hors tour principal
+Elo K=32 init 1500 · `tennis_bot_log_{matchId}` TTL 90j · settle via CSV retro
+Garde-fous reco ML (worker.js:7964 + engine.tennis.js:365): edge>25% drop · cote≥5+edge>15% drop · total_matches<15 drop
 
 ## Pièges Timezone
 `_botFormatDate` Intl · DST auto · nightly 10-11h UTC idempotent
 
 ## Sécu
 Debug `_denyIfNoDebugAuth()` · params user regex avant KV key · innerHTML → `escapeHtml`
-
-## Bugs actifs
-néant
 
 ## Deploy
 `git push origin main` → CF auto-deploy
