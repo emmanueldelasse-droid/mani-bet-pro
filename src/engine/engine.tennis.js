@@ -85,6 +85,8 @@ export class EngineTennis {
       recent_form_ema:      this._recentFormEma(p1, p2),
       h2h_surface:          this._h2hSurface(p1, p2, surface),
       service_dominance:    this._serviceDominance(p1, p2),
+      pressure_dominance:   this._pressureDominance(p1, p2),
+      physical_load_diff:   this._physicalLoadDiff(p1, p2),
       fatigue_index:        this._fatigueIndex(p1, p2),
     };
   }
@@ -281,6 +283,71 @@ export class EngineTennis {
     const firstWonPct = stats.first_serve_won / stats.svpt;
     const aceNet      = ((stats.aces ?? 0) - (stats.double_faults ?? 0)) / Math.max(stats.svpt, 1);
     return Math.min(1, Math.max(0, firstWonPct * 0.7 + (aceNet + 0.1) * 0.3));
+  }
+
+  // ── SIGNAL : PRESSURE DOMINANCE (BREAK POINTS) ────────────────────────
+  // Combine défense BP (sauvés sur service) + attaque BP (convertis sur retour).
+  // C'est le prédicteur tennis le plus stable selon littérature betting.
+
+  static _pressureDominance(p1, p2) {
+    const b1 = p1?.break_point_stats ?? null;
+    const b2 = p2?.break_point_stats ?? null;
+    if (!b1 || !b2) {
+      return { value: null, source: 'sackmann_csv', quality: 'MISSING' };
+    }
+    const sample1 = b1.bp_sample ?? 0;
+    const sample2 = b2.bp_sample ?? 0;
+    if (sample1 < 5 || sample2 < 5) {
+      return { value: null, source: 'sackmann_csv', quality: 'LOW_SAMPLE' };
+    }
+
+    // Score = save_pct × 0.55 + convert_pct × 0.45 (défense BP légèrement plus stable)
+    const score = (s) => {
+      const sv = s?.bp_save_pct ?? 0;
+      const cv = s?.bp_convert_pct ?? 0;
+      return sv * 0.55 + cv * 0.45;
+    };
+    const s1 = score(b1);
+    const s2 = score(b2);
+    const diff = s1 - s2;  // ∈ [-1, +1]
+
+    return {
+      value:        Math.round(diff * 100) / 100,
+      p1_save_pct:  b1.bp_save_pct,
+      p1_convert_pct: b1.bp_convert_pct,
+      p2_save_pct:  b2.bp_save_pct,
+      p2_convert_pct: b2.bp_convert_pct,
+      source:       'sackmann_csv',
+      quality:      (sample1 >= 20 && sample2 >= 20) ? 'VERIFIED' : 'PARTIAL',
+    };
+  }
+
+  // ── SIGNAL : CHARGE PHYSIQUE 14 DERNIERS JOURS ─────────────────────────
+  // Pénalise un joueur sortant de plus de matchs/sets que son adversaire.
+  // Diff sets joués > 8 = charge significative.
+
+  static _physicalLoadDiff(p1, p2) {
+    const l1 = p1?.load_14d ?? null;
+    const l2 = p2?.load_14d ?? null;
+    if (!l1 || !l2) {
+      return { value: null, source: 'sackmann_csv', quality: 'MISSING' };
+    }
+    const sets1 = l1.sets_played ?? 0;
+    const sets2 = l2.sets_played ?? 0;
+    // Diff inversé : p1 a joué MOINS de sets → signal positif (frais)
+    const diff = sets2 - sets1;
+    // Normalisation : ±15 sets sur 14j = saturation
+    const normalized = Math.max(-1, Math.min(1, diff / 15));
+
+    return {
+      value:    Math.round(normalized * 100) / 100,
+      p1_sets:  sets1,
+      p2_sets:  sets2,
+      p1_matches: l1.matches,
+      p2_matches: l2.matches,
+      source:   'sackmann_csv',
+      quality:  'VERIFIED',
+    };
   }
 
   // ── SIGNAL 6 : Fatigue ───────────────────────────────────────────────

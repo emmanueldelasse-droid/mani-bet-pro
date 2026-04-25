@@ -6288,6 +6288,48 @@ function _computeTennisPlayerStats(rows, playerName, surface, today) {
     first_serve_won: svcRows.reduce((s, r) => s + (parseInt(r.w_1stWon)|| 0), 0) / svcRows.length,
   } : null;
 
+  // ── BREAK POINTS (50 derniers matchs · domine vs service stats pour outcome) ─
+  // Service : bp_saved / bp_faced sur ses jeux de service
+  // Retour  : bp_won / opponent_bp_faced sur ses jeux de retour
+  const bpSample = matches.slice(0, 50);
+  let bpFaced = 0, bpSaved = 0, oppBpFaced = 0, oppBpLost = 0;
+  for (const m of bpSample) {
+    if (m.winner_name === resolvedName) {
+      bpFaced    += parseInt(m.w_bpFaced) || 0;
+      bpSaved    += parseInt(m.w_bpSaved) || 0;
+      oppBpFaced += parseInt(m.l_bpFaced) || 0;
+      oppBpLost  += (parseInt(m.l_bpFaced) || 0) - (parseInt(m.l_bpSaved) || 0);
+    } else if (m.loser_name === resolvedName) {
+      bpFaced    += parseInt(m.l_bpFaced) || 0;
+      bpSaved    += parseInt(m.l_bpSaved) || 0;
+      oppBpFaced += parseInt(m.w_bpFaced) || 0;
+      oppBpLost  += (parseInt(m.w_bpFaced) || 0) - (parseInt(m.w_bpSaved) || 0);
+    }
+  }
+  const bpStats = (bpFaced + oppBpFaced) > 0 ? {
+    bp_save_pct:    bpFaced > 0 ? Math.round((bpSaved / bpFaced) * 1000) / 1000 : null,
+    bp_convert_pct: oppBpFaced > 0 ? Math.round((oppBpLost / oppBpFaced) * 1000) / 1000 : null,
+    bp_sample:      bpSample.length,
+  } : null;
+
+  // ── CHARGE PHYSIQUE 14 DERNIERS JOURS ────────────────────────────────────
+  // Compte sets joués · pénalise un joueur sortant de matchs longs
+  const cutoff14 = new Date(today); cutoff14.setDate(cutoff14.getDate() - 14);
+  const cutoff14Str = cutoff14.toISOString().slice(0, 10).replace(/-/g, '');
+  const recent14 = matches.filter(m => (m.tourney_date || '0') >= cutoff14Str);
+  let setsPlayed14 = 0;
+  for (const m of recent14) {
+    // score format Sackmann : "6-3 7-5" ou "6-3 6-4 7-6(3)" · 1 set par groupe
+    const score = String(m.score ?? '').trim();
+    if (!score) { setsPlayed14 += 2; continue; } // fallback : moyenne 2 sets
+    const sets = score.split(/\s+/).filter(s => /\d/.test(s)).length;
+    setsPlayed14 += Math.max(1, Math.min(5, sets));
+  }
+  const load14d = {
+    matches:     recent14.length,
+    sets_played: setsPlayed14,
+  };
+
   let daysSince = null;
   const ld = lastM.tourney_date;
   if (ld && ld.length === 8) {
@@ -6302,6 +6344,8 @@ function _computeTennisPlayerStats(rows, playerName, surface, today) {
     surface_stats: { [surface]: { win_rate: surfM.length > 0 ? surfWins / surfM.length : null, matches: surfM.length } },
     recent_form_ema:    Math.round(ema * 100) / 100,
     service_stats:      svcStats,
+    break_point_stats:  bpStats,
+    load_14d:           load14d,
     days_since_last_match: daysSince,
     csv_lag_days:       daysSince ?? 999,
     total_matches:      matches.length,
@@ -7841,14 +7885,15 @@ function _tennisTournamentPhase(label) {
   return 'regular';
 }
 
-// Poids par phase — plus le tier est élevé, plus Elo/surface dominent (moins bruit forme)
+// Poids par phase — plus le tier est élevé, plus Elo/surface/BP dominent (moins bruit forme)
+// 8 variables · somme = 1.00 · pressure_dominance et physical_load_diff ajoutés v6.79
 function _botTennisWeights(phase) {
   switch (phase) {
-    case 'grand_slam':   return { ranking_elo_diff: 0.42, surface_winrate_diff: 0.30, recent_form_ema: 0.10, h2h_surface: 0.10, service_dominance: 0.04, fatigue_index: 0.04 };
-    case 'masters_1000': return { ranking_elo_diff: 0.40, surface_winrate_diff: 0.28, recent_form_ema: 0.12, h2h_surface: 0.10, service_dominance: 0.05, fatigue_index: 0.05 };
-    case 'tour_500':     return { ranking_elo_diff: 0.35, surface_winrate_diff: 0.26, recent_form_ema: 0.16, h2h_surface: 0.08, service_dominance: 0.08, fatigue_index: 0.07 };
-    case 'challenger':   return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.24, recent_form_ema: 0.20, h2h_surface: 0.08, service_dominance: 0.08, fatigue_index: 0.10 };
-    default:             return { ranking_elo_diff: 0.35, surface_winrate_diff: 0.25, recent_form_ema: 0.18, h2h_surface: 0.10, service_dominance: 0.06, fatigue_index: 0.06 };
+    case 'grand_slam':   return { ranking_elo_diff: 0.32, surface_winrate_diff: 0.25, recent_form_ema: 0.10, pressure_dominance: 0.14, h2h_surface: 0.08, service_dominance: 0.04, physical_load_diff: 0.04, fatigue_index: 0.03 };
+    case 'masters_1000': return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.25, recent_form_ema: 0.12, pressure_dominance: 0.12, h2h_surface: 0.07, service_dominance: 0.05, physical_load_diff: 0.06, fatigue_index: 0.03 };
+    case 'tour_500':     return { ranking_elo_diff: 0.27, surface_winrate_diff: 0.23, recent_form_ema: 0.15, pressure_dominance: 0.12, h2h_surface: 0.06, service_dominance: 0.07, physical_load_diff: 0.06, fatigue_index: 0.04 };
+    case 'challenger':   return { ranking_elo_diff: 0.24, surface_winrate_diff: 0.20, recent_form_ema: 0.18, pressure_dominance: 0.12, h2h_surface: 0.06, service_dominance: 0.08, physical_load_diff: 0.07, fatigue_index: 0.05 };
+    default:             return { ranking_elo_diff: 0.30, surface_winrate_diff: 0.25, recent_form_ema: 0.13, pressure_dominance: 0.12, h2h_surface: 0.07, service_dominance: 0.05, physical_load_diff: 0.05, fatigue_index: 0.03 };
   }
 }
 
@@ -7929,6 +7974,26 @@ function _botTennisExtractVariables(p1, p2, surface) {
     out.fatigue_index = { value: Math.max(-1, Math.min(1, diff / 7)), source: 'sackmann', quality: lag > 3 ? 'PARTIAL' : 'VERIFIED' };
   } else {
     out.fatigue_index = { value: null, source: 'sackmann', quality: 'MISSING' };
+  }
+
+  // 7) pressure_dominance — break points sauvés (def) + convertis (att)
+  const b1 = p1?.break_point_stats, b2 = p2?.break_point_stats;
+  if (b1 && b2 && (b1.bp_sample ?? 0) >= 5 && (b2.bp_sample ?? 0) >= 5) {
+    const score = (s) => (s.bp_save_pct ?? 0) * 0.55 + (s.bp_convert_pct ?? 0) * 0.45;
+    const diff = score(b1) - score(b2);
+    const q = (b1.bp_sample >= 20 && b2.bp_sample >= 20) ? 'VERIFIED' : 'PARTIAL';
+    out.pressure_dominance = { value: Math.round(diff * 100) / 100, source: 'sackmann', quality: q };
+  } else {
+    out.pressure_dominance = { value: null, source: 'sackmann', quality: b1 || b2 ? 'LOW_SAMPLE' : 'MISSING' };
+  }
+
+  // 8) physical_load_diff — sets joués sur 14 derniers jours · p1 reposé = signal positif
+  const l1 = p1?.load_14d, l2 = p2?.load_14d;
+  if (l1 && l2) {
+    const diff = (l2.sets_played ?? 0) - (l1.sets_played ?? 0);
+    out.physical_load_diff = { value: Math.max(-1, Math.min(1, diff / 15)), source: 'sackmann', quality: 'VERIFIED' };
+  } else {
+    out.physical_load_diff = { value: null, source: 'sackmann', quality: 'MISSING' };
   }
 
   return out;

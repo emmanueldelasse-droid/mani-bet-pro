@@ -172,22 +172,26 @@ export const SPORTS_CONFIG = {
       { id: 'ranking_elo_diff',     label: 'Différentiel classement ATP', critical: true  },
       { id: 'surface_winrate_diff', label: 'Win rate sur la surface',     critical: true  },
       { id: 'recent_form_ema',      label: 'Forme récente (EMA 10)',      critical: false },
+      { id: 'pressure_dominance',   label: 'Dominance break points',      critical: false },
       { id: 'h2h_surface',          label: 'H2H même surface',            critical: false },
       { id: 'service_dominance',    label: 'Dominance au service',        critical: false },
+      { id: 'physical_load_diff',   label: 'Charge physique 14j',         critical: false },
       { id: 'fatigue_index',        label: 'Indice de fatigue',           critical: false },
     ],
 
     // Poids provisoires basés sur littérature tennis betting
-    // ranking_diff = prédicteur le plus stable en tennis (R²~0.35)
-    // surface_winrate = essentiel sur terre battue Monte-Carlo
-    // Somme = 0.35+0.30+0.15+0.10+0.05+0.05 = 1.00
+    // ranking_diff + pressure_dominance = prédicteurs les plus stables
+    // surface_winrate = essentiel sur terre battue
+    // Somme = 0.30+0.25+0.13+0.12+0.07+0.05+0.05+0.03 = 1.00
     default_weights: {
-      ranking_elo_diff:     0.35,
-      surface_winrate_diff: 0.30,
-      recent_form_ema:      0.15,
-      h2h_surface:          0.10,
+      ranking_elo_diff:     0.30,
+      surface_winrate_diff: 0.25,
+      recent_form_ema:      0.13,
+      pressure_dominance:   0.12,
+      h2h_surface:          0.07,
       service_dominance:    0.05,
-      fatigue_index:        0.05,
+      physical_load_diff:   0.05,
+      fatigue_index:        0.03,
     },
 
     ema_lambda:  0.3,   // EMA plus réactive que NBA (matchs moins fréquents)
