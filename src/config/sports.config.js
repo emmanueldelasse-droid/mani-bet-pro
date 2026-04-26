@@ -114,18 +114,21 @@ export const SPORTS_CONFIG = {
      * STATUT : hypothèses d'expert raisonnées — calibration après 50+ paris playoff.
      */
     playoff_weights: {
-      absences_impact:   0.30,
-      recent_form_ema:   0.24,
+      absences_impact:   0.20,
+      recent_form_ema:   0.15,
       home_away_split:   0.14,
       defensive_diff:    0.12,
-      net_rating_diff:   0.06,
+      net_rating_diff:   0.16,
       rest_days_diff:    0.06,
       efg_diff:          0.04,
       travel_load_diff:  0.02,
       win_pct_diff:      0.02,
       back_to_back:      0.00,
       b2b_cumul_diff:    0.00,
-      // Somme = 0.30+0.24+0.14+0.12+0.06+0.06+0.04+0.02+0.02+0.00+0.00 = 1.00
+      // Somme = 0.20+0.15+0.14+0.12+0.16+0.06+0.04+0.02+0.02+0.00+0.00 = 0.91
+      // Engine normalise par totalWeight → seuls les ratios comptent.
+      // v6.79: net_rating ↑ 0.06→0.16 (TODO P1) · absences ↓ 0.30→0.20 (compensation)
+      // recent_form 0.24→0.15 (sync sprint v6.78 PR #75 oublié front)
     },
 
     // EMA lambda par phase — 0.85 saison régulière, 0.92 playoffs

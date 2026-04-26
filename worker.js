@@ -410,7 +410,7 @@ export default {
         return jsonResponse({
           status:    'ok',
           worker:    'mani-bet-pro',
-          version:   '6.78.0',
+          version:   '6.79.0',
           timestamp: new Date().toISOString(),
           routes: [
             'GET /nba/matches', 'GET /nba/team/:id/stats', 'GET /nba/team/:id/recent',
@@ -4434,8 +4434,8 @@ function _botGetWeights() {
   const phase      = _botGetNBAPhase();
   const isPlayoff  = phase === 'playin' || phase === 'playoff';
   const weights    = isPlayoff ? {
-    absences_impact: 0.30, recent_form_ema: 0.15, home_away_split: 0.14,
-    defensive_diff: 0.12, net_rating_diff: 0.06, rest_days_diff: 0.06,
+    absences_impact: 0.20, recent_form_ema: 0.15, home_away_split: 0.14,
+    defensive_diff: 0.12, net_rating_diff: 0.16, rest_days_diff: 0.06,
     efg_diff: 0.04, travel_load_diff: 0.02, win_pct_diff: 0.02,
     back_to_back: 0.00, b2b_cumul_diff: 0.00,
   } : {

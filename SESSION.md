@@ -7,8 +7,8 @@ Début → "En cours" 1/N · Fin étape → +1 · Merge → vider · User future
 néant
 
 ## TODO
-- [x] P1 `recent_form_ema` 0.24→0.15 playin/playoff (PR #75)
-- [ ] P1 bump `net_rating_diff` 0.06→0.16 (worker.js:4419)
+- [x] P1 `recent_form_ema` 0.24→0.15 playin/playoff (PR #75 + sync front v6.79)
+- [x] P1 bump `net_rating_diff` 0.06→0.16 (v6.79)
 - [ ] P2 gate `confidence=INCONCLUSIVE` si `data_quality<0.55` (worker.js:5185)
 - [ ] P2 `/bot/calibration/analyze?sport=tennis` après 30+ logs settlés
 - [ ] P3 relancer Alon après 50+ logs post-v6.78
