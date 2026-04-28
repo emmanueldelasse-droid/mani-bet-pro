@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>MBP — Générer icônes iPhone</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #0a0a0f; color: #fff;
+         padding: 40px; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p  { color: #aaa; line-height: 1.5; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-top: 30px; }
+  .item { background: #1a1a24; padding: 16px; border-radius: 10px; text-align: center; }
+  .item img { display: block; margin: 0 auto 12px; border-radius: 22%; }
+  .item button { background: #22c55e; color: #fff; border: 0; padding: 8px 14px;
+                 border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; }
+  .item button:hover { filter: brightness(1.1); }
+  .label { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <h1>Logo iPhone — Mani Bet Pro</h1>
+  <p>
+    Clique sur <b>Télécharger</b> sous chaque icône pour l'enregistrer.
+    Pour utiliser sur iPhone : ouvre l'app dans Safari → bouton Partager →
+    "Sur l'écran d'accueil" → l'icône s'affiche automatiquement.
+  </p>
+
+  <div class="grid" id="grid"></div>
+
+  <script>
+    const sizes = [
+      { px: 180, label: 'iPhone (apple-touch-icon)' },
+      { px: 167, label: 'iPad Pro' },
+      { px: 152, label: 'iPad' },
+      { px: 120, label: 'iPhone @2x' },
+      { px: 1024, label: 'Source 1024 (App Store)' },
+    ];
+
+    const grid = document.getElementById('grid');
+
+    async function loadSvg() {
+      const r = await fetch('icon.svg');
+      return await r.text();
+    }
+
+    function renderToCanvas(svgText, size) {
+      return new Promise((resolve) => {
+        const blob = new Blob([svgText], { type: 'image/svg+xml' });
+        const url  = URL.createObjectURL(blob);
+        const img  = new Image();
+        img.onload = () => {
+          const c = document.createElement('canvas');
+          c.width = size; c.height = size;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, size, size);
+          URL.revokeObjectURL(url);
+          resolve(c);
+        };
+        img.src = url;
+      });
+    }
+
+    function download(canvas, name) {
+      canvas.toBlob((blob) => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      }, 'image/png');
+    }
+
+    (async () => {
+      const svgText = await loadSvg();
+      for (const s of sizes) {
+        const canvas = await renderToCanvas(svgText, s.px);
+        const item = document.createElement('div');
+        item.className = 'item';
+        const previewSize = Math.min(s.px, 180);
+        const previewCanvas = await renderToCanvas(svgText, previewSize);
+        previewCanvas.style.width  = previewSize + 'px';
+        previewCanvas.style.height = previewSize + 'px';
+        const label = document.createElement('div');
+        label.className   = 'label';
+        label.textContent = `${s.px}×${s.px} — ${s.label}`;
+        const btn = document.createElement('button');
+        btn.textContent = 'Télécharger';
+        btn.onclick = () => download(canvas, `icon-${s.px}.png`);
+        item.append(previewCanvas, label, btn);
+        grid.appendChild(item);
+      }
+    })();
+  </script>
+</body>
+</html>
