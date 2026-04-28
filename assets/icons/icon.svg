@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Logo Mani Bet Pro · 1024x1024 (recommandé Apple)
+    Fond gradient sombre · ligne de croissance verte · monogramme MBP
+  -->
+
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#1a1a24"/>
+      <stop offset="100%" stop-color="#0a0a0f"/>
+    </linearGradient>
+
+    <linearGradient id="accent" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#16a34a"/>
+      <stop offset="60%"  stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#86efac"/>
+    </linearGradient>
+
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Fond plein (Apple ajoute lui-même les coins arrondis) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Bordure subtile -->
+  <rect x="6" y="6" width="1012" height="1012" rx="0" fill="none"
+        stroke="#22c55e" stroke-opacity="0.08" stroke-width="2"/>
+
+  <!-- Courbe de croissance (référence trading) -->
+  <g filter="url(#glow)" stroke="url(#accent)" stroke-width="22"
+     stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 140 720 L 340 540 L 500 620 L 700 380 L 880 280"/>
+  </g>
+
+  <!-- Points sur la courbe -->
+  <g fill="#22c55e">
+    <circle cx="140" cy="720" r="14"/>
+    <circle cx="340" cy="540" r="14"/>
+    <circle cx="500" cy="620" r="14"/>
+    <circle cx="700" cy="380" r="14"/>
+    <circle cx="880" cy="280" r="20" fill="#86efac"/>
+  </g>
+
+  <!-- Monogramme MBP -->
+  <g font-family="'Bebas Neue', 'Helvetica Neue', Impact, sans-serif"
+     font-weight="700" fill="#ffffff" text-anchor="middle">
+    <text x="512" y="900" font-size="220" letter-spacing="14">MBP</text>
+  </g>
+</svg>
