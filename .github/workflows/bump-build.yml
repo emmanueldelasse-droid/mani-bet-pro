@@ -1,0 +1,55 @@
+name: Bump build version
+
+# À chaque push sur main, on remplace <meta name="build" content="..."> dans
+# index.html par un identifiant unique (timestamp + sha court). Ça change le
+# hash SHA-256 d'index.html, donc utils.update-checker.js détecte la nouvelle
+# version et affiche le toast "Recharger" aux utilisateurs déjà connectés.
+#
+# `paths-ignore: index.html` empêche la boucle infinie : le push du bot ne
+# touche QUE index.html → ne re-déclenche pas ce workflow.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'index.html'
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Compute build id
+        id: buildid
+        run: |
+          ts=$(date -u +%Y%m%d-%H%M%S)
+          sha=$(git rev-parse --short HEAD)
+          echo "value=${ts}-${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Update build meta in index.html
+        run: |
+          sed -i -E 's|<meta name="build" content="[^"]*" ?/>|<meta name="build" content="${{ steps.buildid.outputs.value }}" />|' index.html
+          if ! grep -q 'name="build"' index.html; then
+            echo "::error::meta name=\"build\" introuvable dans index.html"
+            exit 1
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git diff --quiet index.html; then
+            echo "Pas de changement (build id identique)"
+            exit 0
+          fi
+          git add index.html
+          git commit -m "chore: bump build ${{ steps.buildid.outputs.value }}"
+          git push

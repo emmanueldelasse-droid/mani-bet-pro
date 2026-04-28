@@ -33,6 +33,7 @@ import { PaperEngine }   from './paper/paper.engine.js';
 import { Logger }        from './utils/utils.logger.js';
 import { APP_CONFIG }    from './config/sports.config.js';
 import { initThemeToggle } from './ui/ui.theme-toggle.js';
+import { startUpdateChecker } from './utils/utils.update-checker.js';
 
 // ── SETTLER POLLING ───────────────────────────────────────────────────────
 
@@ -147,6 +148,38 @@ export function showToast(message, type = 'info', duration = 3500) {
   }, duration);
 }
 
+// Toast persistant "Nouvelle version dispo" avec bouton Recharger.
+// Pas de duration → reste tant que l'user n'a pas cliqué/fermé.
+function _showUpdateToast() {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  if (container.querySelector('.toast--update')) return; // déjà affiché
+
+  const toast = document.createElement('div');
+  toast.className = 'toast toast--update';
+  toast.setAttribute('role', 'status');
+
+  const msg = document.createElement('span');
+  msg.className   = 'toast__msg';
+  msg.textContent = 'Nouvelle version disponible';
+
+  const reload = document.createElement('button');
+  reload.className   = 'toast__btn';
+  reload.type        = 'button';
+  reload.textContent = 'Recharger';
+  reload.addEventListener('click', () => { window.location.reload(); });
+
+  const close = document.createElement('button');
+  close.className   = 'toast__close';
+  close.type        = 'button';
+  close.setAttribute('aria-label', 'Fermer');
+  close.textContent = '×';
+  close.addEventListener('click', () => { toast.remove(); });
+
+  toast.append(msg, reload, close);
+  container.appendChild(toast);
+}
+
 // ── LOADER GLOBAL ─────────────────────────────────────────────────────────
 
 export function setGlobalLoader(visible, text = '') {
@@ -239,6 +272,9 @@ async function init() {
 
   // 9. Redémarrer le polling si de nouveaux paris sont placés après arrêt
   store.subscribe('paperTradingVersion', () => _startSettlerPolling(store));
+
+  // 10. Détection nouvelle version (hash index.html, check toutes les 5 min)
+  startUpdateChecker(_showUpdateToast);
 
   Logger.info('APP_INIT_DONE', { version: APP_CONFIG.VERSION });
 }
