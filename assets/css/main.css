@@ -515,6 +515,35 @@ body.theme-light .sport-tag--nba,
 .toast--error   { border-left: 3px solid var(--color-danger); }
 .toast--info    { border-left: 3px solid var(--color-info); }
 
+.toast--update {
+  border-left: 3px solid var(--color-info);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.toast--update .toast__msg { flex: 1; }
+.toast--update .toast__btn {
+  background: var(--color-info);
+  color: #fff;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toast--update .toast__btn:hover { filter: brightness(1.1); }
+.toast--update .toast__close {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.toast--update .toast__close:hover { color: var(--color-text-primary); }
+
 body.theme-light .toast,
 [data-theme="light"] .toast {
   background: #ffffff;
