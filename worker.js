@@ -5003,18 +5003,37 @@ function _botPredictNBATotal(matchData) {
   const hOppg = hs.oppg != null ? parseFloat(hs.oppg) : null;
   const aPpg  = as.ppg  != null ? parseFloat(as.ppg)  : (as.avg_pts ?? null);
   const aOppg = as.oppg != null ? parseFloat(as.oppg) : null;
+  const hPace = hs.pace != null ? parseFloat(hs.pace) : null;
+  const aPace = as.pace != null ? parseFloat(as.pace) : null;
+  const hDrtg = hs.defensive_rating != null ? parseFloat(hs.defensive_rating) : null;
+  const aDrtg = as.defensive_rating != null ? parseFloat(as.defensive_rating) : null;
 
   if (hPpg == null || hOppg == null || aPpg == null || aOppg == null) {
     return { est_total: null, line: null, recommendation: null, adjustments: [], missing: 'ppg/oppg' };
   }
 
-  // Modèle de matchup offensif/défensif :
-  // Pts attendus domicile = moy. offensive dom. vs défensive visiteur
-  // Pts attendus visiteur = moy. offensive vis. vs défensive domicile
-  const homeExpected = (hPpg + aOppg) / 2;
-  const awayExpected = (aPpg + hOppg) / 2;
-  let estTotal = homeExpected + awayExpected;
   const adjustments = [];
+
+  // Modèle de base — préférer "possessions × efficiency" si DRTG+pace dispos.
+  // Sinon fallback (ppg + oppg) / 2 (modèle naïf historique).
+  const useAdvanced = hDrtg != null && aDrtg != null && hPace != null && aPace != null;
+  let estTotal;
+  let expectedPace = null;
+  if (useAdvanced) {
+    // Points/100 possessions × pace effectif du match.
+    const homeOff100 = (hPpg / hPace) * 100;
+    const awayOff100 = (aPpg / aPace) * 100;
+    expectedPace = (hPace + aPace) / 2;
+    const homeExp = ((homeOff100 + aDrtg) / 2) * (expectedPace / 100);
+    const awayExp = ((awayOff100 + hDrtg) / 2) * (expectedPace / 100);
+    estTotal = homeExp + awayExp;
+    adjustments.push({ name: 'model', value: 'pace_efficiency', expected_pace: Math.round(expectedPace * 10) / 10 });
+  } else {
+    const homeExp = (hPpg + aOppg) / 2;
+    const awayExp = (aPpg + hOppg) / 2;
+    estTotal = homeExp + awayExp;
+    adjustments.push({ name: 'model', value: 'naive_ppg_oppg' });
+  }
 
   // Playoffs / play-in : défense +, rythme -, arbitrage différent → -4.5 pts
   const phase = _botGetNBAPhase();
@@ -5053,6 +5072,20 @@ function _botPredictNBATotal(matchData) {
   const aLost = absImpact(matchData?.away_injuries);
   if (hLost > 0) { estTotal -= hLost; adjustments.push({ name: 'home_absences', delta: -Math.round(hLost * 10) / 10 }); }
   if (aLost > 0) { estTotal -= aLost; adjustments.push({ name: 'away_absences', delta: -Math.round(aLost * 10) / 10 }); }
+
+  // Back-to-back · jambes plus lourdes, défense moins agressive, total plus bas
+  // 1 équipe en B2B → -3 pts · 2 équipes en B2B → -5 pts
+  const hRest = matchData?.home_rest_days;
+  const aRest = matchData?.away_rest_days;
+  const isB2BHome = hRest != null && hRest <= 1;
+  const isB2BAway = aRest != null && aRest <= 1;
+  if (isB2BHome && isB2BAway) {
+    estTotal -= 5;
+    adjustments.push({ name: 'both_back_to_back', delta: -5 });
+  } else if (isB2BHome || isB2BAway) {
+    estTotal -= 3;
+    adjustments.push({ name: 'one_back_to_back', delta: -3, side: isB2BHome ? 'home' : 'away' });
+  }
 
   estTotal = Math.round(estTotal * 10) / 10;
 
