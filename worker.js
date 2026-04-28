@@ -3561,6 +3561,31 @@ async function _botSendTelegram(env, logs, edgesFound, dateStr) {
     msg += `\n✅ Aucun edge significatif ce soir\n`;
   }
 
+  // Top recos player_points (edge ≥ 7%) — extraites de toutes les recos individuelles
+  const PP_THRESHOLD = 7;
+  const ppRecs = [];
+  for (const log of logs) {
+    const recs = log.betting_recommendations?.recommendations ?? [];
+    for (const r of recs) {
+      if (r.type !== 'PLAYER_POINTS') continue;
+      if ((r.edge ?? 0) < PP_THRESHOLD) continue;
+      ppRecs.push({ ...r, away: log.away, home: log.home });
+    }
+  }
+  ppRecs.sort((a, b) => b.edge - a.edge);
+  const ppTop = ppRecs.slice(0, 5);
+
+  if (ppTop.length > 0) {
+    msg += `\n🎯 *Top opportunités joueurs (≥${PP_THRESHOLD}%) :*\n`;
+    for (const r of ppTop) {
+      const arrow = r.side === 'OVER' ? '⬆️' : '⬇️';
+      const stake = r.kelly_stake != null ? ` · mise ${(r.kelly_stake * 100).toFixed(1)}%` : '';
+      const src   = r.odds_source ? ` _(${r.odds_source})_` : '';
+      msg += `• ${arrow} *${r.player}* ${r.side} ${r.line} pts @ ${r.odds_decimal}${src}\n`;
+      msg += `  Edge *${r.edge}%* · proj ${r.projected_pts}pts · ${r.away}@${r.home}${stake}\n`;
+    }
+  }
+
   msg += `\n_Logs disponibles dans l'onglet Bot de l'app_`;
 
   try {
