@@ -5157,6 +5157,8 @@ function _computePlayerProjectionConfidence(p, absentCount, model) {
 
 function _botPredictPlayerPoints(matchData) {
   const LEAGUE_AVG_OPPG = 113;
+  const LEAGUE_AVG_PACE = 99.5;  // possessions/match NBA
+  const LEAGUE_AVG_DRTG = 110;   // points encaissés / 100 possessions
   const MIN_PPG         = 8;
   const MAX_SCORERS     = 5;
   const MATCHUP_MIN     = 0.90;
@@ -5165,11 +5167,35 @@ function _botPredictPlayerPoints(matchData) {
   const PPM_MAX         = 1.50;
   const MINS_CAP        = 40;
   const MINS_BOOST_COEF = 0.18;  // part mpg d'un coéq absent redistribuée sur top scorers
+  const PACE_MIN        = 0.95;
+  const PACE_MAX        = 1.06;
 
   const hOppg = matchData?.home_season_stats?.oppg != null ? parseFloat(matchData.home_season_stats.oppg) : null;
   const aOppg = matchData?.away_season_stats?.oppg != null ? parseFloat(matchData.away_season_stats.oppg) : null;
+  const hDrtg = matchData?.home_season_stats?.defensive_rating != null ? parseFloat(matchData.home_season_stats.defensive_rating) : null;
+  const aDrtg = matchData?.away_season_stats?.defensive_rating != null ? parseFloat(matchData.away_season_stats.defensive_rating) : null;
+  const hPace = matchData?.home_season_stats?.pace != null ? parseFloat(matchData.home_season_stats.pace) : null;
+  const aPace = matchData?.away_season_stats?.pace != null ? parseFloat(matchData.away_season_stats.pace) : null;
 
-  const buildSide = (scorers, opposingOppg, ownInjuries) => {
+  // Pace effectif du match (moyenne des 2 équipes) · facteur appliqué aux 2 côtés.
+  // Match rapide (Lakers vs Pacers ~104) → +4-5% points pour tout le monde.
+  const expectedPace = (hPace != null && aPace != null) ? (hPace + aPace) / 2 : null;
+  const paceFactor   = expectedPace != null
+    ? Math.max(PACE_MIN, Math.min(PACE_MAX, expectedPace / LEAGUE_AVG_PACE))
+    : 1.0;
+
+  // Back-to-back / repos · les joueurs B2B marquent en moyenne 3% de moins.
+  // Repos 3+ jours → léger bonus +1.5% (corps frais, plus de minutes).
+  const restFactor = (rest) => {
+    if (rest == null) return 1.0;
+    if (rest <= 1)    return 0.97;   // back-to-back
+    if (rest >= 3)    return 1.015;  // bien reposé
+    return 1.0;
+  };
+  const hRestFactor = restFactor(matchData?.home_rest_days);
+  const aRestFactor = restFactor(matchData?.away_rest_days);
+
+  const buildSide = (scorers, opposingOppg, opposingDrtg, ownRestFactor, ownInjuries) => {
     if (!Array.isArray(scorers) || scorers.length === 0) return [];
 
     // Coéquipiers absents notables (ppg≥14 Out/Doubtful)
@@ -5181,9 +5207,13 @@ function _botPredictPlayerPoints(matchData) {
     const lostPpg  = absentTeammates.reduce((s, p) => s + (parseFloat(p.ppg) || 0) * (p.status === 'Out' ? 1.0 : 0.5), 0);
     const lostMpg  = absentTeammates.reduce((s, p) => s + (parseFloat(p.mpg ?? p.mins) || 28) * (p.status === 'Out' ? 1.0 : 0.5), 0);
 
-    const matchupFactor = opposingOppg != null
-      ? Math.max(MATCHUP_MIN, Math.min(MATCHUP_MAX, 1 + (opposingOppg - LEAGUE_AVG_OPPG) / (LEAGUE_AVG_OPPG * 2)))
-      : 1.0;
+    // Matchup factor : préférer DRTG (normalisé par possession) sur OPPG (corrélé pace).
+    // DRTG 105 = excellente défense → -2.3%, DRTG 115 = mauvaise → +2.3%.
+    const matchupFactor = opposingDrtg != null
+      ? Math.max(MATCHUP_MIN, Math.min(MATCHUP_MAX, 1 + (opposingDrtg - LEAGUE_AVG_DRTG) / (LEAGUE_AVG_DRTG * 2)))
+      : opposingOppg != null
+        ? Math.max(MATCHUP_MIN, Math.min(MATCHUP_MAX, 1 + (opposingOppg - LEAGUE_AVG_OPPG) / (LEAGUE_AVG_OPPG * 2)))
+        : 1.0;
 
     const topN = scorers.slice(0, MAX_SCORERS).filter(p => (p.ppg ?? 0) >= MIN_PPG);
     if (topN.length === 0) return [];
@@ -5204,12 +5234,16 @@ function _botPredictPlayerPoints(matchData) {
         const modelName  = phase === 2 ? 'pts_per_min' : 'ppg_only';
         const confidence = _computePlayerProjectionConfidence(p, absentTeammates.length, modelName);
 
+        // Écart-type estimé (variance individuelle) : règle empirique NBA ~22% de ppg,
+        // capped 4-8 pts. Top scorers (ex: Doncic 30 ppg → ~7) plus volatils que rotateurs.
+        const ptsStdev = Math.max(4, Math.min(8, Math.round((p.ppg ?? 15) * 0.22 * 10) / 10));
+
         if (phase === 2) {
           // Modèle pts/min
-          const ppm         = Math.max(PPM_MIN, Math.min(PPM_MAX, basePts / baseMins));
-          const minsBoost   = lostMpg > 0 ? weight * lostMpg * MINS_BOOST_COEF : 0;
-          const projMins    = Math.min(MINS_CAP, baseMins + minsBoost);
-          const projected   = ppm * projMins * matchupFactor;
+          const ppm       = Math.max(PPM_MIN, Math.min(PPM_MAX, basePts / baseMins));
+          const minsBoost = lostMpg > 0 ? weight * lostMpg * MINS_BOOST_COEF : 0;
+          const projMins  = Math.min(MINS_CAP, baseMins + minsBoost);
+          const projected = ppm * projMins * matchupFactor * paceFactor * ownRestFactor;
 
           return {
             name:             p.name,
@@ -5226,8 +5260,12 @@ function _botPredictPlayerPoints(matchData) {
             mins_boost:       Math.round(minsBoost * 10) / 10,
             projected_mins:   Math.round(projMins * 10) / 10,
             matchup_factor:   Math.round(matchupFactor * 1000) / 1000,
+            pace_factor:      Math.round(paceFactor * 1000) / 1000,
+            rest_factor:      Math.round(ownRestFactor * 1000) / 1000,
             projected_pts:    Math.round(projected * 10) / 10,
+            pts_stdev:        ptsStdev,
             opposing_oppg:    opposingOppg,
+            opposing_drtg:    opposingDrtg,
             absent_teammates: absentTeammates.map(t => ({ name: t.name, status: t.status, ppg: t.ppg })),
             confidence,
           };
@@ -5235,7 +5273,7 @@ function _botPredictPlayerPoints(matchData) {
 
         // Fallback Phase 1 si mpg manquant
         const shareBonus = lostPpg > 0 ? weight * lostPpg * 0.55 : 0;
-        const projected  = basePts * matchupFactor + shareBonus;
+        const projected  = (basePts * matchupFactor + shareBonus) * paceFactor * ownRestFactor;
 
         return {
           name:             p.name,
@@ -5248,9 +5286,13 @@ function _botPredictPlayerPoints(matchData) {
           last5_mpg:        p.last5_mpg ?? null,
           base_pts:         basePts,
           matchup_factor:   Math.round(matchupFactor * 1000) / 1000,
+          pace_factor:      Math.round(paceFactor * 1000) / 1000,
+          rest_factor:      Math.round(ownRestFactor * 1000) / 1000,
           absence_bonus:    Math.round(shareBonus * 10) / 10,
           projected_pts:    Math.round(projected * 10) / 10,
+          pts_stdev:        ptsStdev,
           opposing_oppg:    opposingOppg,
+          opposing_drtg:    opposingDrtg,
           absent_teammates: absentTeammates.map(t => ({ name: t.name, status: t.status, ppg: t.ppg })),
           confidence,
         };
@@ -5259,8 +5301,8 @@ function _botPredictPlayerPoints(matchData) {
       .sort((a, b) => b.projected_pts - a.projected_pts);
   };
 
-  const homePlayers = buildSide(matchData?.home_top10scorers, aOppg, matchData?.home_injuries);
-  const awayPlayers = buildSide(matchData?.away_top10scorers, hOppg, matchData?.away_injuries);
+  const homePlayers = buildSide(matchData?.home_top10scorers, aOppg, aDrtg, hRestFactor, matchData?.home_injuries);
+  const awayPlayers = buildSide(matchData?.away_top10scorers, hOppg, hDrtg, aRestFactor, matchData?.away_injuries);
 
   if (homePlayers.length === 0 && awayPlayers.length === 0) {
     return { available: false, phase: 2, missing: 'top10scorers_or_ppg' };
@@ -5272,6 +5314,8 @@ function _botPredictPlayerPoints(matchData) {
     home_players:    homePlayers,
     away_players:    awayPlayers,
     league_avg_oppg: LEAGUE_AVG_OPPG,
+    league_avg_pace: LEAGUE_AVG_PACE,
+    expected_pace:   expectedPace != null ? Math.round(expectedPace * 10) / 10 : null,
   };
 }
 
@@ -5293,8 +5337,10 @@ function _botMatchPlayerPropsToLines(propsPrediction, linesMap, homeTeam, awayTe
       if (!line || !Number.isFinite(line.line)) return p;
 
       const diff    = p.projected_pts - line.line;
-      // stdev joueur ~ 5 pts · tanh(diff/5) * 0.20 → cap ±20% swing
-      const overProb  = Math.min(0.85, Math.max(0.15, 0.50 + Math.tanh(diff / 5) * 0.20));
+      // Stdev variable selon le joueur (cf. _botPredictPlayerPoints : 0.22*ppg, 4-8).
+      // tanh(diff/stdev) * 0.20 → cap ±20% swing autour de 50%.
+      const stdev   = p.pts_stdev ?? 5;
+      const overProb  = Math.min(0.85, Math.max(0.15, 0.50 + Math.tanh(diff / stdev) * 0.20));
       const underProb = 1 - overProb;
 
       const overImplied  = line.over?.decimal  ? 1 / line.over.decimal  : null;
