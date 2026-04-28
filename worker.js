@@ -242,6 +242,7 @@ export default {
     ctx.waitUntil(_runNightlySettle(env));
     ctx.waitUntil(_runOddsSnapshot(env));
     ctx.waitUntil(_runAIPlayerPropsCron(env));
+    ctx.waitUntil(_runCalibrationCron(env));
   },
 
   async fetch(request, env) {
@@ -4318,6 +4319,105 @@ async function _runAIPlayerPropsCron(env) {
     console.log(`[AI-PROPS CRON] ${result.available ? 'OK' : 'FAIL'} — ${games.length} matchs envoyés, ${Object.keys(result.by_game ?? {}).length} retournés`);
   } catch (err) {
     console.error('[AI-PROPS CRON] error:', err.message);
+  }
+}
+
+// ── CALIBRATION HEBDOMADAIRE (cron lundi 7h UTC) ──────────────────────────────
+// Appelle handleBotCalibration pour les 3 sports, synthétise verdict variables
+// fortes/bruit + hit rate par bucket edge, envoie résumé Telegram.
+// Idempotent via clé KV calibration_run_{YYYY-Www} TTL 8j.
+
+async function _runCalibrationCron(env) {
+  if (!env?.PAPER_TRADING || !env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  const now = new Date();
+  if (now.getUTCDay() !== 1 || now.getUTCHours() !== 7) return; // Lundi 7h UTC
+
+  // Clé semaine ISO approximée : YYYY-Www où w = num semaine
+  const isoY = now.getUTCFullYear();
+  // Numéro semaine ISO simplifié : (jour de l'année / 7) + 1
+  const start = Date.UTC(isoY, 0, 1);
+  const dayOfYear = Math.floor((now.getTime() - start) / (24 * 3600 * 1000));
+  const weekNum = Math.floor(dayOfYear / 7) + 1;
+  const cacheKey = `calibration_run_${isoY}-W${String(weekNum).padStart(2, '0')}`;
+
+  try {
+    const ran = await env.PAPER_TRADING.get(cacheKey);
+    if (ran) { console.log('[CAL CRON] déjà tourné cette semaine'); return; }
+  } catch (_) {}
+
+  const sports  = ['nba', 'mlb', 'tennis'];
+  const reports = [];
+  const fakeOrigin = 'https://manibetpro.emmanueldelasse.workers.dev';
+  for (const sport of sports) {
+    try {
+      const fakeUrl = new URL(`${fakeOrigin}/bot/calibration/analyze?sport=${sport}`);
+      const resp = await handleBotCalibration(fakeUrl, env, fakeOrigin);
+      const data = await resp.json();
+      reports.push({ sport, data });
+    } catch (err) {
+      console.warn('[CAL CRON]', sport, err.message);
+      reports.push({ sport, data: { error: err.message } });
+    }
+  }
+
+  // Construire message Telegram synthétique
+  let msg = '📊 *Calibration hebdomadaire — Mani Bet Pro*\n\n';
+  for (const r of reports) {
+    const label = r.sport === 'nba' ? '🏀 NBA' : r.sport === 'mlb' ? '⚾ MLB' : '🎾 Tennis';
+    msg += `*${label}*\n`;
+    if (r.data?.error) {
+      msg += `  ⚠️ Erreur: ${r.data.error}\n\n`;
+      continue;
+    }
+    const n = r.data?.logs_analyzed ?? 0;
+    if (n === 0) {
+      msg += `  Aucun match settlé encore.\n\n`;
+      continue;
+    }
+    const hr = r.data?.global?.hit_rate ?? null;
+    msg += `  Échantillon: ${n} matchs settlés\n`;
+    msg += `  Hit rate global: ${hr != null ? hr + '%' : '—'}\n`;
+
+    // Buckets edge : afficher hit rate par tranche
+    const buckets = r.data?.edge_buckets ?? {};
+    const e10  = buckets.edge_10_plus;
+    const e7   = buckets.edge_7_10;
+    if (e10?.n > 0) msg += `  Edge ≥10%: ${e10.pct}% (${e10.correct}/${e10.n})\n`;
+    if (e7?.n  > 0) msg += `  Edge 7-10%: ${e7.pct}% (${e7.correct}/${e7.n})\n`;
+
+    // Variables "fort" et "bruit" (top 3 chaque)
+    const va = r.data?.variable_analysis ?? {};
+    const strong = [], noise = [];
+    for (const [name, info] of Object.entries(va)) {
+      if (info?.verdict === 'fort')  strong.push({ name, eff: info.effect_size });
+      if (info?.verdict === 'bruit') noise.push({ name, eff: info.effect_size });
+    }
+    strong.sort((a, b) => b.eff - a.eff);
+    noise.sort((a, b) => a.eff - b.eff);
+    if (strong.length) {
+      msg += `  💪 Variables fortes: ${strong.slice(0, 3).map(s => s.name).join(', ')}\n`;
+    }
+    if (noise.length) {
+      msg += `  💤 À réduire: ${noise.slice(0, 3).map(s => s.name).join(', ')}\n`;
+    }
+    if (r.data?.small_sample) {
+      msg += `  ⚠️ Échantillon faible (<20) — résultats indicatifs\n`;
+    }
+    msg += '\n';
+  }
+
+  msg += `_Pour ajustements détaillés des poids, lance l'agent_ \`alon\``;
+
+  try {
+    await fetchTimeout(`${TELEGRAM_API}/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: msg, parse_mode: 'Markdown' }),
+    }, 10000);
+    await env.PAPER_TRADING.put(cacheKey, '1', { expirationTtl: 8 * 24 * 3600 });
+    console.log('[CAL CRON] Rapport hebdomadaire envoyé');
+  } catch (err) {
+    console.warn('[CAL CRON] telegram:', err.message);
   }
 }
 
