@@ -7579,7 +7579,7 @@ async function _runMLBBotCron(env, forceRun = false) {
     try {
       // Fetch météo pour ce venue (cache KV 1h · skip indoor)
       const weather = await _fetchWeatherForVenue(match.venue, env);
-      const log = _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData, bullpenData, weather);
+      const log = await _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData, bullpenData, weather, env);
       if (!log) continue;
       if (env.PAPER_TRADING) {
         await env.PAPER_TRADING.put(
@@ -7610,7 +7610,7 @@ async function _runMLBBotCron(env, forceRun = false) {
 }
 
 // ── ANALYSER UN MATCH MLB ─────────────────────────────────────────────────────
-function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData, bullpenData, weather) {
+async function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData, teamStatsData, bullpenData, weather, env = null) {
   const homeName = match.home_team?.name;
   const awayName = match.away_team?.name;
   if (!homeName || !awayName) return null;
@@ -7681,6 +7681,30 @@ function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standingsData,
   // Appeler le moteur inline (version simplifiée portée dans le worker)
   const analysis = _mlbEngineCompute(matchData);
   if (!analysis) return null;
+
+  // Matching projection K starter ↔ Pinnacle MLB lines · génère reco PITCHER_STRIKEOUTS
+  if (env && analysis.pitcher_strikeouts_prediction?.available) {
+    try {
+      const lines = await _fetchPlayerStrikeoutsPinnacle(homeName, awayName, dateStr, env);
+      if (lines?.available) {
+        const matched = _botMatchMLBStrikeoutsToLines(analysis.pitcher_strikeouts_prediction, lines.lines);
+        if (matched.recommendations.length > 0) {
+          analysis.recommendations = analysis.recommendations ?? [];
+          analysis.recommendations.push(...matched.recommendations);
+          analysis.recommendations.sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+          // Mettre à jour best si edge supérieur
+          const newBest = analysis.recommendations[0];
+          if (newBest && (!analysis.best || newBest.edge > (analysis.best.edge ?? 0))) {
+            analysis.best = newBest;
+          }
+          analysis.pitcher_strikeouts_prediction.market_source     = lines.source;
+          analysis.pitcher_strikeouts_prediction.market_fetched_at = lines.fetched_at;
+        }
+      }
+    } catch (err) {
+      console.warn(`[MLB BOT] strikeouts fetch error for ${match.id}:`, err.message);
+    }
+  }
 
   return {
     logged_at:       new Date().toISOString(),
@@ -7958,6 +7982,190 @@ function _mlbEngineCompute(matchData) {
   };
 }
 
+// ── PINNACLE MLB PITCHER STRIKEOUTS (source #1, gratuit) ──────────────────────
+// Même schéma que NBA player_points : league 246 (MLB), units 'Strikeouts'.
+// Cache global du jour 4h (matchs MLB se règlent vite, refresh plus fréquent).
+
+const PINNACLE_MLB_LEAGUE_ID = 246;
+
+async function _fetchAndParsePinnacleMLBStrikeouts() {
+  const headers = {
+    'X-API-Key': PINNACLE_PUBLIC_KEY,
+    'Accept':    'application/json',
+    'Referer':   'https://www.pinnacle.com/',
+    'User-Agent':'Mozilla/5.0 (compatible; ManiBetPro/1.0)',
+  };
+  const base = `https://guest.api.arcadia.pinnacle.com/0.1/leagues/${PINNACLE_MLB_LEAGUE_ID}`;
+
+  let matchups = null, markets = null;
+  try {
+    const [r1, r2] = await Promise.all([
+      fetchTimeout(`${base}/matchups`, { headers }, 10000),
+      fetchTimeout(`${base}/markets/straight?primaryOnly=false`, { headers }, 10000),
+    ]);
+    if (!r1.ok) { console.warn('[PINNACLE MLB] matchups status', r1.status); return null; }
+    if (!r2.ok) { console.warn('[PINNACLE MLB] markets status', r2.status); return null; }
+    matchups = await r1.json();
+    markets  = await r2.json();
+  } catch (err) {
+    console.warn('[PINNACLE MLB] fetch error:', err.message);
+    return null;
+  }
+
+  if (!Array.isArray(matchups) || !Array.isArray(markets)) return null;
+
+  const marketsByMatchupId = {};
+  for (const m of markets) {
+    if (m.type !== 'total' || m.period !== 0) continue;
+    marketsByMatchupId[m.matchupId] = m;
+  }
+
+  const games    = [];
+  const gameById = {};
+  for (const mu of matchups) {
+    if (mu.parent?.id) continue;
+    if (mu.special)   continue;
+    if (!Array.isArray(mu.participants) || mu.participants.length < 2) continue;
+    const home = mu.participants.find(p => p.alignment === 'home')?.name;
+    const away = mu.participants.find(p => p.alignment === 'away')?.name;
+    if (!home || !away) continue;
+    const game = { id: mu.id, home, away, lines: {} };
+    games.push(game);
+    gameById[mu.id] = game;
+  }
+
+  // Format prop : "Pitcher Name (TEAM) Strikeouts"
+  const PROP_RE = /^(.+?)\s+\(([A-Z]{2,4})\)\s+Strikeouts$/i;
+  for (const mu of matchups) {
+    if (!mu.parent?.id) continue;
+    if (mu.units !== 'Strikeouts') continue;
+    const desc = mu.special?.description;
+    if (!desc) continue;
+    const match = desc.match(PROP_RE);
+    if (!match) continue;
+
+    const game = gameById[mu.parent.id];
+    if (!game) continue;
+    const market = marketsByMatchupId[mu.id];
+    if (!market?.prices) continue;
+    const overP  = market.prices.find(p => p.designation === 'over');
+    const underP = market.prices.find(p => p.designation === 'under');
+    if (!overP || !underP || overP.points == null) continue;
+    const overDec  = _amToDecimal(overP.price);
+    const underDec = _amToDecimal(underP.price);
+    if (!overDec || !underDec) continue;
+
+    const playerName = match[1].trim();
+    const norm       = _normalizeName(playerName);
+    if (!norm) continue;
+
+    game.lines[norm] = {
+      player_name: playerName,
+      line:        overP.points,
+      over:        { decimal: overDec,  book: 'pinnacle' },
+      under:       { decimal: underDec, book: 'pinnacle' },
+      confidence:  'VERIFIED',
+    };
+  }
+
+  return { fetched_at: Date.now(), games };
+}
+
+async function _fetchPlayerStrikeoutsPinnacle(homeName, awayName, dateStr, env) {
+  if (!env?.PAPER_TRADING) return null;
+  if (env.PINNACLE_DISABLED === 'true' || env.PINNACLE_DISABLED === '1') return null;
+
+  const CACHE_KEY = `pinnacle_mlb_so_${dateStr}`;
+  const CACHE_TTL = 4 * 3600; // 4h (matchs MLB joués dans la journée)
+
+  let cache = null;
+  try { cache = await env.PAPER_TRADING.get(CACHE_KEY, { type: 'json' }); } catch (_) {}
+  const stale = !cache?.fetched_at || (Date.now() - cache.fetched_at) > CACHE_TTL * 1000;
+  if (stale) {
+    cache = await _fetchAndParsePinnacleMLBStrikeouts();
+    if (!cache) return null;
+    try {
+      await env.PAPER_TRADING.put(CACHE_KEY, JSON.stringify(cache), { expirationTtl: CACHE_TTL });
+    } catch (_) {}
+  }
+
+  const nh = _normalizeName(homeName);
+  const na = _normalizeName(awayName);
+  const game = (cache.games ?? []).find(g => {
+    const ph = _normalizeName(g.home);
+    const pa = _normalizeName(g.away);
+    return (ph === nh && pa === na) || (ph === na && pa === nh);
+  });
+  if (!game?.lines || Object.keys(game.lines).length === 0) return null;
+
+  return {
+    available:     true,
+    source:        'pinnacle',
+    fetched_at:    new Date(cache.fetched_at).toISOString(),
+    players_count: Object.keys(game.lines).length,
+    lines:         game.lines,
+  };
+}
+
+// Match projection K starter ↔ ligne marché · génère reco PITCHER_STRIKEOUTS
+function _botMatchMLBStrikeoutsToLines(prediction, linesMap) {
+  if (!prediction?.available || !linesMap || Object.keys(linesMap).length === 0) {
+    return { recommendations: [] };
+  }
+  const STDEV_KS = 1.7;  // écart-type typique K starter NBA-équivalent
+  const EDGE_MIN = 5;
+
+  const recommendations = [];
+
+  const checkPitcher = (pit) => {
+    if (!pit?.name || pit.projected_ks == null) return;
+    const norm = _normalizeName(pit.name);
+    const line = linesMap[norm];
+    if (!line || !Number.isFinite(line.line)) return;
+
+    const diff      = pit.projected_ks - line.line;
+    const overProb  = Math.min(0.85, Math.max(0.15, 0.5 + Math.tanh(diff / STDEV_KS) * 0.20));
+    const underProb = 1 - overProb;
+
+    const overImplied  = line.over?.decimal  > 1 ? 1 / line.over.decimal  : null;
+    const underImplied = line.under?.decimal > 1 ? 1 / line.under.decimal : null;
+    if (!overImplied || !underImplied) return;
+
+    const overEdge  = Math.round((overProb  - overImplied)  * 100);
+    const underEdge = Math.round((underProb - underImplied) * 100);
+    const best = overEdge >= underEdge
+      ? { side: 'OVER',  edge: overEdge,  prob: overProb,  decimal: line.over.decimal  }
+      : { side: 'UNDER', edge: underEdge, prob: underProb, decimal: line.under.decimal };
+    if (best.edge < EDGE_MIN) return;
+
+    // Quarter Kelly capped 5%
+    const b = best.decimal - 1;
+    const fk = (b * best.prob - (1 - best.prob)) / b;
+    const kelly = fk <= 0 ? 0 : Math.min(Math.round(fk * 0.25 * 1000) / 1000, 0.05);
+
+    recommendations.push({
+      type:           'PITCHER_STRIKEOUTS',
+      player:         pit.name,
+      side:           best.side,
+      line:           line.line,
+      projected_ks:   pit.projected_ks,
+      motor_prob:     Math.round(best.prob * 100),
+      implied_prob:   Math.round((1 / best.decimal) * 100),
+      odds_decimal:   best.decimal,
+      odds_source:    'pinnacle',
+      edge:           best.edge,
+      kelly_stake:    kelly,
+      has_value:      true,
+    });
+  };
+
+  checkPitcher(prediction.home_pitcher);
+  checkPitcher(prediction.away_pitcher);
+
+  recommendations.sort((a, b) => b.edge - a.edge);
+  return { recommendations };
+}
+
 // ── MOTEUR PROPS MLB — Strikeouts starting pitcher ────────────────────────────
 // Projection : (K/9 × IP_attendu / 9) × ajustement équipe adverse
 // Retourne { available, phase: 1, home_pitcher: {...}, away_pitcher: {...} }
@@ -8174,6 +8382,23 @@ async function _mlbBotSettleDate(env, dateStr, options = {}) {
             };
             log.pitcher_strikeouts_prediction.home_pitcher = enrichPitcher(log.pitcher_strikeouts_prediction.home_pitcher, 'home');
             log.pitcher_strikeouts_prediction.away_pitcher = enrichPitcher(log.pitcher_strikeouts_prediction.away_pitcher, 'away');
+
+            // Enrichir les recos PITCHER_STRIKEOUTS avec was_right
+            const allPitchers = [
+              log.pitcher_strikeouts_prediction.home_pitcher,
+              log.pitcher_strikeouts_prediction.away_pitcher,
+            ].filter(Boolean);
+            const allRecs = log.betting_recommendations?.recommendations
+                         ?? log.betting_recommendations?.all ?? [];
+            for (const rec of allRecs) {
+              if (rec.type !== 'PITCHER_STRIKEOUTS') continue;
+              const pit = allPitchers.find(p => p.name === rec.player);
+              if (!pit || pit.actual_ks == null || rec.line == null) continue;
+              const went_over = pit.actual_ks > rec.line;
+              rec.actual_ks  = pit.actual_ks;
+              rec.actual_ip  = pit.actual_ip;
+              rec.was_right  = rec.side === 'OVER' ? went_over : !went_over;
+            }
           }
         } catch (err) { console.warn(`[MLB] pitcher Ks settle ${result.id}:`, err.message); }
       }
