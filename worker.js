@@ -3375,14 +3375,17 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
   if (!analysis) return null;
 
   // Phase 3 : matching projections joueurs ↔ lignes marché
-  // Chaîne de fetch : TheOddsAPI d'abord (si PLAYER_PROPS_ENABLED), AI cache en fallback
+  // Chaîne de fetch : Pinnacle (gratuit, vraies cotes) → TheOddsAPI → AI cache fallback
   if (env && analysis.player_props_prediction?.available) {
     try {
       let ppResult = null;
 
-      // Source 1 : TheOddsAPI (requires PLAYER_PROPS_ENABLED + player_points subscription)
+      // Source 1 : Pinnacle (gratuit, plus précis du marché, cache 6h)
+      ppResult = await _fetchPlayerPointsPinnacle(homeName, awayName, dateStr, env);
+
+      // Source 2 : TheOddsAPI (requires PLAYER_PROPS_ENABLED + player_points subscription)
       // Contexte passé pour gate temporel (H-4 à H-0) et filtre ppg star
-      if (marketOdds?.odds_api_id) {
+      if (!ppResult?.available && marketOdds?.odds_api_id) {
         const topPpg = Math.max(
           ...(analysis.player_props_prediction.home_players ?? []).map(p => p.ppg ?? 0),
           ...(analysis.player_props_prediction.away_players ?? []).map(p => p.ppg ?? 0),
@@ -3394,7 +3397,7 @@ async function _botAnalyzeMatch(match, dateStr, injuryData, oddsData, advancedDa
         });
       }
 
-      // Source 2 (fallback) : cache AI peuplé par _runAIPlayerPropsCron à 22h UTC
+      // Source 3 (fallback) : cache AI peuplé par _runAIPlayerPropsCron à 22h UTC
       if (!ppResult?.available) {
         const aiLines = await _getAIPlayerPropsLines(dateStr, gameKey, env);
         if (aiLines?.available) ppResult = aiLines;
@@ -4192,6 +4195,149 @@ async function _runAIPlayerPropsCron(env) {
   } catch (err) {
     console.error('[AI-PROPS CRON] error:', err.message);
   }
+}
+
+// ── PINNACLE PLAYER POINTS (source #1, gratuit) ──────────────────────────────
+// API "guest" Pinnacle utilisée par leur frontend public. Pas d'auth user.
+// Header X-API-Key = clé publique connue. Cache global du jour 6h pour éviter
+// de spammer (1 fetch matchups + 1 fetch markets pour TOUS les matchs NBA).
+//
+// Conversion American odds → decimal (Pinnacle renvoie en American).
+function _amToDecimal(am) {
+  if (am == null || !Number.isFinite(am)) return null;
+  if (am > 0) return Math.round((am / 100 + 1) * 1000) / 1000;
+  if (am < 0) return Math.round((100 / Math.abs(am) + 1) * 1000) / 1000;
+  return null;
+}
+
+const PINNACLE_NBA_LEAGUE_ID = 487;
+const PINNACLE_PUBLIC_KEY    = 'CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R'; // clé invitée frontend
+
+async function _fetchAndParsePinnacleNBA() {
+  const headers = {
+    'X-API-Key': PINNACLE_PUBLIC_KEY,
+    'Accept':    'application/json',
+    'Referer':   'https://www.pinnacle.com/',
+    'User-Agent':'Mozilla/5.0 (compatible; ManiBetPro/1.0)',
+  };
+  const base = `https://guest.api.arcadia.pinnacle.com/0.1/leagues/${PINNACLE_NBA_LEAGUE_ID}`;
+
+  let matchups = null, markets = null;
+  try {
+    const [r1, r2] = await Promise.all([
+      fetchTimeout(`${base}/matchups`, { headers }, 10000),
+      fetchTimeout(`${base}/markets/straight?primaryOnly=false`, { headers }, 10000),
+    ]);
+    if (!r1.ok) { console.warn('[PINNACLE] matchups status', r1.status); return null; }
+    if (!r2.ok) { console.warn('[PINNACLE] markets status', r2.status); return null; }
+    matchups = await r1.json();
+    markets  = await r2.json();
+  } catch (err) {
+    console.warn('[PINNACLE] fetch error:', err.message);
+    return null;
+  }
+
+  if (!Array.isArray(matchups) || !Array.isArray(markets)) return null;
+
+  // Index markets par matchupId · type=total · period=0 (full game)
+  const marketsByMatchupId = {};
+  for (const m of markets) {
+    if (m.type !== 'total' || m.period !== 0) continue;
+    marketsByMatchupId[m.matchupId] = m;
+  }
+
+  // Identifier games (matchups parents : pas de parent.id, pas de special, 2 participants équipe)
+  const games    = [];
+  const gameById = {};
+  for (const mu of matchups) {
+    if (mu.parent?.id) continue;
+    if (mu.special)   continue;
+    if (!Array.isArray(mu.participants) || mu.participants.length < 2) continue;
+    const home = mu.participants.find(p => p.alignment === 'home')?.name;
+    const away = mu.participants.find(p => p.alignment === 'away')?.name;
+    if (!home || !away) continue;
+    const game = { id: mu.id, home, away, lines: {} };
+    games.push(game);
+    gameById[mu.id] = game;
+  }
+
+  // Regex player prop : "Nikola Jokic (DEN) Total Points"
+  // Le code équipe entre parenthèses (2-4 majuscules) distingue d'un team total.
+  const PLAYER_PROP_RE = /^(.+?)\s+\(([A-Z]{2,4})\)\s+Total Points$/i;
+
+  for (const mu of matchups) {
+    if (!mu.parent?.id) continue;
+    if (mu.units !== 'Points') continue;
+    const desc = mu.special?.description;
+    if (!desc) continue;
+    const match = desc.match(PLAYER_PROP_RE);
+    if (!match) continue; // skip team totals et formats non-reconnus
+
+    const game = gameById[mu.parent.id];
+    if (!game) continue;
+
+    const market = marketsByMatchupId[mu.id];
+    if (!market?.prices) continue;
+    const overP  = market.prices.find(p => p.designation === 'over');
+    const underP = market.prices.find(p => p.designation === 'under');
+    if (!overP || !underP || overP.points == null) continue;
+
+    const overDec  = _amToDecimal(overP.price);
+    const underDec = _amToDecimal(underP.price);
+    if (!overDec || !underDec) continue;
+
+    const playerName = match[1].trim();
+    const norm       = _normalizeName(playerName);
+    if (!norm) continue;
+
+    game.lines[norm] = {
+      player_name: playerName,
+      line:        overP.points,
+      over:        { decimal: overDec,  book: 'pinnacle' },
+      under:       { decimal: underDec, book: 'pinnacle' },
+      confidence:  'VERIFIED',
+    };
+  }
+
+  return { fetched_at: Date.now(), games };
+}
+
+async function _fetchPlayerPointsPinnacle(homeName, awayName, dateStr, env) {
+  if (!env?.PAPER_TRADING) return null;
+  if (env.PINNACLE_DISABLED === 'true' || env.PINNACLE_DISABLED === '1') return null;
+
+  const CACHE_KEY = `pinnacle_pp_${dateStr}`;
+  const CACHE_TTL = 6 * 3600; // 6h
+
+  let cache = null;
+  try { cache = await env.PAPER_TRADING.get(CACHE_KEY, { type: 'json' }); } catch (_) {}
+
+  const stale = !cache?.fetched_at || (Date.now() - cache.fetched_at) > CACHE_TTL * 1000;
+  if (stale) {
+    cache = await _fetchAndParsePinnacleNBA();
+    if (!cache) return null;
+    try {
+      await env.PAPER_TRADING.put(CACHE_KEY, JSON.stringify(cache), { expirationTtl: CACHE_TTL });
+    } catch (_) {}
+  }
+
+  // Fuzzy match home/away (Pinnacle utilise nom long ex "Denver Nuggets")
+  const nh = _normalizeName(homeName);
+  const na = _normalizeName(awayName);
+  const game = (cache.games ?? []).find(g => {
+    const ph = _normalizeName(g.home);
+    const pa = _normalizeName(g.away);
+    return (ph === nh && pa === na) || (ph === na && pa === nh);
+  });
+  if (!game?.lines || Object.keys(game.lines).length === 0) return null;
+
+  return {
+    available:     true,
+    source:        'pinnacle',
+    fetched_at:    new Date(cache.fetched_at).toISOString(),
+    players_count: Object.keys(game.lines).length,
+    lines:         game.lines,
+  };
 }
 
 // Lit le cache AI player props et convertit au format attendu par _botMatchPlayerPropsToLines
