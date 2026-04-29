@@ -903,8 +903,10 @@ function _renderTennisSettleDiag(container, data) {
   const dates = data.by_date ?? [];
   const totalPending = dates.reduce((s, d) => s + (d.pending ?? 0), 0);
   const totalEspn    = dates.reduce((s, d) => s + (d.espn_count ?? 0), 0);
+  const totalApi     = dates.reduce((s, d) => s + (d.api_tennis_count ?? 0), 0);
   const totalSack    = dates.reduce((s, d) => s + (d.sackmann_count ?? 0), 0);
   const viaEspn      = dates.reduce((s, d) => s + (d.matched_via_espn ?? 0), 0);
+  const viaApi       = dates.reduce((s, d) => s + (d.matched_via_api_tennis ?? 0), 0);
   const viaSack      = dates.reduce((s, d) => s + (d.matched_via_sackmann ?? 0), 0);
 
   const samples = [];
@@ -924,8 +926,11 @@ function _renderTennisSettleDiag(container, data) {
       <div><span style="color:var(--color-text-secondary)">Total settled :</span> <strong>${total}</strong></div>
       <div><span style="color:var(--color-text-secondary)">Pending trouvés :</span> <strong>${totalPending}</strong></div>
       <div><span style="color:var(--color-text-secondary)">Résultats ESPN :</span> <strong>${totalEspn}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Résultats api-tennis :</span> <strong>${totalApi}</strong></div>
       <div><span style="color:var(--color-text-secondary)">Résultats Sackmann :</span> <strong>${totalSack}</strong></div>
+      <div></div>
       <div><span style="color:var(--color-text-secondary)">Matchés via ESPN :</span> <strong>${viaEspn}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Matchés via api-tennis :</span> <strong>${viaApi}</strong></div>
       <div><span style="color:var(--color-text-secondary)">Matchés via Sackmann :</span> <strong>${viaSack}</strong></div>
     </div>
     ${samples.length ? `

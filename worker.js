@@ -9085,6 +9085,46 @@ async function _tennisBotSendTelegram(env, logs, edgesFound, dateStr) {
 // ESPN scoreboard tennis : gratuit · résultats dispos le soir-même.
 // Sackmann CSV : référence pro · lag 2-7j · backstop fiable pour les matchs
 // qu'ESPN ne couvre pas (challengers obscurs, qualifs).
+// Source #2 (FALLBACK) : api-tennis.com — gratuit avec clé TENNIS_API_KEY déjà
+// configurée. Couvre les Masters 1000, WTA 1000 et tournois en cours qu'ESPN
+// n'expose pas toujours dans son scoreboard tennis/atp ou tennis/wta.
+async function _fetchTennisResultsApiTennis(dateStr, env) {
+  if (!env?.TENNIS_API_KEY) return null;
+  // Format YYYYMMDD → YYYY-MM-DD attendu par api-tennis
+  const iso = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
+  const url = `${TENNIS_API_BASE}/?method=get_fixtures&date_start=${iso}&date_stop=${iso}&APIkey=${env.TENNIS_API_KEY}`;
+  try {
+    const resp = await fetchTimeout(url, {}, 10000);
+    if (!resp.ok) {
+      console.warn(`[API-TENNIS] ${dateStr} HTTP ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    const fixtures = Array.isArray(data?.result) ? data.result : [];
+    const results = [];
+    for (const fx of fixtures) {
+      const finished = fx.event_status === 'Finished' || (fx.event_winner && fx.event_winner !== '');
+      if (!finished) continue;
+      const winnerSide = fx.event_winner === 'First Player' ? 'first'
+                       : fx.event_winner === 'Second Player' ? 'second' : null;
+      if (!winnerSide) continue;
+      const wName = winnerSide === 'first' ? fx.event_first_player : fx.event_second_player;
+      const lName = winnerSide === 'first' ? fx.event_second_player : fx.event_first_player;
+      if (!wName || !lName) continue;
+      results.push({
+        winner_name:  wName,
+        loser_name:   lName,
+        tourney_date: dateStr,
+        source:       'api_tennis',
+      });
+    }
+    return results;
+  } catch (err) {
+    console.warn(`[API-TENNIS] ${dateStr}:`, err.message);
+    return null;
+  }
+}
+
 async function _fetchTennisResultsESPN(dateStr, tour) {
   const sport = tour === 'wta' ? 'wta' : 'atp';
   const url = `https://site.api.espn.com/apis/site/v2/sports/tennis/${sport}/scoreboard?dates=${dateStr}`;
@@ -9144,20 +9184,30 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
 
   let settled = 0;
   let espn_count = 0;
+  let api_tennis_count = 0;
   let sackmann_count = 0;
   let matched_via_espn = 0;
+  let matched_via_api_tennis = 0;
   let matched_via_sackmann = 0;
   const unmatched_samples = [];
 
+  // Source 2 partagée par les tours (api-tennis renvoie ATP+WTA en 1 fetch)
+  let apiTennisResults = null;
+  const ensureApiTennis = async () => {
+    if (apiTennisResults !== null) return apiTennisResults;
+    apiTennisResults = (await _fetchTennisResultsApiTennis(dateStr, env)) ?? [];
+    api_tennis_count = apiTennisResults.length;
+    return apiTennisResults;
+  };
+
   for (const [tour, items] of Object.entries(byTour)) {
-    // Source 1 (PRIORITAIRE) : ESPN Tennis · gratuit, temps réel.
+    // Source 1 (PRIORITAIRE) : ESPN Tennis · gratuit, temps réel · couvre Grand Slams.
     const espnResults = await _fetchTennisResultsESPN(dateStr, tour);
     espn_count += espnResults?.length ?? 0;
 
-    // Source 2 (FALLBACK lazy) : Sackmann CSV. Fetched UNIQUEMENT si ESPN
-    // ne couvre pas tous les logs. Évite 1 fetch CSV ~500KB-3MB inutile
-    // quand ESPN suffit.
-    let sackmannRecent = null; // null = pas encore fetché
+    // Source 3 (FALLBACK lazy) : Sackmann CSV. Pas dispo pour année courante
+    // (Sackmann publie les CSV historiques, pas l'année en cours).
+    let sackmannRecent = null;
     const ensureSackmann = async () => {
       if (sackmannRecent !== null) return sackmannRecent;
       const repoSlug = tour === 'wta' ? 'tennis_wta' : 'tennis_atp';
@@ -9169,7 +9219,6 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
         const r = await fetchTimeout(CSV_URL, {}, 15000);
         if (r.ok) rows = _parseTennisCSV(await r.text());
       } catch (_) {}
-      // Fenêtre ±14j autour de dateStr (tourney_date = date début tournoi).
       const target = parseInt(dateStr);
       sackmannRecent = rows.filter(r => {
         const td = parseInt(r.tourney_date || '0');
@@ -9192,25 +9241,31 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       const np1 = _normalizeTennisName(log.p1);
       const np2 = _normalizeTennisName(log.p2);
 
-      // 1. ESPN d'abord (source primaire)
+      // 1. ESPN d'abord (source primaire — Grand Slams principalement)
       let matched = findInSource(espnResults, np1, np2);
-      let resultSource = 'espn';
+      let resultSource = matched ? 'espn' : null;
 
-      // 2. Fallback Sackmann si ESPN n'a pas trouvé (lazy fetch)
+      // 2. Fallback api-tennis.com (Masters 1000, WTA 1000, tournois en cours)
+      if (!matched) {
+        const apiTennis = await ensureApiTennis();
+        matched = findInSource(apiTennis, np1, np2);
+        if (matched) resultSource = 'api_tennis';
+      }
+
+      // 3. Fallback Sackmann CSV (historique, lag 2-7j en fin de saison)
       if (!matched) {
         const sackmann = await ensureSackmann();
         matched = findInSource(sackmann, np1, np2);
-        resultSource = matched ? 'sackmann' : null;
+        if (matched) resultSource = 'sackmann';
       }
 
       if (!matched) {
-        // Capture 3 échantillons pour diagnostic
         if (unmatched_samples.length < 3) {
-          const recent = [...(espnResults ?? []), ...(sackmannRecent ?? [])];
+          const recent = [...(espnResults ?? []), ...(apiTennisResults ?? []), ...(sackmannRecent ?? [])];
           unmatched_samples.push({
             p1: log.p1, p2: log.p2,
             np1, np2,
-            sources_sample: recent.slice(0, 2).map(r => ({
+            sources_sample: recent.slice(0, 3).map(r => ({
               winner: r.winner_name, loser: r.loser_name, source: r.source,
             })),
           });
@@ -9219,6 +9274,7 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       }
 
       if (resultSource === 'espn') matched_via_espn++;
+      else if (resultSource === 'api_tennis') matched_via_api_tennis++;
       else matched_via_sackmann++;
 
       const winner = _normalizeTennisName(matched.winner_name) === np1 ? 'HOME' : 'AWAY';
@@ -9255,8 +9311,8 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
 
   return {
     settled, date: dateStr, pending: pending.length,
-    espn_count, sackmann_count,
-    matched_via_espn, matched_via_sackmann,
+    espn_count, api_tennis_count, sackmann_count,
+    matched_via_espn, matched_via_api_tennis, matched_via_sackmann,
     unmatched_samples,
   };
 }
