@@ -6799,6 +6799,28 @@ function _normalizeTennisName(name) {
     .replace(/\s+/g, ' ');
 }
 
+// Match tolérant entre format complet "marta kostyuk" et format api-tennis
+// "m kostyuk" (initiale + nom). Compare last name + initial du first name.
+// Renvoie true si :
+//   - même normalisation exacte
+//   - même nom de famille + même initiale du prénom
+//   - cas "double last name" (ex: "alejandro davidovich fokina" vs "a davidovich fokina")
+function _tennisNamesMatch(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aP = a.split(' ').filter(Boolean);
+  const bP = b.split(' ').filter(Boolean);
+  if (aP.length < 2 || bP.length < 2) return false;
+  // Last name = dernier mot de chaque côté
+  const aLast = aP[aP.length - 1];
+  const bLast = bP[bP.length - 1];
+  if (aLast !== bLast) return false;
+  // Comparer le prénom (premier token) — tolère initiale ou full
+  const aFirst = aP[0];
+  const bFirst = bP[0];
+  return aFirst === bFirst || aFirst[0] === bFirst[0];
+}
+
 // Résout le nom officiel CSV Sackmann depuis un nom TheOddsAPI.
 // Stratégie : match exact normalisé · fallback match nom de famille (dernier mot).
 // Retourne null si rien trouvé (évite fake stats sur mauvais joueur).
@@ -9111,6 +9133,10 @@ async function _fetchTennisResultsApiTennis(dateStr, env) {
       const wName = winnerSide === 'first' ? fx.event_first_player : fx.event_second_player;
       const lName = winnerSide === 'first' ? fx.event_second_player : fx.event_first_player;
       if (!wName || !lName) continue;
+      // Filtrer les doubles : api-tennis renvoie tout (singles + doubles + qualifs).
+      // Format double = "Andreozzi/ Guinard", contient `/` ou ` & `. Skip.
+      if (wName.includes('/') || lName.includes('/')) continue;
+      if (/\s&\s/.test(wName) || /\s&\s/.test(lName)) continue;
       results.push({
         winner_name:  wName,
         loser_name:   lName,
@@ -9233,7 +9259,9 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       return sourceArray.find(r => {
         const nw = _normalizeTennisName(r.winner_name);
         const nl = _normalizeTennisName(r.loser_name);
-        return (nw === np1 && nl === np2) || (nw === np2 && nl === np1);
+        // Match tolérant : "Marta Kostyuk" matche "M. Kostyuk" (api-tennis)
+        return (_tennisNamesMatch(nw, np1) && _tennisNamesMatch(nl, np2)) ||
+               (_tennisNamesMatch(nw, np2) && _tennisNamesMatch(nl, np1));
       });
     };
 
@@ -9277,7 +9305,7 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       else if (resultSource === 'api_tennis') matched_via_api_tennis++;
       else matched_via_sackmann++;
 
-      const winner = _normalizeTennisName(matched.winner_name) === np1 ? 'HOME' : 'AWAY';
+      const winner = _tennisNamesMatch(_normalizeTennisName(matched.winner_name), np1) ? 'HOME' : 'AWAY';
       const motorPredictedHome = (log.motor_prob ?? 50) > 50;
       const motorWasRight = (motorPredictedHome && winner === 'HOME') ||
                             (!motorPredictedHome && winner === 'AWAY');
