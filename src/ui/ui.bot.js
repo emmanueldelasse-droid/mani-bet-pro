@@ -257,11 +257,12 @@ function _filterLogs(logs, filter) {
 
 function _renderStats(stats, logs, sport = 'nba') {
   const edgeCount = logs.filter(l => l.best_edge && l.best_edge >= 5).length;
-  // NBA : confidence_level · MLB : data_quality
-  const highConf  = sport === 'mlb'
-    ? logs.filter(l => l.data_quality === 'HIGH').length
-    : logs.filter(l => l.confidence_level === 'HIGH').length;
-  const highLabel = sport === 'mlb' ? 'Data quality HIGH' : 'Conf. HIGH';
+  // Vocabulaire harmonisé 3 sports : Conf. HIGH/MEDIUM/LOW/INCONCLUSIVE.
+  // MLB rétrocompat : ancien champ data_quality utilisé si confidence_level absent.
+  const highConf  = logs.filter(l =>
+    (l.confidence_level ?? l.data_quality) === 'HIGH'
+  ).length;
+  const highLabel = 'Conf. HIGH';
 
   // Card "Joueurs" : recos PLAYER_POINTS NBA uniquement (player props)
   const pp           = stats.player_points;

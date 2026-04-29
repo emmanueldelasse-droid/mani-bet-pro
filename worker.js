@@ -7829,7 +7829,8 @@ async function _mlbAnalyzeMatch(match, dateStr, pitchersData, oddsData, standing
     home_prob:       analysis.home_prob,
     away_prob:       analysis.away_prob,
     motor_prob:      analysis.home_prob,  // alias NBA pour UI réutilisable
-    data_quality:    analysis.data_quality,
+    data_quality:    analysis.data_quality,    // legacy MLB
+    confidence_level: analysis.data_quality,   // harmonise vocabulaire 3 sports
     missing_vars:    analysis.missing_vars,
     variables:       analysis.variables,
     est_total_runs:  analysis.est_total_runs,
