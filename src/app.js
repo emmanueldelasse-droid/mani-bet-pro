@@ -167,7 +167,14 @@ function _showUpdateToast() {
   reload.className   = 'toast__btn';
   reload.type        = 'button';
   reload.textContent = 'Recharger';
-  reload.addEventListener('click', () => { window.location.reload(); });
+  reload.addEventListener('click', () => {
+    // Hard reload avec cache-busting : location.reload() seul est ignoré
+    // par certains navigateurs (Safari iOS notamment). Ajouter ?_v=timestamp
+    // force un re-fetch complet de tous les assets.
+    const url = new URL(window.location.href);
+    url.searchParams.set('_v', Date.now().toString());
+    window.location.href = url.toString();
+  });
 
   const close = document.createElement('button');
   close.className   = 'toast__close';

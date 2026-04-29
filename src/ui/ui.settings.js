@@ -1,4 +1,6 @@
 export async function render(container) {
+  const buildMeta = document.querySelector('meta[name="build"]')?.getAttribute('content') ?? 'dev';
+
   container.innerHTML = `
     <div class="page-shell">
       <div class="page-header">
@@ -9,18 +11,16 @@ export async function render(container) {
 
       <div class="alert alert--info">
         <div class="alert__title">État actuel</div>
-        <div class="alert__text">Les réglages avancés ne sont pas encore branchés. Cette vue sert de point d’ancrage propre pendant la refonte visuelle.</div>
+        <div class="alert__text">Les réglages avancés ne sont pas encore branchés. Cette vue sert de point d'ancrage propre pendant la refonte visuelle.</div>
       </div>
 
       <div class="settings-grid">
         <div class="card card--elevated">
           <div class="card__section">
-            <div class="card__title">Socle UI</div>
-            <div class="card__sub">Les primitives communes sont maintenant prévues pour harmoniser Dashboard, Fiche match, Bot et les prochaines vues MLB.</div>
-          </div>
-          <div class="card__footer">
-            <span class="source-pill">UI system</span>
-            <span class="text-muted" style="font-size:11px">En cours</span>
+            <div class="card__title">Mise à jour de l'app</div>
+            <div class="card__sub">Si l'app n'affiche pas les derniers changements, force un rechargement complet (vide le cache navigateur).</div>
+            <div style="margin-top:var(--space-3);font-size:11px;color:var(--color-text-secondary);font-family:var(--font-mono)">Build actuel : ${buildMeta}</div>
+            <button id="force-update-btn" type="button" style="margin-top:var(--space-3);padding:8px 16px;background:var(--color-info);color:#fff;border:0;border-radius:6px;font-weight:600;cursor:pointer;font-size:13px">Forcer la mise à jour</button>
           </div>
         </div>
 
@@ -45,6 +45,13 @@ export async function render(container) {
         </div>
       </div>
     </div>`;
+
+  // Bouton force-update : hard reload avec cache busting (Safari iOS-safe)
+  container.querySelector('#force-update-btn')?.addEventListener('click', () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('_v', Date.now().toString());
+    window.location.href = url.toString();
+  });
 
   return { destroy() {} };
 }
