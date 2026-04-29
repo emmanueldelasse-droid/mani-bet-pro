@@ -943,11 +943,13 @@ function _bindEvents(container, storeInstance) {
           body: JSON.stringify({}),
         });
         const data = await resp.json();
-        settleBtn.textContent = `✓ ${data.settled ?? 0} settlés`;
+        // Tennis renvoie total_settled (boucle J-1 à J-10), NBA/MLB renvoient settled (1 date)
+        const settledCount = data.total_settled ?? data.settled ?? 0;
+        settleBtn.textContent = `✓ ${settledCount} settlés`;
         setTimeout(() => {
           settleBtn.textContent = '⟳ Settler';
           settleBtn.disabled = false;
-        }, 2000);
+        }, 3000);
         const activeFilter = container.querySelector('.bot-filter-btn.active')?.dataset?.filter ?? 'all';
         await _loadAndRender(container, activeFilter);
       } catch (err) {
