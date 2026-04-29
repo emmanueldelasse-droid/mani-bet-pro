@@ -9293,21 +9293,26 @@ async function handleTennisBotSettleLogs(request, env, origin) {
       const res = await _tennisBotSettleDate(env, body.date, { force });
       return jsonResponse({ success: true, force, ...res }, 200, origin);
     }
+    // Parallélisation : 10 settles en parallèle au lieu de séquentiel pour
+    // tenir sous les 30s CPU limit Cloudflare Workers. Chaque _tennisBotSettleDate
+    // fait son propre fetch ESPN + Sackmann (cache déjà en place).
     const now = new Date();
-    const results = [];
-    let totalSettled = 0;
+    const dates = [];
     for (let d = 1; d <= 10; d++) {
       const dt = new Date(now);
       dt.setUTCDate(dt.getUTCDate() - d);
-      const ds = _botFormatDate(dt);
-      try {
-        const res = await _tennisBotSettleDate(env, ds, { force });
-        results.push({ date: ds, settled: res.settled ?? 0, error: res.error });
-        totalSettled += res.settled ?? 0;
-      } catch (err) {
-        results.push({ date: ds, settled: 0, error: err.message });
-      }
+      dates.push(_botFormatDate(dt));
     }
+    const settled = await Promise.allSettled(
+      dates.map(ds => _tennisBotSettleDate(env, ds, { force }))
+    );
+    const results = settled.map((r, i) => {
+      if (r.status === 'fulfilled') {
+        return { date: dates[i], settled: r.value.settled ?? 0, error: r.value.error };
+      }
+      return { date: dates[i], settled: 0, error: r.reason?.message ?? 'unknown' };
+    });
+    const totalSettled = results.reduce((s, r) => s + r.settled, 0);
     return jsonResponse({ success: true, force, total_settled: totalSettled, by_date: results }, 200, origin);
   } catch (err) { return jsonResponse({ error: err.message }, 500, origin); }
 }
