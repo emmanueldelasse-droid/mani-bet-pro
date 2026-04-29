@@ -3026,10 +3026,29 @@ async function handleNBARecentForm(env, url, teamId, origin) {
     }, 200, origin);
   }
 
+  // Cache KV 6h — une équipe NBA joue 1 match/jour max, pas besoin de refetch
+  // toutes les heures (cron horaire). Réduit la pression sur BDL rate limit.
+  const cacheKey = `bdl_recent_${teamId}_${season}`;
+  const CACHE_TTL = 6 * 3600;
+  if (env.PAPER_TRADING) {
+    try {
+      const cached = await env.PAPER_TRADING.get(cacheKey, { type: 'json' });
+      if (cached?.fetched_at && (Date.now() - cached.fetched_at) < CACHE_TTL * 1000) {
+        return jsonResponse({
+          team_id:    teamId, season, source: 'balldontlie_v1',
+          available:  true, fetched_at: new Date(cached.fetched_at).toISOString(),
+          matches:    cached.matches.slice(0, n),
+          from_cache: true,
+        }, 200, origin, { 'Cache-Control': 'no-store' });
+      }
+    } catch (_) {}
+  }
+
   const bdlUrl = `https://api.balldontlie.io/v1/games?team_ids[]=${teamId}&seasons[]=${season}&per_page=100`;
-  const data   = await bdlFetchWithRetry(bdlUrl, env.BALLDONTLIE_API_KEY);
+  const data   = await bdlFetchWithRetry(bdlUrl, env.BALLDONTLIE_API_KEY, 3, teamId);
 
   if (!data) {
+    console.warn(`[BDL] team ${teamId} season ${season} fetch failed (after retries)`);
     return jsonResponse({
       team_id: teamId, season, source: 'balldontlie_v1',
       available: false, note: 'BallDontLie temporarily unavailable', matches: [],
@@ -3054,6 +3073,15 @@ async function handleNBARecentForm(env, url, teamId, origin) {
         opp_score:  oppScore,
       };
     });
+
+  // Stocker en cache pour les 6 prochaines heures
+  if (env.PAPER_TRADING && matches.length > 0) {
+    try {
+      await env.PAPER_TRADING.put(cacheKey, JSON.stringify({
+        fetched_at: Date.now(), matches,
+      }), { expirationTtl: CACHE_TTL });
+    } catch (_) {}
+  }
 
   return jsonResponse({
     team_id:    teamId, season, source: 'balldontlie_v1',
@@ -3254,16 +3282,26 @@ async function _runBotCron(env, forceRun = false) {
     if (homeBdl && !bdlTeamIds.includes(homeBdl)) bdlTeamIds.push(homeBdl);
     if (awayBdl && !bdlTeamIds.includes(awayBdl)) bdlTeamIds.push(awayBdl);
   }
-  await Promise.allSettled(bdlTeamIds.map(async teamId => {
-    try {
-      const bdlUrl = new URL(`https://manibetpro.emmanueldelasse.workers.dev/nba/team/${teamId}/recent?season=${season}`);
-      const resp   = await handleNBARecentForm(env, bdlUrl, teamId, fakeOrigin);
-      if (resp) {
-        const data = await resp.json();
-        if (data.available) recentForms[teamId] = data;
-      }
-    } catch { /* skip */ }
-  }));
+  // Throttling : batches de 4 requêtes parallèles avec 1s entre batches.
+  // BDL gratuit limite à 5 req/sec. Marge de sécurité à 4/sec pour éviter 429.
+  // Combiné au cache KV 6h : la plupart du temps, seules les nouvelles équipes seront fetchées.
+  const BDL_BATCH_SIZE = 4;
+  for (let i = 0; i < bdlTeamIds.length; i += BDL_BATCH_SIZE) {
+    const batch = bdlTeamIds.slice(i, i + BDL_BATCH_SIZE);
+    await Promise.allSettled(batch.map(async teamId => {
+      try {
+        const bdlUrl = new URL(`https://manibetpro.emmanueldelasse.workers.dev/nba/team/${teamId}/recent?season=${season}`);
+        const resp   = await handleNBARecentForm(env, bdlUrl, teamId, fakeOrigin);
+        if (resp) {
+          const data = await resp.json();
+          if (data.available) recentForms[teamId] = data;
+        }
+      } catch { /* skip */ }
+    }));
+    if (i + BDL_BATCH_SIZE < bdlTeamIds.length) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
 
   // Charger AI injuries batch — appel direct
   let aiInjuriesData = null;
@@ -5935,7 +5973,9 @@ function _defaultPaperState(initialBankroll = 1000) {
 
 // ── BDL FETCH AVEC RETRY ──────────────────────────────────────────────────────
 
-async function bdlFetchWithRetry(url, apiKey, maxRetries = 3) {
+async function bdlFetchWithRetry(url, apiKey, maxRetries = 3, label = '') {
+  let lastStatus = null;
+  let lastError  = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     if (attempt > 0) {
       const delay = Math.pow(2, attempt - 1) * 1000;
@@ -5945,10 +5985,26 @@ async function bdlFetchWithRetry(url, apiKey, maxRetries = 3) {
       const response = await fetchTimeout(url, {
         headers: { 'Authorization': apiKey, 'Accept': 'application/json' },
       }, 10000);
-      if (response.status === 429) { if (attempt === maxRetries - 1) return null; continue; }
-      if (!response.ok) return null;
+      lastStatus = response.status;
+      if (response.status === 429) {
+        if (attempt === maxRetries - 1) {
+          console.warn(`[BDL] ${label} 429 rate-limit after ${maxRetries} retries`);
+          return null;
+        }
+        continue;
+      }
+      if (!response.ok) {
+        console.warn(`[BDL] ${label} HTTP ${response.status} (auth ${response.status === 401 ? 'invalid' : 'OK'})`);
+        return null;
+      }
       return await response.json();
-    } catch { if (attempt === maxRetries - 1) return null; }
+    } catch (err) {
+      lastError = err.message;
+      if (attempt === maxRetries - 1) {
+        console.warn(`[BDL] ${label} exception after ${maxRetries} retries: ${lastError}`);
+        return null;
+      }
+    }
   }
   return null;
 }
