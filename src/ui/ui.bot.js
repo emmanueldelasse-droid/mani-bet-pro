@@ -891,6 +891,80 @@ function _fmtVal(variable, value) {
   return (value > 0 ? '+' : '') + (Math.round(value * 100) / 100);
 }
 
+// ── DIAGNOSTIC TENNIS SETTLE ──────────────────────────────────────────────────
+// Affiche dans l'UI le détail de la dernière exécution Settler tennis :
+// totaux pending/settled, répartition ESPN vs Sackmann par date, et premiers
+// noms non matchés pour diagnostiquer pourquoi rien ne se règle.
+function _renderTennisSettleDiag(container, data) {
+  const existing = container.querySelector('#tennis-settle-diag');
+  if (existing) existing.remove();
+
+  const total = data.total_settled ?? 0;
+  const dates = data.by_date ?? [];
+  const totalPending = dates.reduce((s, d) => s + (d.pending ?? 0), 0);
+  const totalEspn    = dates.reduce((s, d) => s + (d.espn_count ?? 0), 0);
+  const totalSack    = dates.reduce((s, d) => s + (d.sackmann_count ?? 0), 0);
+  const viaEspn      = dates.reduce((s, d) => s + (d.matched_via_espn ?? 0), 0);
+  const viaSack      = dates.reduce((s, d) => s + (d.matched_via_sackmann ?? 0), 0);
+
+  const samples = [];
+  for (const d of dates) {
+    if (Array.isArray(d.unmatched_samples) && d.unmatched_samples.length) {
+      d.unmatched_samples.forEach(s => samples.push({ ...s, date: d.date }));
+      if (samples.length >= 5) break;
+    }
+  }
+
+  const card = document.createElement('div');
+  card.id = 'tennis-settle-diag';
+  card.style.cssText = 'background:var(--color-bg-elevated);border-left:3px solid var(--color-info);padding:var(--space-3);border-radius:var(--radius-md);margin-top:var(--space-3);font-size:12px';
+  card.innerHTML = `
+    <div style="font-weight:700;margin-bottom:8px;color:var(--color-text-primary)">📊 Diagnostic dernière exécution Settler</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+      <div><span style="color:var(--color-text-secondary)">Total settled :</span> <strong>${total}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Pending trouvés :</span> <strong>${totalPending}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Résultats ESPN :</span> <strong>${totalEspn}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Résultats Sackmann :</span> <strong>${totalSack}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Matchés via ESPN :</span> <strong>${viaEspn}</strong></div>
+      <div><span style="color:var(--color-text-secondary)">Matchés via Sackmann :</span> <strong>${viaSack}</strong></div>
+    </div>
+    ${samples.length ? `
+      <div style="font-weight:600;margin-bottom:4px;color:var(--color-warning)">⚠️ Premiers logs non matchés :</div>
+      <div style="font-family:var(--font-mono);font-size:11px;background:var(--color-bg);padding:8px;border-radius:6px;overflow-x:auto">
+        ${samples.slice(0, 5).map(s => `
+          <div style="margin-bottom:6px">
+            <div><strong>${escapeHtmlBot(s.date)}</strong> · ${escapeHtmlBot(s.p1)} vs ${escapeHtmlBot(s.p2)}</div>
+            <div style="color:var(--color-text-secondary)">normalisés : "${escapeHtmlBot(s.np1)}" / "${escapeHtmlBot(s.np2)}"</div>
+            ${(s.sources_sample ?? []).map(src => `
+              <div style="color:var(--color-text-muted)">→ source ${escapeHtmlBot(src.source ?? '?')} : "${escapeHtmlBot(src.winner ?? '')}" / "${escapeHtmlBot(src.loser ?? '')}"</div>
+            `).join('')}
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+    <div style="margin-top:8px;color:var(--color-text-muted);font-size:11px">
+      ${total === 0 && totalPending > 0 && totalEspn === 0 && totalSack === 0
+        ? '🔴 Ni ESPN ni Sackmann ne renvoient de résultats. Sources HS ou date hors couverture.'
+        : total === 0 && (totalEspn > 0 || totalSack > 0)
+          ? '🟠 Sources renvoient des résultats mais le matching échoue. Vérifier les noms ci-dessus.'
+          : total > 0
+            ? '✅ Settle a fonctionné.'
+            : '🟡 Aucun log pending pour ces dates (matchs futurs ?).'}
+    </div>
+  `;
+  // Insérer juste après les stats (en haut du conteneur principal)
+  const statsSection = container.querySelector('.bot-stats');
+  if (statsSection?.parentNode) {
+    statsSection.parentNode.insertBefore(card, statsSection.nextSibling);
+  } else {
+    container.appendChild(card);
+  }
+}
+
+function escapeHtmlBot(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
 // ── EVENTS ────────────────────────────────────────────────────────────────────
 
 function _bindEvents(container, storeInstance) {
@@ -943,13 +1017,16 @@ function _bindEvents(container, storeInstance) {
           body: JSON.stringify({}),
         });
         const data = await resp.json();
-        // Tennis renvoie total_settled (boucle J-1 à J-10), NBA/MLB renvoient settled (1 date)
         const settledCount = data.total_settled ?? data.settled ?? 0;
         settleBtn.textContent = `✓ ${settledCount} settlés`;
         setTimeout(() => {
           settleBtn.textContent = '⟳ Settler';
           settleBtn.disabled = false;
         }, 3000);
+        // Tennis : afficher diagnostic complet si fourni (by_date avec espn_count, sackmann_count, etc.)
+        if (getSport() === 'tennis' && Array.isArray(data.by_date)) {
+          _renderTennisSettleDiag(container, data);
+        }
         const activeFilter = container.querySelector('.bot-filter-btn.active')?.dataset?.filter ?? 'all';
         await _loadAndRender(container, activeFilter);
       } catch (err) {
