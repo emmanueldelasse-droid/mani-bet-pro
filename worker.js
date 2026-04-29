@@ -9164,11 +9164,14 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       if (r.ok) sackmannRows = _parseTennisCSV(await r.text());
     } catch (_) {}
 
-    // Filtrer matchs Sackmann récents pour limiter scan (fenêtre ±14j)
-    const targetDate = dateStr;
+    // Filtrer matchs Sackmann fenêtre ±14j autour de dateStr.
+    // Sackmann tourney_date = DATE DÉBUT TOURNOI (pas date du match).
+    // Madrid Open commence 20260425, tous les matchs ont td=20260425.
+    // Pour settler match du 28/04, faut chercher tournois dont td ∈ [target-14, target+14].
+    const target = parseInt(dateStr);
     const sackmannRecent = sackmannRows.filter(r => {
-      const td = r.tourney_date ?? '';
-      return td >= targetDate && td <= `${parseInt(targetDate) + 14}`;
+      const td = parseInt(r.tourney_date || '0');
+      return td >= target - 14 && td <= target + 14;
     });
     sackmann_count += sackmannRecent.length;
 
@@ -9177,11 +9180,13 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
     if (!recent.length) continue;
 
     for (const { key, log } of items) {
-      const np1 = _normalizeName(log.p1);
-      const np2 = _normalizeName(log.p2);
+      // _normalizeTennisName gère tirets (Auger-Aliassime, Davidovich-Fokina)
+      // contrairement à _normalizeName qui n'enlève que accents/points/apostrophes.
+      const np1 = _normalizeTennisName(log.p1);
+      const np2 = _normalizeTennisName(log.p2);
       const matched = recent.find(r => {
-        const nw = _normalizeName(r.winner_name);
-        const nl = _normalizeName(r.loser_name);
+        const nw = _normalizeTennisName(r.winner_name);
+        const nl = _normalizeTennisName(r.loser_name);
         return (nw === np1 && nl === np2) || (nw === np2 && nl === np1);
       });
       if (!matched) {
@@ -9198,7 +9203,7 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
         continue;
       }
 
-      const winner = _normalizeName(matched.winner_name) === np1 ? 'HOME' : 'AWAY';
+      const winner = _normalizeTennisName(matched.winner_name) === np1 ? 'HOME' : 'AWAY';
       const motorPredictedHome = (log.motor_prob ?? 50) > 50;
       const motorWasRight = (motorPredictedHome && winner === 'HOME') ||
                             (!motorPredictedHome && winner === 'AWAY');
