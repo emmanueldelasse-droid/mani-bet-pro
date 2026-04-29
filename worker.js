@@ -9145,53 +9145,68 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
   let settled = 0;
   let espn_count = 0;
   let sackmann_count = 0;
+  let matched_via_espn = 0;
+  let matched_via_sackmann = 0;
   const unmatched_samples = [];
 
   for (const [tour, items] of Object.entries(byTour)) {
-    // Source 1 : ESPN Tennis (gratuit, temps réel)
+    // Source 1 (PRIORITAIRE) : ESPN Tennis · gratuit, temps réel.
     const espnResults = await _fetchTennisResultsESPN(dateStr, tour);
     espn_count += espnResults?.length ?? 0;
 
-    // Source 2 : Sackmann CSV (fallback)
-    const repoSlug = tour === 'wta' ? 'tennis_wta' : 'tennis_atp';
-    const fileSlug = tour === 'wta' ? 'wta_matches' : 'atp_matches';
-    const year     = dateStr.slice(0, 4);
-    const CSV_URL  = `https://raw.githubusercontent.com/JeffSackmann/${repoSlug}/master/${fileSlug}_${year}.csv`;
+    // Source 2 (FALLBACK lazy) : Sackmann CSV. Fetched UNIQUEMENT si ESPN
+    // ne couvre pas tous les logs. Évite 1 fetch CSV ~500KB-3MB inutile
+    // quand ESPN suffit.
+    let sackmannRecent = null; // null = pas encore fetché
+    const ensureSackmann = async () => {
+      if (sackmannRecent !== null) return sackmannRecent;
+      const repoSlug = tour === 'wta' ? 'tennis_wta' : 'tennis_atp';
+      const fileSlug = tour === 'wta' ? 'wta_matches' : 'atp_matches';
+      const year     = dateStr.slice(0, 4);
+      const CSV_URL  = `https://raw.githubusercontent.com/JeffSackmann/${repoSlug}/master/${fileSlug}_${year}.csv`;
+      let rows = [];
+      try {
+        const r = await fetchTimeout(CSV_URL, {}, 15000);
+        if (r.ok) rows = _parseTennisCSV(await r.text());
+      } catch (_) {}
+      // Fenêtre ±14j autour de dateStr (tourney_date = date début tournoi).
+      const target = parseInt(dateStr);
+      sackmannRecent = rows.filter(r => {
+        const td = parseInt(r.tourney_date || '0');
+        return td >= target - 14 && td <= target + 14;
+      });
+      sackmann_count += sackmannRecent.length;
+      return sackmannRecent;
+    };
 
-    let sackmannRows = [];
-    try {
-      const r = await fetchTimeout(CSV_URL, {}, 15000);
-      if (r.ok) sackmannRows = _parseTennisCSV(await r.text());
-    } catch (_) {}
-
-    // Filtrer matchs Sackmann fenêtre ±14j autour de dateStr.
-    // Sackmann tourney_date = DATE DÉBUT TOURNOI (pas date du match).
-    // Madrid Open commence 20260425, tous les matchs ont td=20260425.
-    // Pour settler match du 28/04, faut chercher tournois dont td ∈ [target-14, target+14].
-    const target = parseInt(dateStr);
-    const sackmannRecent = sackmannRows.filter(r => {
-      const td = parseInt(r.tourney_date || '0');
-      return td >= target - 14 && td <= target + 14;
-    });
-    sackmann_count += sackmannRecent.length;
-
-    // Combiner ESPN (prioritaire) + Sackmann (backstop)
-    const recent = [...(espnResults ?? []), ...sackmannRecent];
-    if (!recent.length) continue;
-
-    for (const { key, log } of items) {
-      // _normalizeTennisName gère tirets (Auger-Aliassime, Davidovich-Fokina)
-      // contrairement à _normalizeName qui n'enlève que accents/points/apostrophes.
-      const np1 = _normalizeTennisName(log.p1);
-      const np2 = _normalizeTennisName(log.p2);
-      const matched = recent.find(r => {
+    const findInSource = (sourceArray, np1, np2) => {
+      if (!Array.isArray(sourceArray) || sourceArray.length === 0) return null;
+      return sourceArray.find(r => {
         const nw = _normalizeTennisName(r.winner_name);
         const nl = _normalizeTennisName(r.loser_name);
         return (nw === np1 && nl === np2) || (nw === np2 && nl === np1);
       });
+    };
+
+    for (const { key, log } of items) {
+      const np1 = _normalizeTennisName(log.p1);
+      const np2 = _normalizeTennisName(log.p2);
+
+      // 1. ESPN d'abord (source primaire)
+      let matched = findInSource(espnResults, np1, np2);
+      let resultSource = 'espn';
+
+      // 2. Fallback Sackmann si ESPN n'a pas trouvé (lazy fetch)
       if (!matched) {
-        // Capture 3 échantillons pour diagnostic (avant + après normalisation)
+        const sackmann = await ensureSackmann();
+        matched = findInSource(sackmann, np1, np2);
+        resultSource = matched ? 'sackmann' : null;
+      }
+
+      if (!matched) {
+        // Capture 3 échantillons pour diagnostic
         if (unmatched_samples.length < 3) {
+          const recent = [...(espnResults ?? []), ...(sackmannRecent ?? [])];
           unmatched_samples.push({
             p1: log.p1, p2: log.p2,
             np1, np2,
@@ -9202,6 +9217,9 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
         }
         continue;
       }
+
+      if (resultSource === 'espn') matched_via_espn++;
+      else matched_via_sackmann++;
 
       const winner = _normalizeTennisName(matched.winner_name) === np1 ? 'HOME' : 'AWAY';
       const motorPredictedHome = (log.motor_prob ?? 50) > 50;
@@ -9225,6 +9243,7 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       log.prob_delta_pts  = probDelta;
       log.upset           = upset;
       log.clv_post_match  = clv;
+      log.result_source   = resultSource;  // 'espn' ou 'sackmann'
       log.settled_at      = new Date().toISOString();
 
       try {
@@ -9234,7 +9253,12 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
     }
   }
 
-  return { settled, date: dateStr, pending: pending.length, espn_count, sackmann_count, unmatched_samples };
+  return {
+    settled, date: dateStr, pending: pending.length,
+    espn_count, sackmann_count,
+    matched_via_espn, matched_via_sackmann,
+    unmatched_samples,
+  };
 }
 
 // ── HANDLERS ROUTES TENNIS BOT ────────────────────────────────────────────────
