@@ -1388,3 +1388,64 @@ body.theme-light .paper-modal__input::placeholder,
   color: var(--color-signal);
   text-decoration: underline;
 }
+
+/* ── THÈMES SPORT DASHBOARD ──
+   Couleur d'accent + gradient subtil dynamique selon le sport sélectionné.
+   Activé via attribut data-sport="NBA|MLB|TENNIS" sur .dashboard. */
+
+.dashboard {
+  --sport-accent: var(--color-signal);
+  --sport-accent-rgb: 107, 91, 255;
+  position: relative;
+  transition: background 400ms ease;
+  background:
+    radial-gradient(ellipse at top right, rgba(var(--sport-accent-rgb), 0.07), transparent 60%),
+    radial-gradient(ellipse at bottom left, rgba(var(--sport-accent-rgb), 0.04), transparent 50%);
+  border-top: 2px solid var(--sport-accent);
+  padding-top: var(--space-3);
+  border-radius: 0;
+  margin-top: -2px;
+}
+
+/* NBA — orange basket */
+.dashboard[data-sport="NBA"] {
+  --sport-accent: #f97316;
+  --sport-accent-rgb: 249, 115, 22;
+}
+
+/* MLB — vert pelouse */
+.dashboard[data-sport="MLB"] {
+  --sport-accent: #16a34a;
+  --sport-accent-rgb: 22, 163, 74;
+}
+
+/* Tennis — jaune balle */
+.dashboard[data-sport="TENNIS"] {
+  --sport-accent: #eab308;
+  --sport-accent-rgb: 234, 179, 8;
+}
+
+/* Eyebrow + accents teints par le sport actif */
+.dashboard .page-header__eyebrow {
+  color: var(--sport-accent);
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+/* Chip sport actif : couleur de fond du sport */
+.dashboard #filter-sports .chip--active {
+  background: var(--sport-accent);
+  border-color: var(--sport-accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(var(--sport-accent-rgb), 0.4);
+}
+
+/* Léger glow sur les summary-card valeurs */
+.dashboard .summary-card__value {
+  text-shadow: 0 0 12px rgba(var(--sport-accent-rgb), 0.15);
+}
+
+/* Bordure top sport sur le best-opportunity */
+.dashboard #best-opportunity:not([style*="display:none"]) {
+  border-left: 3px solid var(--sport-accent);
+}

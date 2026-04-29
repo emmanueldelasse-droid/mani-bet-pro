@@ -331,6 +331,8 @@ export async function render(container, storeInstance) {
   _bindFilterEvents(container, storeInstance, async (newSport) => {
     selectedSport = newSport;
     _syncDashboardSelection(storeInstance, selectedSport);
+    // Mettre à jour le thème sport (background + couleur d'accent)
+    container.querySelector('.dashboard')?.setAttribute('data-sport', newSport);
     storeInstance.set({
       dashboardCacheAt: 0,
       dashboardCacheDate: null,
@@ -522,7 +524,7 @@ function _renderShell(selectedDate, selectedSport) {
   const tomorrow = _offsetDate(today, 1);
 
   return `
-    <div class="dashboard">
+    <div class="dashboard" data-sport="${selectedSport}">
       <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
           <div class="page-header__eyebrow">Mani Bet Pro</div>
@@ -559,9 +561,9 @@ function _renderShell(selectedDate, selectedSport) {
         <div class="filter-row">
           <span class="filter-label">Sport</span>
           <div class="filter-chips" id="filter-sports">
-            <button class="chip ${selectedSport === 'NBA' ? 'chip--active' : ''}" data-sport="NBA">NBA</button>
-            <button class="chip ${selectedSport === 'MLB' ? 'chip--active' : ''}" data-sport="MLB">MLB</button>
-            <button class="chip ${selectedSport === 'TENNIS' ? 'chip--active' : ''}" data-sport="TENNIS">Tennis</button>
+            <button class="chip ${selectedSport === 'NBA' ? 'chip--active' : ''}" data-sport="NBA">🏀 NBA</button>
+            <button class="chip ${selectedSport === 'MLB' ? 'chip--active' : ''}" data-sport="MLB">⚾ MLB</button>
+            <button class="chip ${selectedSport === 'TENNIS' ? 'chip--active' : ''}" data-sport="TENNIS">🎾 Tennis</button>
           </div>
         </div>
         <div class="filter-row">
