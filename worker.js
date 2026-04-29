@@ -4182,6 +4182,7 @@ async function _runNightlySettle(env) {
     }
 
     const results = { nba: [], mlb: [], tennis: [] };
+    // NBA + MLB : ESPN temps réel, fenêtre J-2 suffit
     for (const ds of dates) {
       try {
         const nba = await _botSettleDate(env, ds);
@@ -4191,6 +4192,15 @@ async function _runNightlySettle(env) {
         const mlb = await _mlbBotSettleDate(env, ds);
         results.mlb.push({ date: ds, settled: mlb.settled, error: mlb.error });
       } catch (err) { console.warn(`[NIGHTLY SETTLE] MLB ${ds}:`, err.message); }
+    }
+
+    // Tennis : fenêtre étendue J-1 à J-10. Sackmann CSV peut publier avec
+    // 2-7j de lag · ré-essayer chaque matin jusqu'à trouver le résultat.
+    // ESPN (source 1 dans _tennisBotSettleDate) attrape la majorité dès J-1.
+    for (let d = 1; d <= 10; d++) {
+      const dt = new Date(now);
+      dt.setUTCDate(dt.getUTCDate() - d);
+      const ds = formatDateESPN(dt);
       try {
         const ten = await _tennisBotSettleDate(env, ds);
         results.tennis.push({ date: ds, settled: ten.settled, error: ten.error });
@@ -8996,7 +9006,42 @@ async function _tennisBotSendTelegram(env, logs, edgesFound, dateStr) {
   } catch (err) { console.warn('[TENNIS BOT] telegram:', err.message); }
 }
 
-// ── SETTLEMENT TENNIS (via CSV Sackmann) ──────────────────────────────────────
+// ── SETTLEMENT TENNIS — ESPN (temps réel) + Sackmann CSV (fallback) ──────────
+// ESPN scoreboard tennis : gratuit · résultats dispos le soir-même.
+// Sackmann CSV : référence pro · lag 2-7j · backstop fiable pour les matchs
+// qu'ESPN ne couvre pas (challengers obscurs, qualifs).
+async function _fetchTennisResultsESPN(dateStr, tour) {
+  const sport = tour === 'wta' ? 'wta' : 'atp';
+  const url = `https://site.api.espn.com/apis/site/v2/sports/tennis/${sport}/scoreboard?dates=${dateStr}`;
+  try {
+    const r = await fetchTimeout(url, {}, 10000);
+    if (!r.ok) return null;
+    const data = await r.json();
+    const events = data?.events ?? [];
+    const results = [];
+    for (const ev of events) {
+      const comp = ev?.competitions?.[0];
+      if (!comp?.status?.type?.completed) continue;
+      const competitors = comp.competitors ?? [];
+      const winner = competitors.find(c => c.winner === true);
+      const loser  = competitors.find(c => c.winner === false);
+      const wName = winner?.athlete?.displayName ?? winner?.athlete?.shortName;
+      const lName = loser?.athlete?.displayName  ?? loser?.athlete?.shortName;
+      if (!wName || !lName) continue;
+      results.push({
+        winner_name:  wName,
+        loser_name:   lName,
+        tourney_date: dateStr,
+        source:       'espn',
+      });
+    }
+    return results;
+  } catch (err) {
+    console.warn(`[ESPN TENNIS] ${tour} ${dateStr}:`, err.message);
+    return null;
+  }
+}
+
 async function _tennisBotSettleDate(env, dateStr, options = {}) {
   if (!env.PAPER_TRADING) return { settled: 0, error: 'no KV' };
   const { force = false } = options;
@@ -9018,30 +9063,36 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
 
   if (!pending.length) return { settled: 0, date: dateStr };
 
-  // Grouper par tour pour économiser fetches CSV (1 par tour)
+  // Grouper par tour pour économiser fetches (1 ESPN + 1 CSV par tour)
   const byTour = {};
   for (const p of pending) { (byTour[p.log.tour] ??= []).push(p); }
 
   let settled = 0;
   for (const [tour, items] of Object.entries(byTour)) {
+    // Source 1 : ESPN Tennis (gratuit, temps réel)
+    const espnResults = await _fetchTennisResultsESPN(dateStr, tour);
+
+    // Source 2 : Sackmann CSV (fallback)
     const repoSlug = tour === 'wta' ? 'tennis_wta' : 'tennis_atp';
     const fileSlug = tour === 'wta' ? 'wta_matches' : 'atp_matches';
     const year     = dateStr.slice(0, 4);
     const CSV_URL  = `https://raw.githubusercontent.com/JeffSackmann/${repoSlug}/master/${fileSlug}_${year}.csv`;
 
-    let rows = [];
+    let sackmannRows = [];
     try {
       const r = await fetchTimeout(CSV_URL, {}, 15000);
-      if (r.ok) rows = _parseTennisCSV(await r.text());
-    } catch (_) { continue; }
-    if (!rows.length) continue;
+      if (r.ok) sackmannRows = _parseTennisCSV(await r.text());
+    } catch (_) {}
 
-    // Filtrer matchs récents (dans les 7 derniers jours) pour limiter scan
-    const targetDate = dateStr; // YYYYMMDD
-    const recent = rows.filter(r => {
+    // Filtrer matchs Sackmann récents pour limiter scan (fenêtre ±14j)
+    const targetDate = dateStr;
+    const sackmannRecent = sackmannRows.filter(r => {
       const td = r.tourney_date ?? '';
       return td >= targetDate && td <= `${parseInt(targetDate) + 14}`;
     });
+
+    // Combiner ESPN (prioritaire) + Sackmann (backstop)
+    const recent = [...(espnResults ?? []), ...sackmannRecent];
     if (!recent.length) continue;
 
     for (const { key, log } of items) {
