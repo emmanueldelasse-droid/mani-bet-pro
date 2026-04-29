@@ -3260,8 +3260,9 @@ async function _runBotCron(env, forceRun = false) {
   const oddsData     = oddsResp.status    === 'fulfilled' ? await oddsResp.value.json()    : null;
   const advancedData = advancedResp.status === 'fulfilled' ? await advancedResp.value.json() : null;
 
-  // Rosters Tank01 depuis KV cache 6h (populé par /nba/team-detail)
-  // Aucun call Tank01 ajouté ici — si miss, player props skippés ce run
+  // Rosters Tank01 depuis KV cache 6h (populé par /nba/team-detail).
+  // Si cache miss, fallback fetch Tank01 direct → garantit que player_points
+  // recos sont générées même quand aucun user n'a ouvert team-detail récemment.
   let rostersData = null;
   if (env.PAPER_TRADING) {
     try {
@@ -3270,6 +3271,29 @@ async function _runBotCron(env, forceRun = false) {
         rostersData = cached.data;
       }
     } catch (err) { console.warn('[BOT] rosters KV read:', err.message); }
+  }
+
+  // Fallback fetch Tank01 direct si cache vide (sinon player_points skipped)
+  if (!rostersData) {
+    try {
+      const res = await _tank01FetchWithFallback(TANK01_ROSTER_URL, env, 15000);
+      if (res?.ok) {
+        const json = await res.json();
+        rostersData = json?.body ?? null;
+        if (rostersData && env.PAPER_TRADING) {
+          try {
+            await env.PAPER_TRADING.put('nba_rosters_teams_v3',
+              JSON.stringify({ _ts: Date.now(), data: rostersData }),
+              { expirationTtl: 6 * 3600 });
+          } catch (_) {}
+        }
+        console.log(`[BOT] rosters Tank01 fetched fallback (cache miss) → ${Array.isArray(rostersData) ? rostersData.length : 0} teams`);
+      } else {
+        console.warn('[BOT] rosters Tank01 fallback failed:', res?.status ?? 'no response');
+      }
+    } catch (err) {
+      console.warn('[BOT] rosters Tank01 fallback error:', err.message);
+    }
   }
 
   // Charger recent forms BDL pour toutes les équipes du soir en parallèle
