@@ -9118,7 +9118,7 @@ async function _fetchTennisResultsESPN(dateStr, tour) {
 }
 
 async function _tennisBotSettleDate(env, dateStr, options = {}) {
-  if (!env.PAPER_TRADING) return { settled: 0, error: 'no KV' };
+  if (!env.PAPER_TRADING) return { settled: 0, error: 'no KV', date: dateStr };
   const { force = false } = options;
 
   // Lister les logs pending pour ce dateStr
@@ -9136,16 +9136,21 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
     } catch (_) {}
   }));
 
-  if (!pending.length) return { settled: 0, date: dateStr };
+  if (!pending.length) return { settled: 0, date: dateStr, pending: 0 };
 
   // Grouper par tour pour économiser fetches (1 ESPN + 1 CSV par tour)
   const byTour = {};
   for (const p of pending) { (byTour[p.log.tour] ??= []).push(p); }
 
   let settled = 0;
+  let espn_count = 0;
+  let sackmann_count = 0;
+  const unmatched_samples = [];
+
   for (const [tour, items] of Object.entries(byTour)) {
     // Source 1 : ESPN Tennis (gratuit, temps réel)
     const espnResults = await _fetchTennisResultsESPN(dateStr, tour);
+    espn_count += espnResults?.length ?? 0;
 
     // Source 2 : Sackmann CSV (fallback)
     const repoSlug = tour === 'wta' ? 'tennis_wta' : 'tennis_atp';
@@ -9165,15 +9170,13 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
       const td = r.tourney_date ?? '';
       return td >= targetDate && td <= `${parseInt(targetDate) + 14}`;
     });
+    sackmann_count += sackmannRecent.length;
 
     // Combiner ESPN (prioritaire) + Sackmann (backstop)
     const recent = [...(espnResults ?? []), ...sackmannRecent];
     if (!recent.length) continue;
 
     for (const { key, log } of items) {
-      // Chercher match : p1 vs p2 (ou p2 vs p1) dans rows.
-      // Normalisation noms (accents, casse, ponctuation) : CSV Sackmann en ASCII,
-      // logs peuvent venir d'api-tennis.com avec accents/diacritiques.
       const np1 = _normalizeName(log.p1);
       const np2 = _normalizeName(log.p2);
       const matched = recent.find(r => {
@@ -9181,7 +9184,19 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
         const nl = _normalizeName(r.loser_name);
         return (nw === np1 && nl === np2) || (nw === np2 && nl === np1);
       });
-      if (!matched) continue;
+      if (!matched) {
+        // Capture 3 échantillons pour diagnostic (avant + après normalisation)
+        if (unmatched_samples.length < 3) {
+          unmatched_samples.push({
+            p1: log.p1, p2: log.p2,
+            np1, np2,
+            sources_sample: recent.slice(0, 2).map(r => ({
+              winner: r.winner_name, loser: r.loser_name, source: r.source,
+            })),
+          });
+        }
+        continue;
+      }
 
       const winner = _normalizeName(matched.winner_name) === np1 ? 'HOME' : 'AWAY';
       const motorPredictedHome = (log.motor_prob ?? 50) > 50;
@@ -9214,7 +9229,7 @@ async function _tennisBotSettleDate(env, dateStr, options = {}) {
     }
   }
 
-  return { settled, date: dateStr };
+  return { settled, date: dateStr, pending: pending.length, espn_count, sackmann_count, unmatched_samples };
 }
 
 // ── HANDLERS ROUTES TENNIS BOT ────────────────────────────────────────────────
