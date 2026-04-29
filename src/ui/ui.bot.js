@@ -733,11 +733,17 @@ function _renderAbsencesLine(log) {
 }
 
 function _renderResultLine(log) {
-  const score = `${log.result_away_score ?? '?'} – ${log.result_home_score ?? '?'}`;
-  const winner = log.result_winner === 'HOME' ? log.home : log.away;
-  const clv    = log.clv_post_match != null ? `CLV: ${log.clv_post_match > 0 ? '+' : ''}${log.clv_post_match}%` : '';
+  // Tennis utilise p1/p2 + pas de score numérique simple, NBA/MLB utilisent home/away
+  const isTennis = log.tour != null || log.p1 != null;
+  const homeName = log.p1 ?? log.home ?? '?';
+  const awayName = log.p2 ?? log.away ?? '?';
+  const winner   = log.result_winner === 'HOME' ? homeName : awayName;
+  const clv      = log.clv_post_match != null ? `CLV: ${log.clv_post_match > 0 ? '+' : ''}${log.clv_post_match}%` : '';
+  const scorePart = isTennis
+    ? ''
+    : `Résultat : <span class="bot-result__score">${log.result_away_score ?? '?'} – ${log.result_home_score ?? '?'}</span> · `;
   return `<div class="bot-result">
-    <div>Résultat : <span class="bot-result__score">${score}</span> · ${winner} gagne</div>
+    <div>${scorePart}${winner} gagne</div>
     <div class="bot-result__clv">${clv}</div>
   </div>`;
 }
