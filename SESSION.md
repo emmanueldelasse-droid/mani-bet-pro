@@ -4,16 +4,22 @@
 `main` · auto-deploy CF/GH Pages (build f9cd992)
 
 ## En cours
-[P2] Fix #5 (optionnel) · cause amont du raté pré-match NBA · NON démarré
-- symptôme · `bot_last_run` absente du KV (cron NBA pré-match `_runBotCron` n'écrit plus depuis >30h) alors que le nightly est vivant
-- pistes · date Paris vs slate US (`_botFormatDate` Paris vs `?dates=` ESPN US) · fenêtre 2h + run unique/jour (`BOT_RUN_KEY`) · filtre `already_final`
-- à arbitrer APRÈS observation d'1-2 nightly post-Fix#4 (les finales doivent réapparaître en `missed_by_cron`)
-- décision Fix #5 seulement si on veut l'analyse pré-match réelle des finales (pas juste le rattrapage)
+[P1] Fix #5 · cause amont du raté pré-match NBA · **PR #217 DRAFT · EN ATTENTE PREUVE RUNTIME CRÉATEUR (depuis 2026-06-03)**
+- branche · `claude/gallant-hamilton-XypYb`
+- PR · https://github.com/emmanueldelasse-droid/Mani-Bet-Pro/pull/217
+- cause · `_runBotCron` fetche ESPN sur date Paris uniquement → matchs prime-time US (finales ~02h30 Paris = ~20h30 ET veille) classés sous date US → `games_found=0` → jamais loggés → `bot_last_run` absente du KV
+- correctif · fetch ESPN sur **date Paris ET date Paris-1** + merge/dédup par `match_id`
+- tests · `scripts/test-bot-cron-prime-date.mjs` · 6 assertions + 13 suites régression · 964 assertions · 0 fail
+- **merge bloqué** jusqu'à 1 des 3 preuves runtime (créateur) :
+  1. `[BOT-CRON-LOG]` avec `games_found` cohérent (slate Paris-1 ramène match prime-time)
+  2. **OU** `bot_last_run` réapparue dans le KV après une nuit avec match
+  3. **OU** match prime-time visible dans le Bot avant le tip
+- ⚠️ contexte · NBA Finals en cours (juin 2026) → matchs tous en prime-time US → fix critique si analyse pré-match désirée
 
-## Validation post-Fix#4 (à faire · prochain nightly ~10-11h UTC)
-- vérifier que les matchs playoffs manquants réapparaissent en `missed_by_cron` dans `/bot/logs`
-- `curl /bot/logs | jq '.stats.status_breakdown'` → `missed_by_cron` doit augmenter
+## Validation post-Fix#4 (statut inconnu · à vérifier)
+- `curl /bot/logs | jq '.stats.status_breakdown'` → `missed_by_cron` doit avoir augmenté depuis 2026-06-02
 - `[NIGHTLY SETTLE]` doit contenir `nba_recover: [...]` avec `missed_added > 0`
+- non vérifiable en session (réseau prod bloqué) · à exécuter par le créateur
 
 ## Incident Playoff Gate · CLÔTURÉ (2026-06-02)
 Cause #3 confirmée via curl prod · `401873197` = `missed_by_cron` (motor_prob null · motor_was_right null · pas de confidence_level). Hypothèse cause #3 validée · aucun audit data-quality nécessaire.
@@ -73,6 +79,11 @@ MBP-NBA-PLAYOFF-GATE-LOG · Option A · observabilité pure
 - #196 · NBA engine parity test (492 assertions)
 
 ## TODO prioritaire
+- [ ] **P1 · Fix #5 · fournir preuve runtime → merge PR #217** (13 jours en attente · NBA Finals en cours)
+  - option 1 : `[BOT-CRON-LOG]` CF avec `games_found` > 0 nuit de finale
+  - option 2 : `bot_last_run` réapparue KV après nuit avec match prime-time
+  - option 3 : match prime-time visible Bot avant tip
+- [ ] P1 · validation post-Fix#4 · `curl /bot/logs | jq '.stats.status_breakdown'` → `missed_by_cron` augmenté
 - [ ] P1 · DECISION-003 MLB v6.94 · audit empirique 421 logs · validation créateur (proposed)
 - [ ] P1 · validation prod endpoints catchup PR #205 · 4 curl tests documentés `docs/monitoring/CATCHUP_SETTLE.md`
 - [ ] P1 · debug OKC vs SAS 18/05/2026 via `/bot/recover-missed?sport=NBA&date=20260518` (post-Option A · grep CF `NBA_PLAYOFF_GATE_BLOCKED`)
